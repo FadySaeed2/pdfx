@@ -1,0 +1,10 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+/app/screenshots/
+*.jks
+*.p12
+signing/*.properties

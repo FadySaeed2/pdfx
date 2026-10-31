@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- A bone-coloured page with a folded corner, three text lines, and one amber
+         highlight across the middle line: reading and marking up, in one mark. -->
+    <path android:fillColor="#ECE4D3"
+        android:pathData="M38,30h22l10,10v38h-32z" />
+    <path android:fillColor="#A0978A"
+        android:pathData="M60,30v10h10z" />
+    <path android:fillColor="#3A352D" android:pathData="M43,48h20v2.4h-20z" />
+    <path android:fillColor="#E0A43B" android:pathData="M42,55h24v6h-24z" />
+    <path android:fillColor="#3A352D" android:pathData="M43,57h18v2.2h-18z" />
+    <path android:fillColor="#3A352D" android:pathData="M43,66h15v2.4h-15z" />
+</vector>
