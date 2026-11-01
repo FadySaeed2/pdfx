@@ -154,3 +154,8 @@ signatures, and a full pass on every screen for clarity.
   running heads/page numbers, list items, joins paragraphs across pages, pictures in place,
   justified + hyphens, ~70-character lines, quiet page marks. Per-word styling in a box: phase 9
   if wanted. Shipped as 0.3.32.
+- 2026-11-01 — Reflow tables (0.3.38): the engine's table hunt (segment, table-hunt, vectors) read
+  through its HTML output, because walking that page crashes on a JNI bug in onVector (a bad
+  jboolean). Columns the engine cuts through words are joined back (the page's text decides the
+  spaces); anything unclear, ragged or incomplete is shown as a picture of the page region. Every
+  picture and table opens full screen to zoom.
