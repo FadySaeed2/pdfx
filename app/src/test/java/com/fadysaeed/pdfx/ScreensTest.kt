@@ -34,6 +34,16 @@ import com.fadysaeed.pdfx.ui.theme.Ink
 import com.fadysaeed.pdfx.ui.theme.PdfxTheme
 import com.fadysaeed.pdfx.ui.viewer.LockedPanel
 import com.fadysaeed.pdfx.ui.viewer.ViewerContent
+import com.fadysaeed.pdfx.ui.viewer.Reader
+import com.fadysaeed.pdfx.ui.viewer.PaperMode
+import com.fadysaeed.pdfx.ui.viewer.ContentsSheet
+import com.fadysaeed.pdfx.ui.viewer.DisplaySheet
+import com.fadysaeed.pdfx.engine.Box
+import com.fadysaeed.pdfx.engine.OutlineEntry
+import com.fadysaeed.pdfx.engine.Selection
+import com.fadysaeed.pdfx.ui.components.Hairline
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -147,23 +157,84 @@ class ScreensTest {
         compose.onRoot().captureRoboImage("screenshots/08_actions.png")
     }
 
-    @Test
-    fun viewer() {
+    private fun viewerShot(file: String, setup: (Reader) -> Unit) {
         val pages = (0 until 3).map { fakePage(it, 1152) }
         compose.setContent {
             PdfxTheme {
+                val scope = rememberCoroutineScope()
+                val reader = remember { Reader(null, 112, scope).also(setup) }
                 ViewerContent(
                     name = "Clinical practice guideline - mood disorders",
-                    pageCount = 112,
+                    reader = reader,
                     aspects = List(112) { 595f / 842f },
+                    widths = List(112) { 595f },
                     image = { i -> pages.getOrNull(i) },
+                    tile = { null },
                     listState = rememberLazyListState(),
                     onWant = {},
+                    onTiles = {},
                     onBack = {},
                 )
             }
         }
-        compose.onRoot().captureRoboImage("screenshots/09_viewer.png")
+        compose.onRoot().captureRoboImage("screenshots/$file")
+    }
+
+    @Test fun viewer() = viewerShot("09_viewer.png") {}
+
+    @Test fun viewerSearch() = viewerShot("11_viewer_search.png") { r ->
+        r.showHits(
+            "lithium",
+            mapOf(
+                0 to listOf(listOf(Box(57f, 201f, 121f, 211f)), listOf(Box(150f, 299f, 214f, 309f))),
+                1 to listOf(listOf(Box(57f, 240f, 121f, 250f))),
+            ),
+            at = 1,
+        )
+    }
+
+    @Test fun viewerNight() = viewerShot("12_viewer_night.png") { r -> r.setMode(PaperMode.NIGHT) }
+
+    @Test fun viewerSelection() = viewerShot("13_viewer_selection.png") { r ->
+        r.chrome = false
+        r.showSelection(Selection(0, 57f, 225f, 260f, 245f, listOf(Box(57f, 220f, 295f, 230f), Box(57f, 240f, 260f, 250f)), "monitor lithium levels twelve hours after the last dose"))
+    }
+
+    @Test fun viewerReflow() = viewerShot("14_viewer_reflow.png") { r ->
+        r.setReflow(true)
+        r.paragraphs[0] = listOf(
+            "Lithium remains the first-line long-term treatment for bipolar disorder, with the strongest evidence for preventing relapse and suicide.",
+            "Check levels 12 hours after the last dose, weekly after each change until stable, then every three months for the first year.",
+        )
+        r.paragraphs[1] = listOf("Combining lithium with an ACE inhibitor, an ARB or a thiazide raises levels; check within a week of starting any of them.")
+    }
+
+    @Test
+    fun viewerSheets() {
+        compose.setContent {
+            PdfxTheme {
+                val scope = rememberCoroutineScope()
+                val reader = remember {
+                    Reader(null, 112, scope).also {
+                        it.setOutlineForTest(listOf(
+                            OutlineEntry("Summary of recommendations", 2, 0),
+                            OutlineEntry("Bipolar disorder", 10, 0),
+                            OutlineEntry("Acute mania", 12, 1),
+                            OutlineEntry("Maintenance treatment", 18, 1),
+                            OutlineEntry("Lithium", 19, 2),
+                            OutlineEntry("Depression", 44, 0),
+                        ))
+                        it.bookmarks.addAll(listOf(18, 47))
+                    }
+                }
+                Column(Modifier.fillMaxSize().background(Ink.Field)) {
+                    ContentsSheet(reader, 20) {}
+                    Hairline(color = Ink.Edge)
+                    DisplaySheet(reader)
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/15_viewer_sheets.png")
     }
 
     @Test

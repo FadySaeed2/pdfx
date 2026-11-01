@@ -57,16 +57,17 @@ reference for what the app is, how it is built and what comes next. Update it wi
   reading-position line, last page remembered per file.
 - Library v0: recent files with pages, size, when opened, and the page reached.
 
-### Phase 1 — library and file management (this build)
+### Phase 1 — library and file management (done)
 All PDFs on the phone found automatically (All files access; personal app, not on Play), folders,
 favourites, tags, thumbnails, rename, move, copy, delete to a recycle bin, sort and filter, and a
 full-text index so search finds words inside documents, not only file names.
 
-### Phase 2 — the reader
-Tiled rendering so zoom is sharp at any level, fast scrubber for long files, single-page and
-two-page landscape modes, outline (table of contents), bookmarks, search with highlighted hits,
-text selection and copy, links, night mode for pages that keeps photos natural, reflow mode for
-small print.
+### Phase 2 — the reader (this build)
+Sharp deep zoom (past 2x only the part on screen is drawn, at full size), fast scrubber and
+go-to-page, table of contents, bookmarks, find in document with every hit highlighted and the
+current one outlined (also opened straight from a library search), text selection with handles
+and copy, find or share, internal and web links, Paper, Night and Sepia page colours, and a
+reflow mode with adjustable text size. Single-page and two-page landscape layouts move to phase 9.
 
 ### Phase 3 — annotation and S Pen
 Highlight, underline and strike that snap to text; notes; freehand ink with pressure and palm
@@ -116,3 +117,5 @@ signatures, and a full pass on every screen for clarity.
   Room library (documents, tags, full-text index of every page), All files access scan, rename,
   move, copy, trash with undo and 30-day purge, tags, folders, sorting, search inside documents
   that opens at the matching page.
+- 2026-11-01 — Phase 1 shipped (0.1.12). Fady: search works well but should highlight the words
+  inside the opened file; asked where night mode is (planned for phase 2). Phase 2 started.

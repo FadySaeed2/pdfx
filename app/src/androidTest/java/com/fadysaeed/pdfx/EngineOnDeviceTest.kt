@@ -14,7 +14,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.artifex.mupdf.fitz.Document
 import com.fadysaeed.pdfx.engine.PdfSession
 import com.fadysaeed.pdfx.ui.theme.PdfxTheme
-import com.fadysaeed.pdfx.ui.viewer.PageImages
+import com.fadysaeed.pdfx.ui.viewer.PaperMode
+import com.fadysaeed.pdfx.ui.viewer.Reader
 import com.fadysaeed.pdfx.ui.viewer.ViewerContent
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -103,31 +104,72 @@ class EngineOnDeviceTest {
     }
 
     @Test
-    fun viewerDrawsRealPages() {
+    fun viewerDrawsRealPagesAndFindsText() {
         val file = samplePdf(12)
         val session = runBlocking { PdfSession.open(ctx, Uri.fromFile(file)) }
-        var pages: PageImages? = null
+        var reader: Reader? = null
         compose.setContent {
             PdfxTheme {
                 val scope = rememberCoroutineScope()
-                val images = remember { PageImages(session, scope).also { pages = it } }
+                val r = remember { Reader(session, session.pageCount, scope).also { reader = it } }
+                val pages = r.pages!!
                 ViewerContent(
-                    name = "Engine check.pdf",
-                    pageCount = session.pageCount,
-                    aspects = images.aspects,
-                    image = { images.images[it] },
+                    name = "Engine check",
+                    reader = r,
+                    aspects = pages.aspects,
+                    widths = pages.widths,
+                    image = { pages.images[it] },
+                    tile = { pages.tiles[it] },
                     listState = rememberLazyListState(),
-                    onWant = images::want,
+                    onWant = pages::want,
+                    onTiles = pages::wantTiles,
                     onBack = {},
                 )
             }
         }
-        compose.waitUntil(20_000) { (pages?.images?.size ?: 0) >= 2 }
+        compose.waitUntil(20_000) { (reader?.pages?.images?.size ?: 0) >= 2 }
+        compose.runOnIdle { reader!!.searchOpen = true; reader!!.search("lazy dog", 0) }
+        compose.waitUntil(20_000) { reader!!.order.size >= 12 * 34 && !reader!!.searching }
+        assertEquals(0, reader!!.currentHit()!!.first)
         compose.waitForIdle()
-        Thread.sleep(400)
-        // A system screenshot: drawing the Compose view from the test thread races the UI thread.
-        save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "viewer_real_pages.png")
+        Thread.sleep(500)
+        save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "viewer_search_hits.png")
+
+        compose.runOnIdle { reader!!.closeSearch(); reader!!.setMode(PaperMode.NIGHT) }
+        compose.waitForIdle()
+        Thread.sleep(500)
+        save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "viewer_night.png")
+        compose.runOnIdle { reader!!.setMode(PaperMode.PAPER) }
         session.close()
+    }
+
+    @Test
+    fun selectsCopiesAndDrawsRegions() = runBlocking {
+        val file = samplePdf(2)
+        val s = PdfSession.open(ctx, Uri.fromFile(file))
+        try {
+            // "engine" sits in the title, drawn at x=56..300, baseline y=90 (26pt bold).
+            val sel = s.selectWord(0, 150f, 82f)
+            assertTrue("a word should be selected", sel != null && sel.text.isNotBlank())
+            val wider = s.select(0, 57f, 82f, 299f, 82f)!!
+            assertTrue(wider.text.contains("engine check"))
+            assertTrue(wider.boxes.isNotEmpty())
+
+            val hits = s.search(1, "lazy dog")
+            assertEquals(34, hits.size)
+            assertTrue(hits[0][0].y0 > 200f)
+
+            val region = s.renderRegion(0, 3000, 200, 200, 600, 400)
+            assertEquals(600, region.width)
+            assertTrue(darkPixels(region) > 500)
+
+            assertTrue(s.outline().isEmpty())
+            assertTrue(s.links(0).isEmpty())
+            val paras = s.paragraphs(0)
+            assertTrue(paras.any { it.contains("engine check") })
+        } finally {
+            s.close()
+        }
     }
 
     private fun darkPixels(b: Bitmap): Int {

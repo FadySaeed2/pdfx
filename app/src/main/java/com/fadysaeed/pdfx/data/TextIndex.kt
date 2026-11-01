@@ -60,6 +60,7 @@ class TextIndex(private val db: LibraryDb) {
                 "CREATE VIRTUAL TABLE IF NOT EXISTS page_text USING fts4(" +
                     "body, ref, page, tokenize=porter, notindexed=ref, notindexed=page)",
             )
+            db.execSQL("CREATE TABLE IF NOT EXISTS bookmarks(doc INTEGER NOT NULL, page INTEGER NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(doc, page))")
         }
     }
 
@@ -67,4 +68,23 @@ class TextIndex(private val db: LibraryDb) {
         const val MARK_START = "\u0002"
         const val MARK_END = "\u0003"
     }
+}
+
+/** Pages the user marked in each document. Keyed by the document's id, so they survive renames and moves. */
+class Bookmarks(private val db: LibraryDb) {
+    private val sql: SupportSQLiteDatabase get() = db.openHelper.writableDatabase
+
+    fun pages(docId: Long): List<Int> =
+        sql.query(SimpleSQLiteQuery("SELECT page FROM bookmarks WHERE doc = ? ORDER BY page", arrayOf<Any>(docId))).use { c ->
+            val out = ArrayList<Int>()
+            while (c.moveToNext()) out += c.getInt(0)
+            out
+        }
+
+    fun set(docId: Long, page: Int, on: Boolean) {
+        if (on) sql.execSQL("INSERT OR IGNORE INTO bookmarks(doc, page, created) VALUES (?, ?, ?)", arrayOf<Any>(docId, page, System.currentTimeMillis()))
+        else sql.execSQL("DELETE FROM bookmarks WHERE doc = ? AND page = ?", arrayOf<Any>(docId, page))
+    }
+
+    fun clear(docId: Long) = sql.execSQL("DELETE FROM bookmarks WHERE doc = ?", arrayOf<Any>(docId))
 }

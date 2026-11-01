@@ -14,6 +14,10 @@ import kotlin.math.abs
 /** What the screen needs drawn right now. */
 data class Want(val range: IntRange, val focus: Int, val widthPx: Int)
 
+/** A sharp patch of a page for deep zoom: the part on screen, drawn at the column's full size. */
+data class TileReq(val page: Int, val columnPx: Int, val x: Int, val y: Int, val w: Int, val h: Int)
+data class Tile(val req: TileReq, val image: ImageBitmap)
+
 /**
  * Keeps rendered pages for the part of the document on screen. Pages nearest the one being read
  * are drawn first; when the reader jumps ahead, unfinished work for old pages is dropped.
@@ -23,6 +27,11 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope) {
     val images = mutableStateMapOf<Int, ImageBitmap>()
     /** Width over height for every page; starts as page 1's shape and settles as pages are measured. */
     val aspects = mutableStateListOf<Float>()
+    /** Page widths in PDF points, to place highlights and selections on the page. */
+    val widths = mutableStateListOf<Float>()
+    /** At most one sharp patch per page, for whatever is on screen when zoomed in deep. */
+    val tiles = mutableStateMapOf<Int, Tile>()
+    private val wantedTiles = MutableStateFlow<List<TileReq>>(emptyList())
 
     private val renderedWidth = HashMap<Int, Int>()
     private val bytes = HashMap<Int, Long>()
@@ -32,23 +41,42 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope) {
         scope.launch {
             val n = session.pageCount
             if (n == 0) return@launch
-            val first = session.pageSize(0).aspect
+            val firstSize = session.pageSize(0)
+            val first = firstSize.aspect
             aspects.addAll(List(n) { first })
+            widths.addAll(List(n) { firstSize.width })
             // Measure the rest in chunks so rendering can slip in between.
             var start = 0
             while (start < n) {
                 val end = minOf(n, start + 40) - 1
                 val sizes = session.pageSizes(start..end)
-                sizes.forEachIndexed { k, s -> aspects[start + k] = s.aspect }
+                sizes.forEachIndexed { k, s -> aspects[start + k] = s.aspect; widths[start + k] = s.width }
                 start = end + 1
             }
         }
         scope.launch {
             wanted.collectLatest { w -> if (w != null) renderFor(w) }
         }
+        scope.launch {
+            wantedTiles.collectLatest { reqs ->
+                for (r in reqs) {
+                    if (session.closed) return@collectLatest
+                    if (tiles[r.page]?.req == r) continue
+                    val bmp = runCatching { session.renderRegion(r.page, r.columnPx, r.x, r.y, r.w, r.h) }.getOrNull() ?: continue
+                    tiles[r.page] = Tile(r, bmp.asImageBitmap())
+                }
+            }
+        }
     }
 
     fun want(w: Want) { wanted.value = w }
+
+    /** Asks for sharp patches; patches drawn for another zoom level or page are dropped at once. */
+    fun wantTiles(reqs: List<TileReq>) {
+        val pages = reqs.associateBy { it.page }
+        tiles.keys.toList().forEach { p -> if (pages[p]?.columnPx != tiles[p]?.req?.columnPx) tiles.remove(p) }
+        wantedTiles.value = reqs
+    }
 
     private suspend fun renderFor(w: Want) {
         val order = w.range.sortedBy { abs(it - w.focus) }

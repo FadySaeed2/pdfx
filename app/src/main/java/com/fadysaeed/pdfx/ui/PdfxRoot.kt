@@ -49,7 +49,11 @@ fun PdfxRoot(incoming: Uri?, onIncomingHandled: () -> Unit) {
     if (current == null) {
         LibraryScreen(
             vm = vm,
-            onOpen = { d, page -> open = OpenRequest(Uri.parse(d.uri), page) },
+            // Opened from a search hit: carry the words in, so they are found and lit up inside.
+            onOpen = { d, page ->
+                val q = vm.ui.value.query.trim().takeIf { it.isNotEmpty() && page != null }
+                open = OpenRequest(Uri.parse(d.uri), page, q)
+            },
             onPick = { picker.launch(arrayOf("application/pdf")) },
         )
     } else {

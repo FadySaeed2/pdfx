@@ -28,6 +28,7 @@ class Library(
 ) {
     val dao = db.dao()
     val text = TextIndex(db)
+    val bookmarks = Bookmarks(db)
     val trashDir = File(root, ".pdfx-trash")
     /** Where copies saved from other apps go, and the default place for new folders. */
     val homeDir = File(root, "Documents/PDFx")
@@ -129,6 +130,7 @@ class Library(
      */
     private suspend fun forgetNow(d: Doc) {
         text.clear(d.id)
+        bookmarks.clear(d.id)
         dao.untagDoc(d.id)
         dao.delete(d)
     }

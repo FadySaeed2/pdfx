@@ -74,7 +74,7 @@ fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
     }
 }
 
-enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK }
+enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK, BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN }
 
 /** Line glyphs drawn in code, so every icon shares one stroke weight and the app ships no icon font. */
 @Composable
@@ -157,6 +157,32 @@ fun GlyphIcon(glyph: Glyph, color: Color, size: Dp = 22.dp) {
             Glyph.OPEN -> { line(0.3f, 0.2f, 0.62f, 0.5f); line(0.62f, 0.5f, 0.3f, 0.8f); line(0.72f, 0.2f, 0.72f, 0.8f) }
             Glyph.SORT -> { line(0.2f, 0.3f, 0.8f, 0.3f); line(0.2f, 0.5f, 0.62f, 0.5f); line(0.2f, 0.7f, 0.44f, 0.7f) }
             Glyph.CHECK -> { line(0.2f, 0.52f, 0.42f, 0.74f); line(0.42f, 0.74f, 0.82f, 0.28f) }
+            Glyph.BOOKMARK, Glyph.BOOKMARK_FILLED -> {
+                val p = Path().apply {
+                    moveTo(s * 0.28f, s * 0.14f); lineTo(s * 0.72f, s * 0.14f); lineTo(s * 0.72f, s * 0.86f)
+                    lineTo(s * 0.5f, s * 0.68f); lineTo(s * 0.28f, s * 0.86f); close()
+                }
+                if (glyph == Glyph.BOOKMARK_FILLED) drawPath(p, color)
+                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+            }
+            Glyph.LIST -> {
+                listOf(0.28f, 0.5f, 0.72f).forEach { y ->
+                    drawCircle(color, w * 0.8f, Offset(s * 0.2f, s * y))
+                    line(0.34f, y, 0.82f, y)
+                }
+            }
+            Glyph.MOON -> {
+                val p = Path().apply {
+                    moveTo(s * 0.62f, s * 0.16f)
+                    cubicTo(s * 0.3f, s * 0.2f, s * 0.2f, s * 0.6f, s * 0.42f, s * 0.78f)
+                    cubicTo(s * 0.56f, s * 0.88f, s * 0.76f, s * 0.84f, s * 0.86f, s * 0.7f)
+                    cubicTo(s * 0.56f, s * 0.72f, s * 0.42f, s * 0.4f, s * 0.62f, s * 0.16f)
+                    close()
+                }
+                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+            }
+            Glyph.UP -> { line(0.24f, 0.62f, 0.5f, 0.36f); line(0.5f, 0.36f, 0.76f, 0.62f) }
+            Glyph.DOWN -> { line(0.24f, 0.38f, 0.5f, 0.64f); line(0.5f, 0.64f, 0.76f, 0.38f) }
         }
     }
 }
