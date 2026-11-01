@@ -1,13 +1,10 @@
 package com.fadysaeed.pdfx.data
 
 import android.content.Context
-import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Delete
 import androidx.room.Entity
-import androidx.room.Fts4
-import androidx.room.FtsOptions
 import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -15,7 +12,6 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -63,16 +59,6 @@ data class Tag(
 @Entity(tableName = "doc_tags", primaryKeys = ["docId", "tagId"], indices = [Index("tagId")])
 data class DocTag(val docId: Long, val tagId: Long)
 
-/** The words on every page, for search inside documents. */
-@Fts4(tokenizer = FtsOptions.TOKENIZER_PORTER, notIndexed = ["docId", "page"])
-@Entity(tableName = "page_text")
-data class PageText(
-    @PrimaryKey(autoGenerate = true) @ColumnInfo(name = "rowid") val rowId: Int = 0,
-    val docId: Long,
-    val page: Int,
-    val body: String,
-)
-
 data class TextHit(val docId: Long, val page: Int, val snippet: String)
 
 data class TagCount(val id: Long, val name: String, val color: Int, val count: Int)
@@ -105,24 +91,6 @@ interface LibraryDao {
 
     @Query("SELECT COUNT(*) FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified)")
     fun observeUnindexed(): Flow<Int>
-
-    @Query("DELETE FROM page_text WHERE docId = :docId")
-    suspend fun clearText(docId: Long)
-
-    @Insert
-    suspend fun insertText(rows: List<PageText>)
-
-    @Transaction
-    suspend fun replaceText(docId: Long, rows: List<PageText>) {
-        clearText(docId)
-        rows.chunked(200).forEach { insertText(it) }
-    }
-
-    @Query(
-        "SELECT docId, page, snippet(page_text, '\u0002', '\u0003', '…', 2, 14) AS snippet " +
-            "FROM page_text WHERE page_text MATCH :match LIMIT 400",
-    )
-    suspend fun searchText(match: String): List<TextHit>
 
     // Tags
     @Query("SELECT * FROM tags ORDER BY name COLLATE NOCASE")
@@ -157,16 +125,16 @@ interface LibraryDao {
     suspend fun untagDoc(docId: Long)
 }
 
-@Database(entities = [Doc::class, Tag::class, DocTag::class, PageText::class], version = 1, exportSchema = true)
+@Database(entities = [Doc::class, Tag::class, DocTag::class], version = 1, exportSchema = true)
 abstract class LibraryDb : RoomDatabase() {
     abstract fun dao(): LibraryDao
 
     companion object {
         fun open(context: Context): LibraryDb =
-            Room.databaseBuilder(context, LibraryDb::class.java, "library.db").build()
+            Room.databaseBuilder(context, LibraryDb::class.java, "library.db").addCallback(TextIndex.Setup).build()
 
         fun inMemory(context: Context): LibraryDb =
-            Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).allowMainThreadQueries().build()
+            Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).addCallback(TextIndex.Setup).allowMainThreadQueries().build()
     }
 }
 

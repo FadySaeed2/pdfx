@@ -27,6 +27,7 @@ class Library(
     private val allFilesAccess: () -> Boolean = { Environment.isExternalStorageManager() },
 ) {
     val dao = db.dao()
+    val text = TextIndex(db)
     val trashDir = File(root, ".pdfx-trash")
     /** Where copies saved from other apps go, and the default place for new folders. */
     val homeDir = File(root, "Documents/PDFx")
@@ -122,7 +123,7 @@ class Library(
     }
 
     private suspend fun forgetNow(d: Doc) {
-        dao.clearText(d.id)
+        withContext(Dispatchers.IO) { text.clear(d.id) }
         dao.untagDoc(d.id)
         dao.delete(d)
     }
@@ -275,7 +276,7 @@ class Library(
 
     suspend fun searchText(query: String): List<TextHit> {
         val match = ftsQuery(query) ?: return emptyList()
-        return runCatching { dao.searchText(match) }.getOrDefault(emptyList())
+        return withContext(Dispatchers.IO) { runCatching { text.search(match) }.getOrDefault(emptyList()) }
     }
 
     // ---------------------------------------------------------------- Uris and paths

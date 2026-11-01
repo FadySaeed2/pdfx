@@ -148,9 +148,9 @@ class LibraryTest {
         lib.setTag(guide.id, tagId, true)
         assertEquals(guide.id, db.dao().observeDocTags().first().single().docId)
 
-        db.dao().replaceText(guide.id, listOf(
-            PageText(docId = guide.id, page = 0, body = "Introduction to mood disorders"),
-            PageText(docId = guide.id, page = 7, body = "Monitor lithium levels twelve hours after the last dose"),
+        lib.text.replace(guide.id, listOf(
+            PageText(page = 0, body = "Introduction to mood disorders"),
+            PageText(page = 7, body = "Monitor lithium levels twelve hours after the last dose"),
         ))
         val hits = lib.searchText("lith")
         assertEquals(1, hits.size)
@@ -158,9 +158,16 @@ class LibraryTest {
         assertTrue(hits[0].snippet.contains("\u0002"))
         assertTrue(lib.searchText("twelve hours").isNotEmpty())
         assertTrue(lib.searchText("aspirin").isEmpty())
+        // Porter stemming: "monitoring" finds "Monitor".
+        assertEquals(7, lib.searchText("monitoring").single().page)
+
+        // Deleting a file takes its words out of the index.
+        lib.deleteForever(guide).getOrThrow()
+        assertTrue(lib.searchText("lithium").isEmpty())
 
         lib.deleteTag(tagId)
         assertTrue(db.dao().observeDocTags().first().isEmpty())
+        assertEquals(1, db.dao().all().size)
     }
 
     @Test

@@ -10,6 +10,8 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.fadysaeed.pdfx.PdfxApp
 import com.fadysaeed.pdfx.engine.PdfSession
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Reads the words on every page of every PDF into the search index, one file at a time, most
@@ -29,7 +31,6 @@ class TextIndexer(private val context: Context, private val library: Library) {
     }
 
     suspend fun index(d: Doc) {
-        val dao = library.dao
         val session = runCatching { PdfSession.open(context, Uri.parse(d.uri)) }.getOrNull()
         if (session == null) {
             markDone(d, pages = d.pages, locked = d.locked)
@@ -37,7 +38,7 @@ class TextIndexer(private val context: Context, private val library: Library) {
         }
         try {
             if (session.needsPassword) {
-                dao.replaceText(d.id, emptyList())
+                withContext(Dispatchers.IO) { library.text.replace(d.id, emptyList()) }
                 markDone(d, pages = 0, locked = true)
                 return
             }
@@ -45,9 +46,9 @@ class TextIndexer(private val context: Context, private val library: Library) {
             for (p in 0 until session.pageCount) {
                 val text = runCatching { session.text(p) }.getOrDefault("")
                     .replace(Regex("\\s+"), " ").trim()
-                if (text.isNotEmpty()) rows += PageText(docId = d.id, page = p, body = text.take(MAX_CHARS_PER_PAGE))
+                if (text.isNotEmpty()) rows += PageText(page = p, body = text.take(MAX_CHARS_PER_PAGE))
             }
-            dao.replaceText(d.id, rows)
+            withContext(Dispatchers.IO) { library.text.replace(d.id, rows) }
             markDone(d, pages = session.pageCount, locked = false)
         } finally {
             session.close()
