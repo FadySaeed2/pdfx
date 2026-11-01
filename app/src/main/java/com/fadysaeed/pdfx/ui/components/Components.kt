@@ -189,9 +189,30 @@ fun GlyphIcon(glyph: Glyph, color: Color, size: Dp = 22.dp) {
                 drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
             }
             Glyph.PEN -> {
-                line(0.22f, 0.78f, 0.66f, 0.34f); line(0.66f, 0.34f, 0.78f, 0.22f)
-                line(0.58f, 0.26f, 0.74f, 0.42f); line(0.22f, 0.78f, 0.18f, 0.84f)
-                line(0.3f, 0.86f, 0.8f, 0.86f)
+                // A pencil at 45 degrees: sharpened tip with its lead, a slim body, and the band
+                // that holds the eraser.
+                val r = 0.7071f
+                fun at(along: Float, side: Float) = Offset(s * (0.19f + (along + side) * r), s * (0.81f + (side - along) * r))
+                val half = 0.085f
+                val body = Path().apply {
+                    moveTo(at(0f, 0f).x, at(0f, 0f).y)
+                    lineTo(at(0.2f, half).x, at(0.2f, half).y)
+                    lineTo(at(0.86f, half).x, at(0.86f, half).y)
+                    quadraticTo(at(0.93f, half).x, at(0.93f, half).y, at(0.93f, 0f).x, at(0.93f, 0f).y)
+                    quadraticTo(at(0.93f, -half).x, at(0.93f, -half).y, at(0.86f, -half).x, at(0.86f, -half).y)
+                    lineTo(at(0.2f, -half).x, at(0.2f, -half).y)
+                    close()
+                }
+                drawPath(body, color, style = Stroke(width = w, join = StrokeJoin.Round))
+                val lead = Path().apply {
+                    moveTo(at(0f, 0f).x, at(0f, 0f).y)
+                    lineTo(at(0.075f, half * 0.38f).x, at(0.075f, half * 0.38f).y)
+                    lineTo(at(0.075f, -half * 0.38f).x, at(0.075f, -half * 0.38f).y)
+                    close()
+                }
+                drawPath(lead, color)
+                drawLine(color, at(0.2f, half), at(0.2f, -half), w, cap = StrokeCap.Round)
+                drawLine(color, at(0.7f, half), at(0.7f, -half), w, cap = StrokeCap.Round)
             }
             Glyph.UNDO, Glyph.REDO -> {
                 val flip = glyph == Glyph.REDO
