@@ -146,3 +146,11 @@ signatures, and a full pass on every screen for clarity.
   / Line for handwriting (default Word); Select tool with lasso; group move, resize, colour, width,
   delete as one step; 20dp handles outside the frame; word-snapped text selection with a loupe;
   haptics.
+- 2026-11-01 — 3.3 shipped (0.3.29); Fady: works well. Asked for text box formatting (fonts,
+  direction, weight, slant…) on the whole box, and cleaner reflow. 3.4: Sans/Serif/Mono, 6–72 pt,
+  bold/italic/underline, align and direction (auto per line), colour, background, border, spacing,
+  preview, remembered defaults; stored as the box's rich text (this MuPDF build has no native
+  setRichDefaults; FreeText background is /C). Reflow keeps bold/italic, real-size headings, drops
+  running heads/page numbers, list items, joins paragraphs across pages, pictures in place,
+  justified + hyphens, ~70-character lines, quiet page marks. Per-word styling in a box: phase 9
+  if wanted. Shipped as 0.3.32.
