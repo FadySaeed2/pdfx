@@ -292,7 +292,7 @@ endstream
 endobj
 
 33 0 obj
-<</Type/Annot/Subtype/Widget/P 4 0 R/Parent 36 0 R/AS/None/NM(fitz-W5)/Rect[170 526 186 542]/F 4/BS<</S/S/W 0>>/AP<</N<</Off 34 0 R/None 35 0 R>>>>>>
+<</Type/Annot/Subtype/Widget/P 4 0 R/Parent 36 0 R/AS/Off/NM(fitz-W5)/Rect[170 526 186 542]/F 4/BS<</S/S/W 0>>/AP<</N<</Off 34 0 R/Yes 35 0 R>>>>>>
 endobj
 
 34 0 obj
@@ -323,7 +323,7 @@ endstream
 endobj
 
 36 0 obj
-<</T(smoker)/Kids[33 0 R 38 0 R]/FT/Btn/Ff 32768/DA(0 0 0 rg /Helv 0 Tf)/V/None>>
+<</T(smoker)/Kids[33 0 R 38 0 R]/FT/Btn/Ff 32768/DA(0 0 0 rg /Helv 0 Tf)/V/Off>>
 endobj
 
 37 0 obj
@@ -341,7 +341,7 @@ endstream
 endobj
 
 38 0 obj
-<</Type/Annot/Subtype/Widget/P 4 0 R/Parent 36 0 R/AS/Off/NM(fitz-W6)/Rect[240 526 256 542]/F 4/BS<</S/S/W 0>>/AP<</N<</Off 39 0 R/None 40 0 R>>>>>>
+<</Type/Annot/Subtype/Widget/P 4 0 R/Parent 36 0 R/AS/Off/NM(fitz-W6)/Rect[240 526 256 542]/F 4/BS<</S/S/W 0>>/AP<</N<</Off 39 0 R/No 40 0 R>>>>>>
 endobj
 
 39 0 obj
@@ -450,20 +450,20 @@ xref
 0000003916 00000 n 
 0000004026 00000 n 
 0000004131 00000 n 
-0000004298 00000 n 
-0000004417 00000 n 
-0000004673 00000 n 
-0000004772 00000 n 
-0000004875 00000 n 
-0000005041 00000 n 
-0000005160 00000 n 
-0000005416 00000 n 
-0000005526 00000 n 
-0000005665 00000 n 
-0000005900 00000 n 
+0000004296 00000 n 
+0000004415 00000 n 
+0000004671 00000 n 
+0000004769 00000 n 
+0000004872 00000 n 
+0000005036 00000 n 
+0000005155 00000 n 
+0000005411 00000 n 
+0000005521 00000 n 
+0000005660 00000 n 
+0000005895 00000 n 
 
 trailer
-<</Size 45/Root 1 0 R/ID[<C3B2C3B5C2A858C38EC297C39EC3B80C><BAA55B2A18166AF540DC3C78D24930FF>]>>
+<</Size 45/Root 1 0 R/ID[<72C3A04DC3A1324F036908C2B6C28E26><C5C6887A1F4E09144B8293367A833821>]>>
 startxref
-6036
+6031
 %%EOF
