@@ -36,6 +36,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
@@ -88,7 +89,7 @@ fun paperColor(mode: PaperMode): Color = when (mode) {
  * and links. Zoom widens the page column and pans both ways with flinging; once still, the pages
  * are redrawn at the new size, and past 2x only what is on screen is drawn, at full sharpness.
  */
-@OptIn(FlowPreview::class)
+@OptIn(FlowPreview::class, ExperimentalComposeUiApi::class)
 @Composable
 fun DocumentView(
     reader: Reader,
@@ -273,7 +274,8 @@ fun DocumentView(
                                     while (!done) {
                                         val e = awaitPointerEvent(PointerEventPass.Initial)
                                         if (e.changes.count { it.pressed } >= 2) { reader.cancelGesture(); break }
-                                        val c = e.changes.firstOrNull { it.id == down.id } ?: run { reader.cancelGesture(); break }
+                                        val c = e.changes.firstOrNull { it.id == down.id }
+                                        if (c == null) { reader.cancelGesture(); break }
                                         if (c.pressed) {
                                             val pts = c.historical.map { it.position.x / k to it.position.y / k } + (c.position.x / k to c.position.y / k)
                                             reader.extend(pts)
