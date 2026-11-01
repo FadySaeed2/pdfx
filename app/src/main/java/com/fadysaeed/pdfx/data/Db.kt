@@ -64,7 +64,7 @@ data class Tag(
 data class DocTag(val docId: Long, val tagId: Long)
 
 /** The words on every page, for search inside documents. */
-@Fts4(tokenizer = FtsOptions.TOKENIZER_UNICODE61, notIndexed = ["docId", "page"])
+@Fts4(tokenizer = FtsOptions.TOKENIZER_PORTER, notIndexed = ["docId", "page"])
 @Entity(tableName = "page_text")
 data class PageText(
     @PrimaryKey(autoGenerate = true) @ColumnInfo(name = "rowid") val rowId: Int = 0,
