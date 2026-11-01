@@ -35,8 +35,12 @@ class LibraryOnDeviceTest {
 
     @Before
     fun setUp() {
-        instr.uiAutomation.executeShellCommand("appops set ${ctx.packageName} MANAGE_EXTERNAL_STORAGE allow").close()
-        Thread.sleep(500)
+        // The grant can take a moment to land on a busy emulator: ask, then wait for it (up to 15 s).
+        for (attempt in 0 until 30) {
+            if (attempt % 10 == 0) instr.uiAutomation.executeShellCommand("appops set ${ctx.packageName} MANAGE_EXTERNAL_STORAGE allow").close()
+            Thread.sleep(500)
+            if (Environment.isExternalStorageManager()) break
+        }
         assertTrue("All files access should be granted for this test", Environment.isExternalStorageManager())
         dir.deleteRecursively()
         dir.mkdirs()
@@ -46,7 +50,7 @@ class LibraryOnDeviceTest {
 
     @After
     fun tearDown() {
-        db.close()
+        if (::db.isInitialized) db.close()
         dir.deleteRecursively()
         File(root, "Documents/pdfx-ci-moved").deleteRecursively()
     }
