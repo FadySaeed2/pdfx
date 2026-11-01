@@ -507,15 +507,11 @@ class PdfSession private constructor(
         a.setDefaultAppearance(style.font.da, style.size, rgb(style.color))
         styleErrors.clear()
         runCatching { a.quadding = style.quadding(text) }.onFailure { styleErrors += "Q: $it" }
-        runCatching { a.setRichDefaults(style.css(text)) }.onFailure { styleErrors += "DS: $it" }
+        // The style rides on the rich text's body; this engine build cannot set a separate default style.
         runCatching { a.setRichContents(text, style.rich(text)) }.onFailure { styleErrors += "RC: $it" }
-        runCatching { a.interiorColor = style.fill?.let { rgb(it) } ?: FloatArray(0) }.onFailure { styleErrors += "IC: $it" }
-        if (style.border) {
-            a.borderWidth = 0.8f
-            a.color = rgb(style.color)
-        } else {
-            a.borderWidth = 0f
-        }
+        // A text box's /C colour is its background; its border takes the colour of the words.
+        runCatching { a.color = style.fill?.let { rgb(it) } ?: FloatArray(0) }.onFailure { styleErrors += "C: $it" }
+        a.borderWidth = if (style.border) 0.8f else 0f
     }
 
     private val styleErrors = ArrayList<String>()
@@ -529,9 +525,9 @@ class PdfSession private constructor(
     }
 
     private fun styleOf(a: PDFAnnotation, text: String, size: Float, color: Int): BoxStyle {
-        val ds = runCatching { if (a.hasRichDefaults()) a.richDefaults else null }.getOrNull()
         val rc = runCatching { if (a.hasRichContents()) a.richContents else null }.getOrNull()
-        val fill = runCatching { a.interiorColor?.takeIf { it.isNotEmpty() }?.let { argb(it) } }.getOrNull()
+        val ds = rc?.let { Regex("<body[^>]*\\bstyle=\"([^\"]*)\"").find(it)?.groupValues?.get(1) }
+        val fill = runCatching { a.color?.takeIf { it.isNotEmpty() }?.let { argb(it) } }.getOrNull()
         val border = runCatching { a.borderWidth > 0.05f }.getOrDefault(false)
         val rtl = rc?.let { r -> if (r.contains("dir=\"rtl\"")) true else if (r.contains("dir=\"ltr\"")) false else null }
         val parsed = BoxStyle.parse(ds, text, size, color, fill, border, rtl)
