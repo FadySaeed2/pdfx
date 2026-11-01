@@ -433,14 +433,27 @@ class PdfSession private constructor(
         val sy = to.height / fh
         fun mx(x: Float) = to.x0 + (x - b.x0) * sx
         fun my(y: Float) = to.y0 + (y - b.y0) * sy
+        // Drawings and lines: map their points, keeping the margin the stroke adds round them.
+        fun mapper(pts: List<Point>): (Point) -> Point {
+            val ix0 = pts.minOf { it.x }; val ix1 = pts.maxOf { it.x }
+            val iy0 = pts.minOf { it.y }; val iy1 = pts.maxOf { it.y }
+            val tx0 = to.x0 + (ix0 - b.x0); val tx1 = to.x1 - (b.x1 - ix1)
+            val ty0 = to.y0 + (iy0 - b.y0); val ty1 = to.y1 - (b.y1 - iy1)
+            val kx = if (ix1 - ix0 > 0.01f) ((tx1 - tx0) / (ix1 - ix0)).coerceAtLeast(0.02f) else 1f
+            val ky = if (iy1 - iy0 > 0.01f) ((ty1 - ty0) / (iy1 - iy0)).coerceAtLeast(0.02f) else 1f
+            return { p -> Point(tx0 + (p.x - ix0) * kx, ty0 + (p.y - iy0) * ky) }
+        }
         when (a.type) {
             PDFAnnotation.TYPE_INK -> {
                 val ink = a.inkList ?: return@edit
-                a.setInkList(ink.map { s -> s.map { Point(mx(it.x), my(it.y)) }.toTypedArray() }.toTypedArray())
+                val all = ink.flatMap { it.toList() }
+                if (all.isEmpty()) return@edit
+                val m = mapper(all)
+                a.setInkList(ink.map { st -> st.map(m).toTypedArray() }.toTypedArray())
             }
             PDFAnnotation.TYPE_LINE -> {
                 val l = a.line ?: return@edit
-                if (l.size >= 2) a.setLine(Point(mx(l[0].x), my(l[0].y)), Point(mx(l[1].x), my(l[1].y)))
+                if (l.size >= 2) { val m = mapper(l.toList()); a.setLine(m(l[0]), m(l[1])) }
             }
             PDFAnnotation.TYPE_TEXT -> {
                 // A note keeps its icon size; it only moves.

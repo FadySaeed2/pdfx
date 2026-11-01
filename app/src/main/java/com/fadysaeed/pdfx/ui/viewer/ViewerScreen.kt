@@ -1017,44 +1017,48 @@ internal fun TextEdit(m: Mark, onDismiss: () -> Unit, onDone: (String, Float, In
         containerColor = Ink.Field,
         shape = RectangleShape,
         title = { Text("Edit text", style = Type.title) },
-        text = {
-            Column {
-                BasicTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    textStyle = Type.body.copy(color = Ink.Bone, fontSize = 16.sp),
-                    cursorBrush = SolidColor(Ink.Amber),
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
-                    decorationBox = { inner ->
-                        Box(Modifier.fillMaxWidth().heightIn(min = 110.dp).background(Ink.Black, Corner).border(1.dp, Ink.Edge, Corner).padding(12.dp)) {
-                            if (text.isEmpty()) Text("Write the text. Leave it empty to remove the box.", style = Type.body.copy(color = Ink.Ash, fontSize = 15.sp))
-                            inner()
-                        }
-                    },
-                )
-                Spacer(Modifier.height(14.dp))
-                Text("SIZE", style = Type.eyebrow)
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    EditTextSizes.forEach { sz ->
-                        val sel = kotlin.math.abs(size - sz) < 0.5f
-                        Box(
-                            Modifier.size(40.dp).border(1.dp, if (sel) Ink.Bone else Ink.Rule, Corner).clickable { size = sz },
-                            contentAlignment = Alignment.Center,
-                        ) { Text("A", style = Type.bodyStrong.copy(color = if (sel) Ink.Bone else Ink.Dust, fontSize = (8 + sz * 0.55f).sp)) }
-                    }
-                }
-                Spacer(Modifier.height(14.dp))
-                Text("COLOUR", style = Type.eyebrow)
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    PenColors.forEach { c -> Swatch(c, (color and 0xFFFFFF) == (c and 0xFFFFFF)) { color = c } }
-                }
-            }
-        },
+        text = { TextEditFields(text, size, color, { text = it }, { size = it }, { color = it }) },
         confirmButton = { AmberButton(if (text.isBlank()) "Remove box" else "Save", { onDone(text, size, color) }) },
         dismissButton = { GhostButton("Cancel", onDismiss, minHeight = 52.dp) },
     )
+}
+
+/** The words, size and colour of a text box being edited. */
+@Composable
+internal fun TextEditFields(text: String, size: Float, color: Int, onText: (String) -> Unit, onSize: (Float) -> Unit, onColor: (Int) -> Unit) {
+    Column {
+        BasicTextField(
+            value = text,
+            onValueChange = onText,
+            textStyle = Type.body.copy(color = Ink.Bone, fontSize = 16.sp),
+            cursorBrush = SolidColor(Ink.Amber),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
+            decorationBox = { inner ->
+                Box(Modifier.fillMaxWidth().heightIn(min = 110.dp).background(Ink.Black, Corner).border(1.dp, Ink.Edge, Corner).padding(12.dp)) {
+                    if (text.isEmpty()) Text("Write the text. Leave it empty to remove the box.", style = Type.body.copy(color = Ink.Ash, fontSize = 15.sp))
+                    inner()
+                }
+            },
+        )
+        Spacer(Modifier.height(14.dp))
+        Text("SIZE", style = Type.eyebrow)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            EditTextSizes.forEach { sz ->
+                val sel = kotlin.math.abs(size - sz) < 0.5f
+                Box(
+                    Modifier.size(40.dp).border(1.dp, if (sel) Ink.Bone else Ink.Rule, Corner).clickable { onSize(sz) },
+                    contentAlignment = Alignment.Center,
+                ) { Text("A", style = Type.bodyStrong.copy(color = if (sel) Ink.Bone else Ink.Dust, fontSize = (8 + sz * 0.55f).sp)) }
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text("COLOUR", style = Type.eyebrow)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PenColors.forEach { c -> Swatch(c, (color and 0xFFFFFF) == (c and 0xFFFFFF)) { onColor(c) } }
+        }
+    }
 }
 
 /** Every mark in the file, in page order, with the words it covers or holds. */

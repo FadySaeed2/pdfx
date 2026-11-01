@@ -49,7 +49,9 @@ import com.fadysaeed.pdfx.ui.viewer.PenColors
 import com.fadysaeed.pdfx.ui.viewer.Tool
 import com.fadysaeed.pdfx.ui.viewer.ContentsSheetOnTab
 import com.fadysaeed.pdfx.ui.viewer.ReflowFont
-import com.fadysaeed.pdfx.ui.viewer.TextEdit
+import com.fadysaeed.pdfx.ui.viewer.TextEditFields
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import com.fadysaeed.pdfx.ui.viewer.movedBox
 import com.fadysaeed.pdfx.ui.viewer.resizedBox
 import com.fadysaeed.pdfx.ui.viewer.isArabic
@@ -239,7 +241,11 @@ class ScreensTest {
     fun textEdit() {
         compose.setContent {
             PdfxTheme {
-                TextEdit(Mark(0, 2, MarkKind.TEXT, Box(70f, 300f, 300f, 340f), PenColors[2], "Recheck levels after the dose change", "", 15f), {}) { _, _, _ -> }
+                Column(Modifier.fillMaxSize().background(Ink.Field).padding(24.dp)) {
+                    androidx.compose.material3.Text("Edit text", style = com.fadysaeed.pdfx.ui.theme.Type.title)
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(8.dp))
+                    TextEditFields("Recheck levels after the dose change\nراجع المستوى بعد تغيير الجرعة", 15f, PenColors[2], {}, {}, {})
+                }
             }
         }
         compose.onRoot().captureRoboImage("screenshots/20_text_edit.png")
