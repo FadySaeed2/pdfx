@@ -177,7 +177,7 @@ class EngineOnDeviceTest {
     }
 
     @Test
-    fun marksUndoSaveAndReopen() = runBlocking {
+    fun marksUndoSaveAndReopen() = runBlocking<Unit> {
         val root = File(ctx.cacheDir, "marks-${System.nanoTime()}").apply { mkdirs() }
         val src = samplePdf(3)
         val f = File(root, "Marked.pdf")
