@@ -93,9 +93,9 @@ class Reader(
         jump = Jump(page.coerceIn(0, (pageCount - 1).coerceAtLeast(0)), y, x)
     }
 
-    fun setMode(m: PaperMode) { mode = m; prefs?.edit()?.putString("mode", m.name)?.apply() }
-    fun setReflow(on: Boolean) { reflow = on; prefs?.edit()?.putBoolean("reflow", on)?.apply() }
-    fun setReflowSize(sp: Int) { reflowSize = sp.coerceIn(14, 28); prefs?.edit()?.putInt("reflow_size", reflowSize)?.apply() }
+    fun changeMode(m: PaperMode) { mode = m; prefs?.edit()?.putString("mode", m.name)?.apply() }
+    fun changeReflow(on: Boolean) { reflow = on; prefs?.edit()?.putBoolean("reflow", on)?.apply() }
+    fun changeReflowSize(sp: Int) { reflowSize = sp.coerceIn(14, 28); prefs?.edit()?.putInt("reflow_size", reflowSize)?.apply() }
 
     // ------------------------------------------------------------ search
 

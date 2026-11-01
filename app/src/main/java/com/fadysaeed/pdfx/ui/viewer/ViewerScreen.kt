@@ -557,7 +557,7 @@ internal fun DisplaySheet(reader: Reader) {
     PaperMode.entries.forEach { m ->
         val sel = reader.mode == m
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 60.dp).clickable { reader.setMode(m) }.padding(horizontal = 20.dp),
+            Modifier.fillMaxWidth().heightIn(min = 60.dp).clickable { reader.changeMode(m) }.padding(horizontal = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.size(34.dp).background(paperColor(m)).border(1.dp, if (sel) Ink.Amber else Ink.Edge), contentAlignment = Alignment.Center) {
@@ -574,21 +574,21 @@ internal fun DisplaySheet(reader: Reader) {
     Spacer(Modifier.height(8.dp))
     Hairline(color = Ink.Rule)
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { reader.setReflow(!reader.reflow) }.padding(horizontal = 20.dp),
+        Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { reader.changeReflow(!reader.reflow) }.padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text("Reflow text", style = Type.body.copy(color = if (reader.reflow) Ink.Amber else Ink.Bone))
             Text("Just the words, sized for the phone. Handy for small print.", style = Type.small)
         }
-        Chip(if (reader.reflow) "On" else "Off", { reader.setReflow(!reader.reflow) }, selected = reader.reflow)
+        Chip(if (reader.reflow) "On" else "Off", { reader.changeReflow(!reader.reflow) }, selected = reader.reflow)
     }
     if (reader.reflow) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Text size", style = Type.note, modifier = Modifier.weight(1f))
-            GhostButton("A−", { reader.setReflowSize(reader.reflowSize - 2) }, minHeight = 44.dp)
+            GhostButton("A−", { reader.changeReflowSize(reader.reflowSize - 2) }, minHeight = 44.dp)
             Text("${reader.reflowSize}", style = Type.figure, modifier = Modifier.padding(horizontal = 14.dp))
-            GhostButton("A+", { reader.setReflowSize(reader.reflowSize + 2) }, minHeight = 44.dp)
+            GhostButton("A+", { reader.changeReflowSize(reader.reflowSize + 2) }, minHeight = 44.dp)
         }
     }
 }

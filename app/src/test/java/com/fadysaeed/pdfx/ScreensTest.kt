@@ -193,7 +193,7 @@ class ScreensTest {
         )
     }
 
-    @Test fun viewerNight() = viewerShot("12_viewer_night.png") { r -> r.setMode(PaperMode.NIGHT) }
+    @Test fun viewerNight() = viewerShot("12_viewer_night.png") { r -> r.changeMode(PaperMode.NIGHT) }
 
     @Test fun viewerSelection() = viewerShot("13_viewer_selection.png") { r ->
         r.chrome = false
@@ -201,7 +201,7 @@ class ScreensTest {
     }
 
     @Test fun viewerReflow() = viewerShot("14_viewer_reflow.png") { r ->
-        r.setReflow(true)
+        r.changeReflow(true)
         r.paragraphs[0] = listOf(
             "Lithium remains the first-line long-term treatment for bipolar disorder, with the strongest evidence for preventing relapse and suicide.",
             "Check levels 12 hours after the last dose, weekly after each change until stable, then every three months for the first year.",

@@ -135,11 +135,11 @@ class EngineOnDeviceTest {
         Thread.sleep(500)
         save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "viewer_search_hits.png")
 
-        compose.runOnIdle { reader!!.closeSearch(); reader!!.setMode(PaperMode.NIGHT) }
+        compose.runOnIdle { reader!!.closeSearch(); reader!!.changeMode(PaperMode.NIGHT) }
         compose.waitForIdle()
         Thread.sleep(500)
         save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "viewer_night.png")
-        compose.runOnIdle { reader!!.setMode(PaperMode.PAPER) }
+        compose.runOnIdle { reader!!.changeMode(PaperMode.PAPER) }
         session.close()
     }
 
