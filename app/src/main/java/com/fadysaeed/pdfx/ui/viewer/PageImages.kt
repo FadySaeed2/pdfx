@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.withFrameNanos
 import kotlin.math.abs
 
 /** What the screen needs drawn right now. */
@@ -43,6 +44,9 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope) {
 
     init {
         scope.launch {
+            // These lists may have been made while the screen was being composed; wait for that
+            // to land before writing to them, or the writes can be lost.
+            runCatching { withFrameNanos { } }
             val n = session.pageCount
             if (n == 0) return@launch
             val firstSize = session.pageSize(0)
@@ -54,7 +58,11 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope) {
             while (start < n) {
                 val end = minOf(n, start + 40) - 1
                 val sizes = session.pageSizes(start..end)
-                sizes.forEachIndexed { k, s -> aspects[start + k] = s.aspect; widths[start + k] = s.width }
+                sizes.forEachIndexed { k, s ->
+                    val i = start + k
+                    if (i < aspects.size) aspects[i] = s.aspect
+                    if (i < widths.size) widths[i] = s.width
+                }
                 start = end + 1
             }
         }
