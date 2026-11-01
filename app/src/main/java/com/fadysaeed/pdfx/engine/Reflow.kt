@@ -22,64 +22,68 @@ internal class RawBlock(val box: Box, val lines: List<RawLine>, val image: Boole
 internal class RawTable(val box: Box, val rows: List<List<Pair<String, Boolean>>>)
 
 /**
- * Walks a page analysed for tables and keeps just the tables: rows and cells with their words.
- * The engine marks them as Table, TR and TD (or TH) inside the page's structure.
+ * Reads the tables out of the engine's HTML for a page analysed for tables. (Walking that page
+ * directly is not safe in this engine build: its vector callback hands Java a bad boolean.)
+ * Each table's outline is rough here: the left and top of its lines, and their bottom.
  */
-internal class TableWalker : StructuredTextWalker {
-    val tables = ArrayList<RawTable>()
-    private val stack = ArrayList<String>()
-    private var rows: ArrayList<ArrayList<Pair<String, Boolean>>>? = null
-    private var cell: StringBuilder? = null
-    private var cellBold = 0
-    private var cellChars = 0
-    private var x0 = Float.MAX_VALUE; private var y0 = Float.MAX_VALUE; private var x1 = -Float.MAX_VALUE; private var y1 = -Float.MAX_VALUE
-    private var lastFont: Font? = null
-    private var lastBold = false
-
-    override fun beginStruct(standard: String?, raw: String?, index: Int) {
-        val kind = standard ?: ""
-        stack += kind
-        when (kind) {
-            "Table" -> if (rows == null) { rows = ArrayList(); x0 = Float.MAX_VALUE; y0 = Float.MAX_VALUE; x1 = -Float.MAX_VALUE; y1 = -Float.MAX_VALUE }
-            "TR" -> rows?.add(ArrayList())
-            "TD", "TH" -> if (rows != null) { cell = StringBuilder(); cellBold = 0; cellChars = 0 }
-        }
+internal fun parseTablesHtml(html: String): List<RawTable> {
+    val out = ArrayList<RawTable>()
+    val tableRe = Regex("<table[^>]*>(.*?)</table>", RegexOption.DOT_MATCHES_ALL)
+    val rowRe = Regex("<tr[^>]*>(.*?)</tr>", RegexOption.DOT_MATCHES_ALL)
+    val cellRe = Regex("<t[dh][^>]*>(.*?)</t[dh]>", RegexOption.DOT_MATCHES_ALL)
+    val pRe = Regex("<p style=\"top:([0-9.\\-]+)pt;left:([0-9.\\-]+)pt;line-height:([0-9.\\-]+)pt\">(.*?)</p>", RegexOption.DOT_MATCHES_ALL)
+    for (t in tableRe.findAll(html)) {
+        var x0 = Float.MAX_VALUE; var y0 = Float.MAX_VALUE; var x1 = -Float.MAX_VALUE; var y1 = -Float.MAX_VALUE
+        val rows = rowRe.findAll(t.groupValues[1]).map { r ->
+            cellRe.findAll(r.groupValues[1]).map { c ->
+                val lines = pRe.findAll(c.groupValues[1]).map { pm ->
+                    val top = pm.groupValues[1].toFloatOrNull() ?: 0f
+                    val left = pm.groupValues[2].toFloatOrNull() ?: 0f
+                    val lh = pm.groupValues[3].toFloatOrNull() ?: 0f
+                    x0 = minOf(x0, left); y0 = minOf(y0, top); y1 = maxOf(y1, top + lh * 1.25f); x1 = maxOf(x1, left)
+                    pm.groupValues[4]
+                }.toList()
+                val raw = lines.joinToString(" ")
+                val text = htmlText(raw)
+                val boldText = Regex("<b>(.*?)</b>", RegexOption.DOT_MATCHES_ALL).findAll(raw).sumOf { htmlText(it.groupValues[1]).count { ch -> !ch.isWhitespace() } }
+                val chars = text.count { !it.isWhitespace() }
+                text to (chars > 0 && boldText * 10 >= chars * 8)
+            }.toList()
+        }.filter { it.isNotEmpty() }.toList()
+        if (rows.isNotEmpty() && x0 < Float.MAX_VALUE) out += RawTable(Box(x0, y0, maxOf(x1, x0 + 1f), y1), rows)
     }
+    return out
+}
 
-    override fun endStruct() {
-        val kind = stack.removeLastOrNull() ?: return
-        when (kind) {
-            "TD", "TH" -> {
-                val c = cell
-                if (c != null) {
-                    val t = c.toString().replace(Regex("\\s+"), " ").trim()
-                    if (rows?.isEmpty() == true) rows?.add(ArrayList())
-                    rows?.lastOrNull()?.add(t to (cellChars > 0 && cellBold * 10 >= cellChars * 8 || kind == "TH"))
+/** Plain text from a snippet of the engine's HTML: tags removed, character references decoded. */
+internal fun htmlText(s: String): String {
+    val noTags = s.replace(Regex("<[^>]+>"), "")
+    val sb = StringBuilder()
+    var i = 0
+    while (i < noTags.length) {
+        val c = noTags[i]
+        if (c == '&') {
+            val end = noTags.indexOf(';', i)
+            if (end > i) {
+                val ent = noTags.substring(i + 1, end)
+                val cp = when {
+                    ent.startsWith("#x") -> ent.substring(2).toIntOrNull(16)
+                    ent.startsWith("#") -> ent.substring(1).toIntOrNull()
+                    ent == "lt" -> '<'.code
+                    ent == "gt" -> '>'.code
+                    ent == "amp" -> '&'.code
+                    ent == "quot" -> '"'.code
+                    ent == "apos" -> '\''.code
+                    ent == "nbsp" -> ' '.code
+                    else -> null
                 }
-                cell = null
-            }
-            "Table" -> if ("Table" !in stack) {
-                val r = rows
-                if (r != null && x1 > x0) tables += RawTable(Box(x0, y0, x1, y1), r.filter { it.isNotEmpty() })
-                rows = null
+                if (cp != null) { sb.appendCodePoint(cp); i = end + 1; continue }
             }
         }
+        sb.append(c)
+        i++
     }
-
-    override fun beginTextBlock(bbox: Rect, flags: Int) {
-        if (rows != null) { x0 = minOf(x0, bbox.x0); y0 = minOf(y0, bbox.y0); x1 = maxOf(x1, bbox.x1); y1 = maxOf(y1, bbox.y1) }
-    }
-    override fun endTextBlock() {}
-    override fun beginLine(bbox: Rect, wmode: Int, dir: Point?) { cell?.let { if (it.isNotEmpty()) it.append(' ') } }
-    override fun endLine() {}
-    override fun onChar(c: Int, origin: Point?, font: Font?, size: Float, q: Quad?, argb: Int, flags: Int, bidi: Int) {
-        val b = cell ?: return
-        b.appendCodePoint(c)
-        if (font !== lastFont) { lastFont = font; lastBold = runCatching { font?.isBold == true }.getOrDefault(false) }
-        if (!Character.isWhitespace(c)) { cellChars++; if (lastBold || (flags and StructuredText.CHAR_FLAGS_BOLD) != 0) cellBold++ }
-    }
-    override fun onImageBlock(bbox: Rect, transform: Matrix?, image: Image?) {}
-    override fun onVector(bbox: Rect?, info: StructuredTextWalker.VectorInfo?, argb: Int) {}
+    return sb.toString().replace(Regex("\\s+"), " ").trim()
 }
 
 /**
@@ -89,26 +93,30 @@ internal class TableWalker : StructuredTextWalker {
  */
 internal fun mergeTables(blocks: List<RawBlock>, tables: List<RawTable>): List<RawBlock> {
     if (tables.isEmpty()) return blocks
-    val coveredChars = HashMap<RawTable, Int>()
+    val squash = { t: String -> t.filter { !it.isWhitespace() } }
+    val tableText = tables.associateWith { t -> squash(t.rows.flatten().joinToString("") { it.first }) }
+    val covered = HashMap<RawTable, MutableList<RawBlock>>()
     val out = ArrayList<RawBlock>()
-    val placed = HashSet<RawTable>()
     for (b in blocks) {
-        val t = if (b.image) null else tables.firstOrNull { t ->
-            val cx = (b.box.x0 + b.box.x1) / 2
+        val bt = squash(b.lines.joinToString("") { it.text })
+        val t = if (b.image || bt.isEmpty()) null else tables.firstOrNull { t ->
             val cy = (b.box.y0 + b.box.y1) / 2
-            cx >= t.box.x0 - 2f && cx <= t.box.x1 + 2f && cy >= t.box.y0 - 2f && cy <= t.box.y1 + 2f
+            cy >= t.box.y0 - 4f && cy <= t.box.y1 + 4f && b.box.x1 >= t.box.x0 - 4f && tableText[t]!!.contains(bt)
         }
         if (t == null) { out += b; continue }
-        if (placed.add(t)) out += RawBlock(t.box, emptyList(), false, t)
-        // The covered block's words are now in the table's cells.
-        val prev = coveredChars[t] ?: 0
-        coveredChars[t] = prev + b.lines.sumOf { l -> l.text.count { !it.isWhitespace() } }
+        val list = covered.getOrPut(t) { ArrayList() }
+        if (list.isEmpty()) out += RawBlock(t.box, emptyList(), false, t)
+        list += b
     }
-    val result = out.map { b ->
+    return out.map { b ->
         val t = b.table ?: return@map b
-        if (isClean(t, coveredChars[t] ?: 0)) b else RawBlock(t.box, emptyList(), true, null)
+        val cov = covered[t].orEmpty()
+        // The real outline: the table's lines and every block it took over.
+        val box = cov.fold(t.box) { a, c -> Box(minOf(a.x0, c.box.x0), minOf(a.y0, c.box.y0), maxOf(a.x1, c.box.x1), maxOf(a.y1, c.box.y1)) }
+        val chars = cov.sumOf { c -> c.lines.sumOf { l -> l.text.count { !it.isWhitespace() } } }
+        val whole = RawTable(box, t.rows)
+        if (isClean(whole, chars)) RawBlock(box, emptyList(), false, whole) else RawBlock(box, emptyList(), true, null)
     }
-    return result
 }
 
 /** A grid of at least 2 by 2, every row the same width, mostly filled, holding (nearly) all the words it covers. */

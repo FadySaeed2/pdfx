@@ -397,6 +397,13 @@ class ScreensTest {
         assertTrue(asPicture[0].image && asPicture[0].table == null)
         val tp = com.fadysaeed.pdfx.engine.buildParas(merged, 842f, emptySet())
         assertTrue(tp.any { it.table != null && it.tableHeader })
+        val html = "<div><table>\n<tr>\n<td>\n<p style=\"top:130.0pt;left:62.0pt;line-height:12.0pt\"><b>Drug</b></p>\n</td>\n<td>\n<p style=\"top:130.0pt;left:212.0pt;line-height:12.0pt\"><b>Dose</b></p>\n</td>\n</tr>\n" +
+            "<tr>\n<td>\n<p style=\"top:154.0pt;left:62.0pt;line-height:12.0pt\">Lithium &amp; co</p>\n</td>\n<td>\n<p style=\"top:154.0pt;left:212.0pt;line-height:12.0pt\">&#x664;&#x660;&#x660; mg</p>\n</td>\n</tr>\n</table></div>"
+        val parsed = com.fadysaeed.pdfx.engine.parseTablesHtml(html)
+        assertEquals(1, parsed.size)
+        assertEquals(listOf("Drug" to true, "Dose" to true), parsed[0].rows[0])
+        assertEquals(listOf("Lithium & co" to false, "٤٠٠ mg" to false), parsed[0].rows[1])
+        assertEquals(62f, parsed[0].box.x0, 0.1f)
         // Text box style survives being written and read back.
         val st = com.fadysaeed.pdfx.engine.BoxStyle(font = com.fadysaeed.pdfx.engine.BoxFont.SERIF, size = 18f, bold = true, underline = true, align = com.fadysaeed.pdfx.engine.BoxAlign.CENTER, color = 0xFF2F6FED.toInt(), spacing = 2)
         val back = com.fadysaeed.pdfx.engine.BoxStyle.parse(st.css("hello"), "hello", 12f, 0, null, false, false)

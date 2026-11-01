@@ -366,10 +366,9 @@ class PdfSession private constructor(
         try { st.walk(w) } finally { runCatching { st.destroy() } }
         // A second look for tables: the engine finds grids and their cells.
         val tables = runCatching {
-            val tw = TableWalker()
             val ts = page(index).toStructuredText("vectors,segment,table-hunt,accurate-bboxes")
-            try { ts.walk(tw) } finally { runCatching { ts.destroy() } }
-            tw.tables.filter { it.box.width > 40f && it.box.height > 20f }
+            val html = try { ts.asHTML(0) ?: "" } finally { runCatching { ts.destroy() } }
+            if (html.contains("<table")) parseTablesHtml(html).filter { it.box.height > 10f } else emptyList()
         }.getOrDefault(emptyList())
         val near = ((index - 2)..(index + 2)).filter { it != index && it in 0 until pageCount }.flatMap { bandLines(it) }.toSet()
         buildParas(mergeTables(w.blocks, tables), sizeNow(index).height, near)
