@@ -74,7 +74,7 @@ fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
     }
 }
 
-enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK, BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN, PEN, UNDO, REDO }
+enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK, BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN, PEN, UNDO, REDO, REFLOW }
 
 /** Line glyphs drawn in code, so every icon shares one stroke weight and the app ships no icon font. */
 @Composable
@@ -164,6 +164,13 @@ fun GlyphIcon(glyph: Glyph, color: Color, size: Dp = 22.dp) {
                 }
                 if (glyph == Glyph.BOOKMARK_FILLED) drawPath(p, color)
                 drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+            }
+            Glyph.REFLOW -> {
+                // A page outline with lines of text flowing inside it.
+                drawRoundRect(color, Offset(s * 0.18f, s * 0.12f), androidx.compose.ui.geometry.Size(s * 0.64f, s * 0.76f), androidx.compose.ui.geometry.CornerRadius(s * 0.06f), style = Stroke(width = w))
+                line(0.32f, 0.34f, 0.68f, 0.34f)
+                line(0.32f, 0.5f, 0.68f, 0.5f)
+                line(0.32f, 0.66f, 0.54f, 0.66f)
             }
             Glyph.LIST -> {
                 listOf(0.28f, 0.5f, 0.72f).forEach { y ->

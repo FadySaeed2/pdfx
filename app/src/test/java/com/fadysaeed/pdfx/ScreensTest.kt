@@ -48,6 +48,13 @@ import com.fadysaeed.pdfx.ui.viewer.MarkColors
 import com.fadysaeed.pdfx.ui.viewer.PenColors
 import com.fadysaeed.pdfx.ui.viewer.Tool
 import com.fadysaeed.pdfx.ui.viewer.ContentsSheetOnTab
+import com.fadysaeed.pdfx.ui.viewer.ReflowFont
+import com.fadysaeed.pdfx.ui.viewer.TextEdit
+import com.fadysaeed.pdfx.ui.viewer.movedBox
+import com.fadysaeed.pdfx.ui.viewer.resizedBox
+import com.fadysaeed.pdfx.ui.viewer.isArabic
+import com.fadysaeed.pdfx.ui.viewer.highlighted
+import com.fadysaeed.pdfx.engine.Para
 import com.fadysaeed.pdfx.ui.components.Hairline
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -208,12 +215,59 @@ class ScreensTest {
     }
 
     @Test fun viewerReflow() = viewerShot("14_viewer_reflow.png") { r ->
-        r.changeReflow(true)
-        r.paragraphs[0] = listOf(
-            "Lithium remains the first-line long-term treatment for bipolar disorder, with the strongest evidence for preventing relapse and suicide.",
-            "Check levels 12 hours after the last dose, weekly after each change until stable, then every three months for the first year.",
-        )
-        r.paragraphs[1] = listOf("Combining lithium with an ACE inhibitor, an ARB or a thiazide raises levels; check within a week of starting any of them.")
+        r.changeReflowFont(ReflowFont.SERIF)
+        r.showHits("lithium", emptyMap(), -1)
+        r.showReflowForTest(true, mapOf(
+            0 to listOf(
+                Para("Maintenance treatment", 1),
+                Para("Lithium remains the first-line long-term treatment for bipolar disorder, with the strongest evidence for preventing relapse and suicide."),
+                Para("Monitoring", 2),
+                Para("Check levels 12 hours after the last dose, weekly after each change until stable, then every three months for the first year."),
+                Para("يُفضَّل قياس مستوى الليثيوم بعد ١٢ ساعة من آخر جرعة، ومتابعة وظائف الكلى والغدة الدرقية كل ستة أشهر."),
+            ),
+            1 to listOf(Para("Combining lithium with an ACE inhibitor, an ARB or a thiazide raises levels; check within a week of starting any of them.")),
+        ))
+    }
+
+    @Test fun textBoxSelected() = viewerShot("19_text_box_moving.png") { r ->
+        r.chrome = false
+        val m = Mark(0, 2, MarkKind.TEXT, Box(70f, 300f, 300f, 340f), PenColors[2], "Recheck levels after the dose change", "", 15f)
+        r.showSelectedForTest(m, movingTo = Box(110f, 380f, 340f, 420f))
+    }
+
+    @Test
+    fun textEdit() {
+        compose.setContent {
+            PdfxTheme {
+                TextEdit(Mark(0, 2, MarkKind.TEXT, Box(70f, 300f, 300f, 340f), PenColors[2], "Recheck levels after the dose change", "", 15f), {}) { _, _, _ -> }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/20_text_edit.png")
+    }
+
+    @Test
+    fun reflowSettings() {
+        compose.setContent {
+            PdfxTheme {
+                val scope = rememberCoroutineScope()
+                val reader = remember { Reader(null, 112, scope).also { it.changeReflow(true) } }
+                Column(Modifier.fillMaxSize().background(Ink.Field)) { DisplaySheet(reader) }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/21_reflow_settings.png")
+    }
+
+    @Test
+    fun boxesAndText() {
+        assertEquals(Box(20f, 30f, 120f, 80f), movedBox(Box(10f, 10f, 110f, 60f), 10f, 20f, 595f, 842f))
+        // Kept on the page.
+        assertEquals(Box(495f, 0f, 595f, 50f), movedBox(Box(10f, 10f, 110f, 60f), 900f, -40f, 595f, 842f))
+        // Bottom-right corner grows the box; top-left can't pass the opposite corner.
+        assertEquals(Box(10f, 10f, 140f, 90f), resizedBox(Box(10f, 10f, 110f, 60f), 3, 30f, 30f))
+        assertEquals(Box(102f, 52f, 110f, 60f), resizedBox(Box(10f, 10f, 110f, 60f), 0, 500f, 500f))
+        assertEquals(true, isArabic("«مرحبا» hello"))
+        assertEquals(false, isArabic("12. Lithium مرحبا"))
+        assertEquals(2, highlighted("Lithium and lithium", "LITHIUM", androidx.compose.ui.graphics.Color.Yellow).spanStyles.size)
     }
 
     @Test fun markup() = viewerShot("16_markup.png") { r ->

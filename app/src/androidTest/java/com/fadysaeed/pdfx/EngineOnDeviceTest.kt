@@ -13,6 +13,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.artifex.mupdf.fitz.Document
 import com.fadysaeed.pdfx.engine.PdfSession
+import com.fadysaeed.pdfx.engine.Box
 import com.fadysaeed.pdfx.engine.MarkKind
 import com.fadysaeed.pdfx.data.Library
 import com.fadysaeed.pdfx.data.LibraryDb
@@ -170,7 +171,9 @@ class EngineOnDeviceTest {
             assertTrue(s.outline().isEmpty())
             assertTrue(s.links(0).isEmpty())
             val paras = s.paragraphs(0)
-            assertTrue(paras.any { it.contains("engine check") })
+            val title = paras.first { it.text.contains("engine check") }
+            assertEquals("the large title reads as a heading", 1, title.level)
+            assertTrue(paras.any { it.level == 0 && it.text.contains("lazy dog") })
         } finally {
             s.close()
         }
@@ -210,6 +213,30 @@ class EngineOnDeviceTest {
             assertTrue(s.redo())
             assertEquals(5, s.allMarks().size)
 
+            // Edit a text box, then move it; resize a drawing; move a note.
+            val box = s.marks(1).first { it.kind == MarkKind.TEXT }
+            assertEquals(15f, box.size, 0.5f)
+            assertTrue(s.editTextBox(1, box.index, "Moved and edited\nنص معدّل", 20f, 0xFF2F6FED.toInt()))
+            val edited = s.marks(1).first { it.kind == MarkKind.TEXT }
+            assertEquals("Moved and edited\nنص معدّل", edited.note)
+            assertEquals(20f, edited.size, 0.5f)
+            assertEquals(0xFF2F6FED.toInt(), edited.color)
+            assertTrue(s.reshapeMark(1, edited.index, Box(300f, 300f, 300f + edited.box.width, 300f + edited.box.height)))
+            val moved = s.marks(1).first { it.kind == MarkKind.TEXT }
+            assertEquals(300f, moved.box.x0, 2f)
+            assertEquals(300f, moved.box.y0, 2f)
+            val ink = s.marks(0).first { it.kind == MarkKind.INK }
+            val bigger = Box(ink.box.x0, ink.box.y0, ink.box.x0 + ink.box.width * 1.5f, ink.box.y0 + ink.box.height * 2f)
+            assertTrue(s.reshapeMark(0, ink.index, bigger))
+            assertEquals(bigger.width, s.marks(0).first { it.kind == MarkKind.INK }.box.width, 4f)
+            val note = s.marks(2).first { it.kind == MarkKind.NOTE }
+            assertTrue(s.reshapeMark(2, note.index, Box(100f, 500f, 100f + note.box.width, 500f + note.box.height)))
+            assertEquals(100f, s.marks(2).first { it.kind == MarkKind.NOTE }.box.x0, 2f)
+            assertEquals(5, s.allMarks().size)
+            save(s.render(1, 1080), "marks_moved_page2.png")
+            assertTrue(s.undo())
+            assertTrue(s.redo())
+
             val saved = Saver(lib).save(s, doc, Uri.fromFile(f)).getOrThrow()
             assertTrue(saved is Saver.Saved.InPlace)
             assertEquals(1, lib.versions.list(doc.id).size)
@@ -223,6 +250,9 @@ class EngineOnDeviceTest {
             assertEquals(3, again.pageCount)
             assertEquals(5, again.allMarks().size)
             assertTrue(again.allMarks().any { it.kind == MarkKind.NOTE && it.note.contains("renal") })
+            val t = again.allMarks().first { it.kind == MarkKind.TEXT }
+            assertEquals(300f, t.box.x0, 2f)
+            assertTrue(t.note.startsWith("Moved and edited"))
             // Flattening turns marks into page content.
             assertTrue(again.flatten())
             assertTrue(again.allMarks().none { it.kind == MarkKind.HIGHLIGHT || it.kind == MarkKind.INK || it.kind == MarkKind.ARROW })

@@ -70,6 +70,21 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
+import com.fadysaeed.pdfx.ui.theme.PlexArabic
+import com.fadysaeed.pdfx.ui.theme.ReadingSerif
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -290,6 +305,29 @@ fun ViewerContent(
             else -> onBack()
         }
     }
+    /** The page under the reading line (a third of the way down the screen) and how far down it that line is. */
+    fun spot(): Pair<Int, Float>? {
+        val info = listState.layoutInfo
+        val line = info.viewportStartOffset + (info.viewportEndOffset - info.viewportStartOffset) / 3
+        val item = info.visibleItemsInfo.firstOrNull { it.offset <= line && it.offset + it.size > line }
+            ?: info.visibleItemsInfo.firstOrNull() ?: return null
+        return item.index to ((line - item.offset).toFloat() / item.size.coerceAtLeast(1)).coerceIn(0f, 1f)
+    }
+    fun toggleReflow() = reader.toggleReflow(spot())
+
+    // After switching between pages and reflowed text, put the reading line back where it was.
+    LaunchedEffect(reader.reflow) {
+        val (page, frac) = reader.readingSpot ?: return@LaunchedEffect
+        reader.readingSpot = null
+        listState.scrollToItem(page)
+        if (reader.reflow) snapshotFlow { reader.paragraphs[page] }.filterNotNull().first()
+        withFrameNanos { }
+        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == page } ?: return@LaunchedEffect
+        val info = listState.layoutInfo
+        val line = info.viewportStartOffset + (info.viewportEndOffset - info.viewportStartOffset) / 3
+        listState.scrollBy(item.offset + item.size * frac - line)
+    }
+
     LaunchedEffect(flash) { if (flash != null) { delay(1600); flash = null } }
     LaunchedEffect(reader.problem) { reader.problem?.let { flash = it; reader.problem = null } }
 
@@ -333,17 +371,18 @@ fun ViewerContent(
                             Text(name, style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(if (pageCount == 1) "1 page" else "$pageCount pages", style = Type.small)
                         }
-                        IconButton(Glyph.SEARCH, "Find in document", { reader.searchOpen = true }, color = Ink.Sand, size = 44.dp)
-                        if (reader.canMark) IconButton(Glyph.PEN, "Mark up", reader::startMarking, color = Ink.Sand, size = 44.dp)
+                        IconButton(Glyph.SEARCH, "Find in document", { reader.searchOpen = true }, color = Ink.Sand, size = 42.dp)
+                        IconButton(Glyph.REFLOW, if (reader.reflow) "Show the pages" else "Reflow text for reading", ::toggleReflow, color = if (reader.reflow) Ink.Amber else Ink.Sand, size = 42.dp)
+                        if (reader.canMark && !reader.reflow) IconButton(Glyph.PEN, "Mark up", reader::startMarking, color = Ink.Sand, size = 42.dp)
                         val marked = current in reader.bookmarks
                         IconButton(
                             if (marked) Glyph.BOOKMARK_FILLED else Glyph.BOOKMARK,
                             if (marked) "Remove bookmark" else "Bookmark this page",
                             { reader.toggleBookmark(current); flash = if (marked) "Bookmark removed" else "Page ${current + 1} bookmarked" },
-                            color = if (marked) Ink.Amber else Ink.Sand, size = 44.dp,
+                            color = if (marked) Ink.Amber else Ink.Sand, size = 42.dp,
                         )
-                        IconButton(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS }, color = Ink.Sand, size = 44.dp)
-                        IconButton(Glyph.MOON, "Page colours and reading mode", { sheet = ViewerSheet.DISPLAY }, color = Ink.Sand, size = 44.dp)
+                        IconButton(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS }, color = Ink.Sand, size = 42.dp)
+                        IconButton(Glyph.MOON, "Page colours and reading mode", { sheet = ViewerSheet.DISPLAY }, color = Ink.Sand, size = 42.dp)
                     }
                 }
                 Hairline(color = Ink.Rule)
@@ -410,6 +449,7 @@ fun ViewerContent(
     }
 
     reader.textAsk?.let { ask -> WordsAsk(ask, onDismiss = { reader.textAsk = null }, onDone = reader::submitText) }
+    reader.textEdit?.let { m -> TextEdit(m, onDismiss = { reader.textEdit = null }) { t, sz, c -> reader.submitTextEdit(m, t, sz, c) } }
 
     if (askPage) {
         GoToPage(pageCount, onDismiss = { askPage = false }) { p -> askPage = false; reader.go(p - 1) }
@@ -440,7 +480,7 @@ fun ViewerContent(
             Column(Modifier.windowInsetsPadding(WindowInsets.navigationBars).padding(bottom = 8.dp)) {
                 when (open) {
                     ViewerSheet.CONTENTS -> ContentsSheet(reader, current) { p, y -> sheet = null; reader.go(p, y) }
-                    ViewerSheet.DISPLAY -> DisplaySheet(reader) { sheet = null; askFlatten = true }
+                    ViewerSheet.DISPLAY -> DisplaySheet(reader, onFlatten = { sheet = null; askFlatten = true }, onReflow = ::toggleReflow)
                 }
             }
         }
@@ -656,7 +696,7 @@ internal fun ContentsSheetOnTab(reader: Reader, startTab: Int?, current: Int = 0
 }
 
 @Composable
-internal fun DisplaySheet(reader: Reader, onFlatten: () -> Unit = {}) {
+internal fun DisplaySheet(reader: Reader, onFlatten: () -> Unit = {}, onReflow: () -> Unit = { reader.toggleReflow(null) }) {
     Column(Modifier.padding(horizontal = 20.dp).padding(top = 4.dp, bottom = 8.dp)) {
         Text("PAGES", style = Type.eyebrow)
         Spacer(Modifier.height(4.dp))
@@ -681,14 +721,14 @@ internal fun DisplaySheet(reader: Reader, onFlatten: () -> Unit = {}) {
     Spacer(Modifier.height(8.dp))
     Hairline(color = Ink.Rule)
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { reader.changeReflow(!reader.reflow) }.padding(horizontal = 20.dp),
+        Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(onClick = onReflow).padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text("Reflow text", style = Type.body.copy(color = if (reader.reflow) Ink.Amber else Ink.Bone))
             Text("Just the words, sized for the phone. Handy for small print.", style = Type.small)
         }
-        Chip(if (reader.reflow) "On" else "Off", { reader.changeReflow(!reader.reflow) }, selected = reader.reflow)
+        Chip(if (reader.reflow) "On" else "Off", onReflow, selected = reader.reflow)
     }
     if (reader.reflow) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -697,6 +737,10 @@ internal fun DisplaySheet(reader: Reader, onFlatten: () -> Unit = {}) {
             Text("${reader.reflowSize}", style = Type.figure, modifier = Modifier.padding(horizontal = 14.dp))
             GhostButton("A+", { reader.changeReflowSize(reader.reflowSize + 2) }, minHeight = 44.dp)
         }
+        ReflowChoice("Font", ReflowFont.entries.map { it.label }, reader.reflowFont.ordinal) { reader.changeReflowFont(ReflowFont.entries[it]) }
+        ReflowChoice("Line spacing", listOf("Tight", "Normal", "Loose"), reader.reflowSpacing, reader::changeReflowSpacing)
+        ReflowChoice("Margins", listOf("Narrow", "Normal", "Wide"), reader.reflowMargin, reader::changeReflowMargin)
+        Text("Arabic paragraphs use IBM Plex Sans Arabic and read right to left.", style = Type.small, modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
     }
     if (reader.canMark) {
         Hairline(color = Ink.Rule)
@@ -712,36 +756,107 @@ internal fun DisplaySheet(reader: Reader, onFlatten: () -> Unit = {}) {
     }
 }
 
+@Composable
+private fun ReflowChoice(label: String, options: List<String>, selected: Int, onPick: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = Type.note, modifier = Modifier.weight(1f))
+        options.forEachIndexed { i, o ->
+            Spacer(Modifier.width(6.dp))
+            Chip(o, { onPick(i) }, selected = i == selected)
+        }
+    }
+}
+
 fun reflowInk(mode: PaperMode): Color = when (mode) {
     PaperMode.PAPER -> Color(0xFF1E1B16)
     PaperMode.NIGHT -> Ink.Bone
     PaperMode.SEPIA -> Color(0xFF3B2C1C)
 }
 
-/** Each page's words as paragraphs, in the chosen size and colours. */
+/**
+ * Each page's words as paragraphs, in the chosen size, font, spacing and colours. Headings are set
+ * larger, Arabic paragraphs run right to left in IBM Plex Sans Arabic, search hits are marked, and
+ * any of the text can be selected and copied.
+ */
 @Composable
 private fun ReflowView(reader: Reader, listState: LazyListState, padding: PaddingValues) {
     val ink = reflowInk(reader.mode)
     val bg = if (reader.mode == PaperMode.NIGHT) Ink.Black else paperColor(reader.mode)
     val size = reader.reflowSize
-    LazyColumn(
-        state = listState,
-        contentPadding = padding,
-        modifier = Modifier.fillMaxSize().background(bg).pointerInput(Unit) { detectTapGestures(onTap = { reader.chrome = !reader.chrome }) },
-    ) {
-        items(reader.pageCount, key = { it }) { i ->
-            LaunchedEffect(i) { reader.loadParagraphs(i) }
-            val paras = reader.paragraphs[i]
-            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy((size * 0.6f).dp)) {
-                Text("PAGE ${i + 1}", style = Type.eyebrow.copy(color = ink.copy(alpha = 0.55f)))
-                when {
-                    paras == null -> Spacer(Modifier.height(200.dp))
-                    paras.isEmpty() -> Text("No text on this page. It may be a picture or a scan.", style = Type.note.copy(color = ink.copy(alpha = 0.6f)))
-                    else -> paras.forEach { p ->
-                        Text(p, style = Type.body.copy(color = ink, fontSize = size.sp, lineHeight = (size * 1.55f).sp))
+    val spacing = ReflowSpacings[reader.reflowSpacing]
+    val margin = ReflowMargins[reader.reflowMargin].dp
+    val latin = if (reader.reflowFont == ReflowFont.SERIF) ReadingSerif else PlexArabic
+    val query = reader.query.trim().takeIf { reader.searchOpen && it.isNotEmpty() }
+    val mark = Ink.Amber.copy(alpha = if (reader.mode == PaperMode.NIGHT) 0.45f else 0.5f)
+    // Search, contents and bookmarks land on the page they point to.
+    LaunchedEffect(reader.jump) {
+        val j = reader.jump ?: return@LaunchedEffect
+        listState.scrollToItem(j.page)
+    }
+    SelectionContainer {
+        LazyColumn(
+            state = listState,
+            contentPadding = padding,
+            modifier = Modifier.fillMaxSize().background(bg).pointerInput(Unit) { detectTapGestures(onTap = { reader.chrome = !reader.chrome }) },
+        ) {
+            items(reader.pageCount, key = { it }) { i ->
+                LaunchedEffect(i) { reader.loadParagraphs(i) }
+                val paras = reader.paragraphs[i]
+                Column(Modifier.fillMaxWidth().padding(horizontal = margin, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy((size * 0.7f).dp)) {
+                    DisableSelection {
+                        Text("PAGE ${i + 1}", style = Type.eyebrow.copy(color = ink.copy(alpha = 0.55f)))
+                    }
+                    when {
+                        paras == null -> Spacer(Modifier.height(240.dp))
+                        paras.isEmpty() -> DisableSelection {
+                            Text("No text on this page. It may be a picture or a scan.", style = Type.note.copy(color = ink.copy(alpha = 0.6f)))
+                        }
+                        else -> paras.forEach { p ->
+                            val arabic = isArabic(p.text)
+                            val scale = when (p.level) { 1 -> 1.4f; 2 -> 1.15f; else -> 1f }
+                            Text(
+                                highlighted(p.text, query, mark),
+                                style = TextStyle(
+                                    fontFamily = if (arabic) PlexArabic else latin,
+                                    fontWeight = if (p.level > 0) FontWeight.SemiBold else FontWeight.Normal,
+                                    fontSize = (size * scale).sp,
+                                    lineHeight = (size * scale * if (p.level > 0) 1.3f else spacing).sp,
+                                    color = ink,
+                                    textDirection = TextDirection.Content,
+                                    textAlign = TextAlign.Start,
+                                ),
+                                modifier = Modifier.fillMaxWidth().padding(top = if (p.level > 0) (size * 0.5f).dp else 0.dp),
+                            )
+                        }
                     }
                 }
             }
+        }
+    }
+}
+
+/** True when the first letter of [text] is Arabic, so the paragraph reads right to left. */
+internal fun isArabic(text: String): Boolean {
+    for (ch in text) {
+        if (!ch.isLetter()) continue
+        val b = Character.UnicodeBlock.of(ch)
+        return b == Character.UnicodeBlock.ARABIC || b == Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_A ||
+            b == Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_B || b == Character.UnicodeBlock.ARABIC_SUPPLEMENT
+    }
+    return false
+}
+
+/** [text] with every match of [query] marked, ignoring case. */
+internal fun highlighted(text: String, query: String?, color: Color): AnnotatedString {
+    if (query.isNullOrEmpty()) return AnnotatedString(text)
+    return buildAnnotatedString {
+        append(text)
+        var from = 0
+        while (true) {
+            val at = text.indexOf(query, from, ignoreCase = true)
+            if (at < 0) break
+            addStyle(SpanStyle(background = color), at, at + query.length)
+            from = at + query.length
         }
     }
 }
@@ -836,6 +951,12 @@ private fun MarkBar(m: Mark, reader: Reader) {
                 Text(m.kind.label, style = Type.bodyStrong)
                 val words = m.note.ifBlank { m.quoted }
                 if (words.isNotBlank()) Text(words, style = Type.small, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                val how = when {
+                    m.resizable -> "Drag it to move it; drag a corner to resize it."
+                    m.movable -> "Drag it to move it."
+                    else -> null
+                }
+                if (how != null) Text(how, style = Type.small.copy(color = Ink.Teal))
             }
             IconButton(Glyph.CLOSE, "Close", { reader.selectMark(null) }, color = Ink.Dust, size = 44.dp)
         }
@@ -844,7 +965,8 @@ private fun MarkBar(m: Mark, reader: Reader) {
                 val colors = if (m.kind in setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW, MarkKind.TEXT)) PenColors else MarkColors
                 colors.forEach { c -> Swatch(c, (m.color and 0xFFFFFF) == (c and 0xFFFFFF)) { reader.recolor(m, c) } }
             }
-            BarAction(if (m.note.isBlank()) "Add note" else "Edit note") { reader.editNote(m) }
+            if (m.kind == MarkKind.TEXT) BarAction("Edit text") { reader.editText(m) }
+            else BarAction(if (m.note.isBlank()) "Add note" else "Edit note") { reader.editNote(m) }
             BarAction("Delete") { reader.delete(m) }
         }
     }
@@ -877,6 +999,60 @@ private fun WordsAsk(ask: TextAsk, onDismiss: () -> Unit, onDone: (String) -> Un
             )
         },
         confirmButton = { AmberButton(if (ask.mark != null) "Save note" else "Add", { onDone(text) }, enabled = text.isNotBlank() || ask.mark != null) },
+        dismissButton = { GhostButton("Cancel", onDismiss, minHeight = 52.dp) },
+    )
+}
+
+/** Text sizes offered when editing a text box, in points. */
+val EditTextSizes = listOf(9f, 11f, 15f, 20f, 28f)
+
+/** Changing a text box: its words, size and colour. */
+@Composable
+internal fun TextEdit(m: Mark, onDismiss: () -> Unit, onDone: (String, Float, Int) -> Unit) {
+    var text by remember(m) { mutableStateOf(m.note) }
+    var size by remember(m) { mutableFloatStateOf(m.size.takeIf { it > 0f } ?: 15f) }
+    var color by remember(m) { mutableStateOf(m.color) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text("Edit text", style = Type.title) },
+        text = {
+            Column {
+                BasicTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    textStyle = Type.body.copy(color = Ink.Bone, fontSize = 16.sp),
+                    cursorBrush = SolidColor(Ink.Amber),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
+                    decorationBox = { inner ->
+                        Box(Modifier.fillMaxWidth().heightIn(min = 110.dp).background(Ink.Black, Corner).border(1.dp, Ink.Edge, Corner).padding(12.dp)) {
+                            if (text.isEmpty()) Text("Write the text. Leave it empty to remove the box.", style = Type.body.copy(color = Ink.Ash, fontSize = 15.sp))
+                            inner()
+                        }
+                    },
+                )
+                Spacer(Modifier.height(14.dp))
+                Text("SIZE", style = Type.eyebrow)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    EditTextSizes.forEach { sz ->
+                        val sel = kotlin.math.abs(size - sz) < 0.5f
+                        Box(
+                            Modifier.size(40.dp).border(1.dp, if (sel) Ink.Bone else Ink.Rule, Corner).clickable { size = sz },
+                            contentAlignment = Alignment.Center,
+                        ) { Text("A", style = Type.bodyStrong.copy(color = if (sel) Ink.Bone else Ink.Dust, fontSize = (8 + sz * 0.55f).sp)) }
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                Text("COLOUR", style = Type.eyebrow)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    PenColors.forEach { c -> Swatch(c, (color and 0xFFFFFF) == (c and 0xFFFFFF)) { color = c } }
+                }
+            }
+        },
+        confirmButton = { AmberButton(if (text.isBlank()) "Remove box" else "Save", { onDone(text, size, color) }) },
         dismissButton = { GhostButton("Cancel", onDismiss, minHeight = 52.dp) },
     )
 }

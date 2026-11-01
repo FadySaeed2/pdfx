@@ -49,6 +49,18 @@ val Bricolage = FontFamily(
     Font(R.font.bricolage_extrabold, FontWeight.ExtraBold),
 )
 
+/** Reading fonts for reflowed text: IBM Plex Sans Arabic (Arabic and Latin) and PT Serif. */
+val PlexArabic = FontFamily(
+    Font(R.font.plexarabic_regular, FontWeight.Normal),
+    Font(R.font.plexarabic_semibold, FontWeight.SemiBold),
+    Font(R.font.plexarabic_semibold, FontWeight.Bold),
+)
+val ReadingSerif = FontFamily(
+    Font(R.font.ptserif_regular, FontWeight.Normal),
+    Font(R.font.ptserif_bold, FontWeight.SemiBold),
+    Font(R.font.ptserif_bold, FontWeight.Bold),
+)
+
 object Type {
     val hero = TextStyle(fontFamily = Bricolage, fontWeight = FontWeight.Light, fontSize = 64.sp, lineHeight = 62.sp, letterSpacing = (-0.045).em, color = Ink.Bone)
     val display = TextStyle(fontFamily = Bricolage, fontWeight = FontWeight.Light, fontSize = 44.sp, lineHeight = 46.sp, letterSpacing = (-0.04).em, color = Ink.Bone)

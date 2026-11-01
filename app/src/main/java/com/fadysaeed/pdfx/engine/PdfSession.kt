@@ -45,8 +45,19 @@ enum class MarkKind(val label: String) {
     TEXT("Text box"), NOTE("Note"), STAMP("Stamp"), OTHER("Mark"),
 }
 
-/** A mark on a page: where it is, what it is, its colour, and its words (a note, or the text under a highlight). */
-data class Mark(val page: Int, val index: Int, val kind: MarkKind, val box: Box, val color: Int, val note: String, val quoted: String)
+/**
+ * A mark on a page: where it is, what it is, its colour, and its words (a note, a text box's text,
+ * or the text under a highlight). [size] is the text size of a text box, 0 for anything else.
+ */
+data class Mark(val page: Int, val index: Int, val kind: MarkKind, val box: Box, val color: Int, val note: String, val quoted: String, val size: Float = 0f) {
+    /** Marks that sit on the page by themselves can be moved; marks over words stay with the words. */
+    val movable: Boolean get() = kind != MarkKind.OTHER && kind !in TEXT_MARKS
+    /** Notes are a fixed-size icon; everything else movable can also be resized. */
+    val resizable: Boolean get() = movable && kind != MarkKind.NOTE
+}
+
+/** A paragraph of reflowed text. [level] is 0 for body text, 1 for a heading, 2 for a smaller heading. */
+data class Para(val text: String, val level: Int = 0)
 
 /** A stroke of ink: points in PDF points. */
 typealias Stroke = List<Pair<Float, Float>>
@@ -208,21 +219,57 @@ class PdfSession private constructor(
         return Selection(index, ax, ay, bx, by, quads.map { it.box() }, text)
     }
 
-    /** A page's text as paragraphs, for reading reflowed to the screen width. */
-    suspend fun paragraphs(index: Int): List<String> = onDoc {
-        val raw = stext(index).asText() ?: ""
-        raw.split(Regex("\\n\\s*\\n"))
-            .map { block ->
-                block.lines().map { it.trim() }.filter { it.isNotEmpty() }
-                    .fold(StringBuilder()) { acc, line ->
-                        when {
-                            acc.isEmpty() -> acc.append(line)
-                            acc.endsWith("-") && acc.length > 1 && acc[acc.length - 2].isLetter() -> acc.setLength(acc.length - 1).let { acc.append(line) }
-                            else -> acc.append(' ').append(line)
-                        }
-                    }.toString()
+    /**
+     * A page's text as paragraphs, for reading reflowed to the screen width. Lines are joined,
+     * words split across lines by a hyphen are put back together, and blocks set noticeably larger
+     * than the page's body text (or short and all bold) are marked as headings.
+     */
+    suspend fun paragraphs(index: Int): List<Para> = onDoc {
+        val blocks = runCatching { stext(index).blocks }.getOrNull() ?: emptyArray()
+        class Raw(val lines: List<String>, val height: Float, val bold: Boolean)
+        val raws = ArrayList<Raw>()
+        val heights = ArrayList<Pair<Float, Int>>() // line height, characters on it
+        for (b in blocks) {
+            val lines = b.lines ?: continue
+            val texts = ArrayList<String>()
+            var hSum = 0f; var hN = 0; var chars = 0; var boldChars = 0
+            for (l in lines) {
+                val cs = l.chars ?: continue
+                val t = buildString { cs.forEach { appendCodePoint(it.c) } }.trim()
+                if (t.isEmpty()) continue
+                texts += t
+                val h = l.bbox?.let { r -> (r.y1 - r.y0).coerceAtLeast(0f) } ?: 0f
+                if (h > 0f) { hSum += h; hN++; heights += h to t.length }
+                chars += cs.size
+                boldChars += cs.count { (it.flags and StructuredText.CHAR_FLAGS_BOLD) != 0 }
             }
-            .filter { it.isNotBlank() }
+            if (texts.isEmpty()) continue
+            raws += Raw(texts, if (hN > 0) hSum / hN else 0f, chars > 0 && boldChars * 10 >= chars * 9)
+        }
+        // The body size is the line height most characters are set in.
+        val body = heights.sortedBy { it.first }.let { list ->
+            val total = list.sumOf { it.second }
+            var acc = 0
+            list.firstOrNull { acc += it.second; acc * 2 >= total }?.first ?: 0f
+        }
+        raws.map { r ->
+            val text = r.lines.fold(StringBuilder()) { acc, line ->
+                when {
+                    acc.isEmpty() -> acc.append(line)
+                    acc.endsWith("-") && acc.length > 1 && acc[acc.length - 2].isLetter() && line.first().isLowerCase() ->
+                        acc.setLength(acc.length - 1).let { acc.append(line) }
+                    else -> acc.append(' ').append(line)
+                }
+            }.toString()
+            val short = r.lines.size <= 3 && text.length <= 160
+            val level = when {
+                body > 0f && short && r.height >= body * 1.45f -> 1
+                body > 0f && short && r.height >= body * 1.18f -> 2
+                short && r.bold && r.lines.size <= 2 && text.length <= 100 && raws.size > 1 -> 2
+                else -> 0
+            }
+            Para(text, level)
+        }
     }
 
     // ------------------------------------------------------------------ marks (annotations)
@@ -262,7 +309,9 @@ class PdfSession private constructor(
                     st.copy(Point(q.x0 + 0.3f, y), Point(q.x1 - 0.3f, y)) ?: ""
                 }.replace(Regex("\\s+"), " ").trim()
             }.getOrDefault("") else ""
-            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), argb(c), runCatching { a.contents ?: "" }.getOrDefault(""), quoted)
+            val da = if (kind == MarkKind.TEXT) runCatching { a.defaultAppearance }.getOrNull() else null
+            val color = if (da?.color != null) argb(da.color) else argb(c)
+            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), color, runCatching { a.contents ?: "" }.getOrDefault(""), quoted, da?.size ?: 0f)
         }
         return out
     }
@@ -320,8 +369,8 @@ class PdfSession private constructor(
     /** Typed words placed on the page. */
     suspend fun addTextBox(index: Int, x: Float, y: Float, text: String, color: Int, size: Float) = edit("Text", index) {
         val lines = text.lines()
-        val w = (lines.maxOf { it.length } * size * 0.55f + size).coerceIn(size * 3, sizeNow(index).width - x)
-        val h = lines.size * size * 1.3f + size * 0.6f
+        val w = (lines.maxOf { it.length } * size * 0.55f + size).coerceIn(size * 3, (sizeNow(index).width - x).coerceAtLeast(size * 3))
+        val h = textHeight(text, w, size)
         val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_FREE_TEXT)
         a.rect = Rect(x, y, x + w, y + h)
         a.contents = text
@@ -348,8 +397,72 @@ class PdfSession private constructor(
 
     suspend fun setMarkColor(index: Int, markIndex: Int, color: Int) = edit("Colour", index) {
         val a = pdfPage(index).annotations?.getOrNull(markIndex) ?: return@edit
-        a.color = rgb(color)
+        if (a.type == PDFAnnotation.TYPE_FREE_TEXT) {
+            // A text box's words take their colour from its default appearance.
+            val da = runCatching { a.defaultAppearance }.getOrNull()
+            a.setDefaultAppearance(da?.font ?: "Helv", da?.size?.takeIf { it > 0f } ?: 12f, rgb(color))
+        } else {
+            a.color = rgb(color)
+        }
         a.update()
+    }
+
+    /** Changes a text box's words, size and colour. The box keeps its width and grows or shrinks to fit. */
+    suspend fun editTextBox(index: Int, markIndex: Int, text: String, size: Float, color: Int) = edit("Edit text", index) {
+        val a = pdfPage(index).annotations?.getOrNull(markIndex) ?: return@edit
+        if (a.type != PDFAnnotation.TYPE_FREE_TEXT) return@edit
+        val da = runCatching { a.defaultAppearance }.getOrNull()
+        a.contents = text
+        a.setDefaultAppearance(da?.font ?: "Helv", size, rgb(color))
+        val r = a.rect
+        val w = (r.x1 - r.x0).coerceAtLeast(size * 3)
+        a.rect = Rect(r.x0, r.y0, r.x0 + w, r.y0 + textHeight(text, w, size))
+        a.update()
+    }
+
+    /**
+     * Moves or resizes a mark so that its outline becomes [to]. Everything inside is mapped from the
+     * old outline to the new one: the points of a drawing, the ends of a line, a box's corners.
+     */
+    suspend fun reshapeMark(index: Int, markIndex: Int, to: Box) = edit("Move", index) {
+        val a = pdfPage(index).annotations?.getOrNull(markIndex) ?: return@edit
+        val b = a.bounds
+        val fw = (b.x1 - b.x0).coerceAtLeast(0.01f)
+        val fh = (b.y1 - b.y0).coerceAtLeast(0.01f)
+        val sx = to.width / fw
+        val sy = to.height / fh
+        fun mx(x: Float) = to.x0 + (x - b.x0) * sx
+        fun my(y: Float) = to.y0 + (y - b.y0) * sy
+        when (a.type) {
+            PDFAnnotation.TYPE_INK -> {
+                val ink = a.inkList ?: return@edit
+                a.setInkList(ink.map { s -> s.map { Point(mx(it.x), my(it.y)) }.toTypedArray() }.toTypedArray())
+            }
+            PDFAnnotation.TYPE_LINE -> {
+                val l = a.line ?: return@edit
+                if (l.size >= 2) a.setLine(Point(mx(l[0].x), my(l[0].y)), Point(mx(l[1].x), my(l[1].y)))
+            }
+            PDFAnnotation.TYPE_TEXT -> {
+                // A note keeps its icon size; it only moves.
+                val r = a.rect
+                val dx = to.x0 - b.x0
+                val dy = to.y0 - b.y0
+                a.rect = Rect(r.x0 + dx, r.y0 + dy, r.x1 + dx, r.y1 + dy)
+            }
+            else -> {
+                if (!a.hasRect()) return@edit
+                val r = a.rect
+                a.rect = Rect(mx(r.x0), my(r.y0), mx(r.x1), my(r.y1))
+            }
+        }
+        a.update()
+    }
+
+    /** Height a text box needs for [text] at [size] when it is [width] wide, by a generous estimate. */
+    private fun textHeight(text: String, width: Float, size: Float): Float {
+        val perLine = ((width - size * 0.4f) / (size * 0.52f)).coerceAtLeast(1f)
+        val lines = text.lines().sumOf { l -> kotlin.math.ceil(l.length.coerceAtLeast(1) / perLine).toInt().coerceAtLeast(1) }
+        return lines * size * 1.3f + size * 0.6f
     }
 
     suspend fun deleteMark(index: Int, markIndex: Int) = edit("Delete", index) {
@@ -510,7 +623,7 @@ private fun rgb(color: Int): FloatArray = floatArrayOf(
 
 private fun argb(c: FloatArray?): Int {
     if (c == null || c.isEmpty()) return 0xFF000000.toInt()
-    fun ch(v: Float) = (v.coerceIn(0f, 1f) * 255).toInt()
+    fun ch(v: Float) = (v.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
     return when (c.size) {
         1 -> (0xFF shl 24) or (ch(c[0]) shl 16) or (ch(c[0]) shl 8) or ch(c[0])
         4 -> {

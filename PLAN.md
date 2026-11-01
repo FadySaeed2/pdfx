@@ -125,3 +125,11 @@ signatures, and a full pass on every screen for clarity.
 - 2026-11-01 — Phase 1 shipped (0.1.12). Fady: search works well but should highlight the words
   inside the opened file; asked where night mode is (planned for phase 2). Phase 2 started.
 - 2026-11-01 — Phase 2 shipped (0.2.14); Fady: all good, carry on. Phase 3 started.
+- 2026-11-01 — Phase 3 shipped (0.3.17). Fady asked for: text boxes that move freely, a reflow
+  option that is easy to reach, and today's date when signing. Agreed: 3.1 update first (drag to
+  move any mark that sits on its own, corner handles to resize, Edit text for text boxes; reflow
+  button in the top bar that keeps the reading place both ways, font/spacing/margins, IBM Plex Sans
+  Arabic for Arabic paragraphs, headings, search hits, select and copy). The date option goes into
+  Phase 4 with signatures: Add today's date (01/11/2026, 1 November 2026, 2026-11-01; remembers the
+  last choice), sits under the signature but moves on its own, a standalone Date stamp, and one-tap
+  filling of date fields in forms.

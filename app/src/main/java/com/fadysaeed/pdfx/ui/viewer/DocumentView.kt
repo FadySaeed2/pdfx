@@ -61,6 +61,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.fadysaeed.pdfx.engine.Box as PageBox
 import com.fadysaeed.pdfx.ui.theme.Ink
@@ -208,7 +209,7 @@ fun DocumentView(
                                 pinched = true
                                 transform(event.calculateZoom(), event.calculateCentroid(useCurrent = true), event.calculatePan())
                                 event.changes.forEach { it.consume() }
-                            } else if (!pinched && zoom > 1.01f && !reader.draws(down.type.isPen())) {
+                            } else if (!pinched && zoom > 1.01f && !reader.draws(down.type.isPen()) && !reader.holdsPage) {
                                 val c = event.changes.firstOrNull { it.id == down.id }
                                 if (c != null && c.pressed && !c.isConsumed) {
                                     panX = clampX(panX - (c.position.x - c.previousPosition.x))
@@ -216,7 +217,7 @@ fun DocumentView(
                                 }
                             }
                         } while (event.changes.any { it.pressed })
-                        if (!pinched && zoom > 1.01f && !reader.draws(down.type.isPen())) {
+                        if (!pinched && zoom > 1.01f && !reader.draws(down.type.isPen()) && !reader.holdsPage) {
                             val vx = tracker.calculateVelocity().x
                             if (abs(vx) > 250f) {
                                 fling[0] = scope.launch {
@@ -259,6 +260,54 @@ fun DocumentView(
                             .aspectRatio(aspect)
                             .background(paper)
                             .semantics { contentDescription = "Page ${i + 1}" }
+                            .pointerInput(i) {
+                                // The chosen mark: drag inside it to move it, drag a corner to resize it,
+                                // tap it to edit its words. Claimed before drawing, scrolling or zooming.
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                    val m = reader.selectedMark
+                                    if (m == null || m.page != i || !m.movable) return@awaitEachGesture
+                                    val k = size.width / pageWidthPt(i)
+                                    val b = m.box
+                                    val corner = if (m.resizable) cornerAt(b, k, down.position, 26.dp.toPx()) else null
+                                    val pad = 12.dp.toPx()
+                                    val inside = down.position.x in (b.x0 * k - pad)..(b.x1 * k + pad) && down.position.y in (b.y0 * k - pad)..(b.y1 * k + pad)
+                                    if (corner == null && !inside) return@awaitEachGesture
+                                    down.consume()
+                                    reader.holdsPage = true
+                                    val pageW = pageWidthPt(i)
+                                    val pageH = pageW / (aspects.getOrNull(i)?.takeIf { it > 0f } ?: 0.707f)
+                                    var dragging = false
+                                    var target: PageBox? = null
+                                    var cancelled = false
+                                    try {
+                                        while (true) {
+                                            val e = awaitPointerEvent(PointerEventPass.Initial)
+                                            if (e.changes.count { it.pressed } >= 2) { cancelled = true; break }
+                                            val c = e.changes.firstOrNull { it.id == down.id }
+                                            if (c == null) { cancelled = true; break }
+                                            if (!c.pressed) { c.consume(); break }
+                                            val d = c.position - down.position
+                                            if (!dragging && d.getDistance() > viewConfiguration.touchSlop) dragging = true
+                                            if (dragging) {
+                                                target = if (corner == null) movedBox(b, d.x / k, d.y / k, pageW, pageH)
+                                                else resizedBox(b, corner, d.x / k, d.y / k)
+                                                reader.dragMark(target)
+                                            }
+                                            c.consume()
+                                        }
+                                    } finally {
+                                        reader.holdsPage = false
+                                    }
+                                    val t = target
+                                    when {
+                                        cancelled -> reader.dragMark(null)
+                                        dragging && t != null -> reader.reshape(m, t)
+                                        !dragging && corner == null -> reader.tapSelected(m)
+                                        else -> reader.dragMark(null)
+                                    }
+                                }
+                            }
                             .pointerInput(i, reader.marking) {
                                 if (!reader.marking) return@pointerInput
                                 // Marking: one finger (or the pen) draws; two fingers still zoom and scroll.
@@ -305,15 +354,20 @@ fun DocumentView(
                                     if (minOf(ds, de) > reach) return@awaitEachGesture
                                     val start = ds < de
                                     down.consume()
-                                    do {
-                                        val e = awaitPointerEvent(PointerEventPass.Initial)
-                                        val c = e.changes.firstOrNull { it.id == down.id } ?: break
-                                        if (c.positionChange() != Offset.Zero) {
-                                            // Aim a little above the finger so the text being picked stays visible.
-                                            reader.dragSelection(start, c.position.x / k, (c.position.y - 18.dp.toPx()) / k)
-                                        }
-                                        c.consume()
-                                    } while (c.pressed)
+                                    reader.holdsPage = true
+                                    try {
+                                        do {
+                                            val e = awaitPointerEvent(PointerEventPass.Initial)
+                                            val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                                            if (c.positionChange() != Offset.Zero) {
+                                                // Aim a little above the finger so the text being picked stays visible.
+                                                reader.dragSelection(start, c.position.x / k, (c.position.y - 18.dp.toPx()) / k)
+                                            }
+                                            c.consume()
+                                        } while (c.pressed)
+                                    } finally {
+                                        reader.holdsPage = false
+                                    }
                                 }
                             }
                             .pointerInput(i) {
@@ -353,7 +407,7 @@ fun DocumentView(
                                 modifier = Modifier.offset { IntOffset(r.x, r.y) }.size(with(density) { r.w.toDp() }, with(density) { r.h.toDp() }),
                             )
                         }
-                        PageMarks(reader, i, pageWidthPt(i))
+                        PageMarks(reader, i, pageWidthPt(i), img)
                     }
                 }
             }
@@ -363,7 +417,7 @@ fun DocumentView(
 
 /** Search hits, the current hit, and the text selection with its two handles, drawn over a page. */
 @Composable
-private fun PageMarks(reader: Reader, page: Int, pageWidthPt: Float) {
+private fun PageMarks(reader: Reader, page: Int, pageWidthPt: Float, pageImage: ImageBitmap?) {
     val hits = reader.hits[page]
     val sel = reader.selection?.takeIf { it.page == page }
     val cur = reader.currentHit()?.takeIf { it.first == page }?.second
@@ -406,8 +460,31 @@ private fun PageMarks(reader: Reader, page: Int, pageWidthPt: Float) {
             null -> Unit
         }
         if (picked != null) {
-            val b = picked.box
+            val to = reader.moving
+            val b = to ?: picked.box
+            if (to != null && pageImage != null) {
+                // While dragging, the mark itself (cut from the page image) follows the finger.
+                val ps = pageImage.width / size.width
+                val from = picked.box
+                val sx = (from.x0 * k * ps).roundToInt().coerceIn(0, pageImage.width - 1)
+                val sy = (from.y0 * k * ps).roundToInt().coerceIn(0, pageImage.height - 1)
+                val sw = (from.width * k * ps).roundToInt().coerceIn(1, pageImage.width - sx)
+                val sh = (from.height * k * ps).roundToInt().coerceIn(1, pageImage.height - sy)
+                drawImage(
+                    pageImage, IntOffset(sx, sy), IntSize(sw, sh),
+                    IntOffset((b.x0 * k).roundToInt(), (b.y0 * k).roundToInt()),
+                    IntSize((b.width * k).roundToInt().coerceAtLeast(1), (b.height * k).roundToInt().coerceAtLeast(1)),
+                    alpha = 0.85f,
+                )
+            }
             drawRect(Ink.Teal, Offset(b.x0 * k - 4f, b.y0 * k - 4f), Size(b.width * k + 8f, b.height * k + 8f), style = Stroke(width = 2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 7f))))
+            if (picked.resizable) {
+                val r = 6.dp.toPx()
+                listOf(Offset(b.x0 * k - 4f, b.y0 * k - 4f), Offset(b.x1 * k + 4f, b.y0 * k - 4f), Offset(b.x0 * k - 4f, b.y1 * k + 4f), Offset(b.x1 * k + 4f, b.y1 * k + 4f)).forEach { c ->
+                    drawRect(Ink.Black, Offset(c.x - r - 1.5f, c.y - r - 1.5f), Size(2 * r + 3f, 2 * r + 3f))
+                    drawRect(Ink.Teal, Offset(c.x - r, c.y - r), Size(2 * r, 2 * r))
+                }
+            }
         }
         hits?.forEachIndexed { h, boxes ->
             val now = h == cur
@@ -433,6 +510,28 @@ private fun DrawScope.mark(b: PageBox, k: Float, fill: Color, edge: Color?) {
 private fun DrawScope.handle(at: Offset, lineHeight: Float) {
     drawLine(Ink.Teal, Offset(at.x, at.y - lineHeight), at, strokeWidth = 2.dp.toPx())
     drawCircle(Ink.Teal, radius = 7.dp.toPx(), center = Offset(at.x, at.y + 6.dp.toPx()))
+}
+
+/** Which corner of [b] (0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right) is within [reach] of [p]. */
+private fun cornerAt(b: PageBox, k: Float, p: Offset, reach: Float): Int? {
+    val cs = listOf(Offset(b.x0 * k, b.y0 * k), Offset(b.x1 * k, b.y0 * k), Offset(b.x0 * k, b.y1 * k), Offset(b.x1 * k, b.y1 * k))
+    val i = cs.indices.minByOrNull { (cs[it] - p).getDistance() } ?: return null
+    return i.takeIf { (cs[i] - p).getDistance() <= reach }
+}
+
+/** [b] moved by (dx, dy) points, kept on the page. */
+internal fun movedBox(b: PageBox, dx: Float, dy: Float, pageW: Float, pageH: Float): PageBox {
+    val x = (b.x0 + dx).coerceIn(minOf(0f, pageW - b.width), maxOf(0f, pageW - b.width))
+    val y = (b.y0 + dy).coerceIn(minOf(0f, pageH - b.height), maxOf(0f, pageH - b.height))
+    return PageBox(x, y, x + b.width, y + b.height)
+}
+
+/** [b] with one corner dragged by (dx, dy) points; the opposite corner stays put. */
+internal fun resizedBox(b: PageBox, corner: Int, dx: Float, dy: Float, min: Float = 8f): PageBox {
+    var x0 = b.x0; var y0 = b.y0; var x1 = b.x1; var y1 = b.y1
+    if (corner == 0 || corner == 2) x0 = minOf(b.x0 + dx, b.x1 - min) else x1 = maxOf(b.x1 + dx, b.x0 + min)
+    if (corner == 0 || corner == 1) y0 = minOf(b.y0 + dy, b.y1 - min) else y1 = maxOf(b.y1 + dy, b.y0 + min)
+    return PageBox(x0, y0, x1, y1)
 }
 
 /** Pages are redrawn at 1x, 1.5x or 2x the screen width; beyond that, tiles keep text sharp. */

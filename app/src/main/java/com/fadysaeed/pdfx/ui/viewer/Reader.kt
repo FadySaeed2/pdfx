@@ -15,6 +15,7 @@ import com.fadysaeed.pdfx.engine.Mark
 import com.fadysaeed.pdfx.engine.MarkKind
 import com.fadysaeed.pdfx.engine.OutlineEntry
 import com.fadysaeed.pdfx.engine.PageLink
+import com.fadysaeed.pdfx.engine.Para
 import com.fadysaeed.pdfx.engine.PdfSession
 import com.fadysaeed.pdfx.engine.Selection
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,13 @@ enum class PaperMode(val label: String, val note: String) {
     NIGHT("Night", "Light text on black; colours keep their hue"),
     SEPIA("Sepia", "Warm paper, easier on the eyes in the evening"),
 }
+
+/** Reading fonts for reflowed text. Arabic paragraphs always use IBM Plex Sans Arabic. */
+enum class ReflowFont(val label: String) { SANS("Sans"), SERIF("Serif") }
+
+/** Line spacing and side margins for reflowed text, in three steps each. */
+val ReflowSpacings = listOf(1.35f, 1.6f, 1.9f)
+val ReflowMargins = listOf(14, 24, 40)
 
 /** The marking tools. */
 enum class Tool(val label: String) {
@@ -81,6 +89,17 @@ class Reader(
         private set
     var reflowSize by mutableIntStateOf(prefs?.getInt("reflow_size", 18) ?: 18)
         private set
+    var reflowFont by mutableStateOf(prefs?.getString("reflow_font", null)?.let { runCatching { ReflowFont.valueOf(it) }.getOrNull() } ?: ReflowFont.SANS)
+        private set
+    var reflowSpacing by mutableIntStateOf(prefs?.getInt("reflow_spacing", 1) ?: 1)
+        private set
+    var reflowMargin by mutableIntStateOf(prefs?.getInt("reflow_margin", 1) ?: 1)
+        private set
+    /**
+     * Where reading was when switching between pages and reflowed text: the page, and how far down
+     * it the reading line was (0 to 1). The other view opens at the same place.
+     */
+    var readingSpot: Pair<Int, Float>? = null
     var chrome by mutableStateOf(true)
     var jump by mutableStateOf<Jump?>(null)
         private set
@@ -109,7 +128,7 @@ class Reader(
     var outline by mutableStateOf<List<OutlineEntry>?>(null)
         private set
     val bookmarks = mutableStateListOf<Int>()
-    val paragraphs = mutableStateMapOf<Int, List<String>>()
+    val paragraphs = mutableStateMapOf<Int, List<Para>>()
 
     init {
         if (bookmarksStore != null && docId != null) {
@@ -127,6 +146,18 @@ class Reader(
     fun changeMode(m: PaperMode) { mode = m; prefs?.edit()?.putString("mode", m.name)?.apply() }
     fun changeReflow(on: Boolean) { reflow = on; prefs?.edit()?.putBoolean("reflow", on)?.apply() }
     fun changeReflowSize(sp: Int) { reflowSize = sp.coerceIn(14, 28); prefs?.edit()?.putInt("reflow_size", reflowSize)?.apply() }
+    fun changeReflowFont(f: ReflowFont) { reflowFont = f; prefs?.edit()?.putString("reflow_font", f.name)?.apply() }
+    fun changeReflowSpacing(step: Int) { reflowSpacing = step.coerceIn(0, 2); prefs?.edit()?.putInt("reflow_spacing", reflowSpacing)?.apply() }
+    fun changeReflowMargin(step: Int) { reflowMargin = step.coerceIn(0, 2); prefs?.edit()?.putInt("reflow_margin", reflowMargin)?.apply() }
+
+    /** Switches between pages and reflowed text, keeping the place: [spot] is where reading was. */
+    fun toggleReflow(spot: Pair<Int, Float>?) {
+        readingSpot = spot
+        selectedMark = null
+        clearSelection()
+        if (!reflow && marking) stopMarking()
+        changeReflow(!reflow)
+    }
 
     // ------------------------------------------------------------ search
 
@@ -233,10 +264,12 @@ class Reader(
         scope.launch { withContext(Dispatchers.IO) { store.set(id, page, on) } }
     }
 
+    private val paragraphsAsked = HashSet<Int>()
+
+    /** Reads a page's paragraphs once; until they arrive the page has no entry, so it shows as loading. */
     fun loadParagraphs(page: Int) {
         val s = session ?: return
-        if (paragraphs.containsKey(page)) return
-        paragraphs[page] = emptyList()
+        if (!paragraphsAsked.add(page)) return
         scope.launch { paragraphs[page] = runCatching { s.paragraphs(page) }.getOrDefault(emptyList()) }
     }
 
@@ -265,6 +298,13 @@ class Reader(
     var selectedMark by mutableStateOf<Mark?>(null)
         private set
     var textAsk by mutableStateOf<TextAsk?>(null)
+    /** The text box whose words are being edited. */
+    var textEdit by mutableStateOf<Mark?>(null)
+    /** Where the selected mark is being dragged to, shown live until the page is drawn again. */
+    var moving by mutableStateOf<Box?>(null)
+        private set
+    /** True while a finger is moving a mark or a selection handle, so the page itself stays still. */
+    var holdsPage = false
     var canUndo by mutableStateOf(false)
         private set
     var canRedo by mutableStateOf(false)
@@ -379,11 +419,20 @@ class Reader(
                 change(page) { s?.addInk(page, listOf(simplify(pts)), ink.color, ink.width, ink.opacity) ?: false }
             }
             Tool.SHAPE -> {
-                val d = draft as? Draft.Shape ?: return
-                if (!moved) { draft = null; return }
+                val d = draft as? Draft.Shape
+                if (!moved || d == null) {
+                    draft = null
+                    markAt(page, a.first, a.second)?.takeIf { it.movable }?.let { selectedMark = it }
+                    return
+                }
                 change(page) { s?.addShape(page, d.kind.kind, d.x0, d.y0, d.x1, d.y1, d.color, d.width) ?: false }
             }
-            Tool.TEXT, Tool.NOTE -> if (!moved) textAsk = TextAsk(page, a.first, a.second, note = gestureTool == Tool.NOTE)
+            Tool.TEXT, Tool.NOTE -> if (!moved) {
+                // Tapping a mark that is already there picks it up instead of starting a new one.
+                val there = markAt(page, a.first, a.second)?.takeIf { it.movable }
+                if (there != null) selectedMark = there
+                else textAsk = TextAsk(page, a.first, a.second, note = gestureTool == Tool.NOTE)
+            }
             Tool.ERASER -> {
                 val gone = erased.toList().sortedDescending()
                 erased.clear()
@@ -414,8 +463,37 @@ class Reader(
     fun delete(m: Mark) { selectedMark = null; change(m.page) { session?.deleteMark(m.page, m.index) ?: false } }
     fun editNote(m: Mark) { selectedMark = null; textAsk = TextAsk(m.page, m.box.x0, m.box.y0, note = true, mark = m) }
 
-    fun undo() = change(null) { session?.undo() ?: false }
-    fun redo() = change(null) { session?.redo() ?: false }
+    /** Opens the editor for a text box's words. */
+    fun editText(m: Mark) { if (m.kind == MarkKind.TEXT) textEdit = m }
+
+    /** Writes a text box's new words, size and colour; the box stays selected. */
+    fun submitTextEdit(m: Mark, text: String, size: Float, color: Int) {
+        textEdit = null
+        if (text.isBlank()) { delete(m); return }
+        change(m.page) { session?.editTextBox(m.page, m.index, text.trimEnd(), size, color) ?: false }
+    }
+
+    /** A tap on the chosen mark: a text box opens for editing, a note shows its words. */
+    fun tapSelected(m: Mark) {
+        when (m.kind) {
+            MarkKind.TEXT -> editText(m)
+            MarkKind.NOTE -> editNote(m)
+            else -> Unit
+        }
+    }
+
+    /** Shows where the selected mark would go while it is dragged. */
+    fun dragMark(to: Box?) { moving = to }
+
+    /** Moves or resizes a mark to [to]; it stays selected so it can be adjusted again. */
+    fun reshape(m: Mark, to: Box) {
+        if (!m.movable) { moving = null; return }
+        selectedMark = m.copy(box = to)
+        change(m.page) { session?.reshapeMark(m.page, m.index, to) ?: false }
+    }
+
+    fun undo() { selectedMark = null; change(null) { session?.undo() ?: false } }
+    fun redo() { selectedMark = null; change(null) { session?.redo() ?: false } }
     fun flatten() = change(null) { session?.flatten() ?: false }
 
     /** Called after the file is saved and reopened. */
@@ -433,11 +511,17 @@ class Reader(
             if (s != null) { canUndo = s.canUndo; canRedo = s.canRedo; dirty = s.dirty }
             if (ok) {
                 if (page == null) { marks.clear(); pages?.invalidate(null) } else { marks.remove(page); pages?.invalidate(listOf(page)) }
+                // Keep the chosen mark chosen, with its new outline, size and colour.
+                val keep = selectedMark
+                if (s != null && page != null && keep != null && keep.page == page) {
+                    selectedMark = runCatching { s.marks(page) }.getOrNull()?.getOrNull(keep.index)?.takeIf { it.kind == keep.kind }
+                }
                 if (page != null) loadMarks(page) else marks.keys.toList().forEach { loadMarks(it) }
                 if (allMarks != null) loadAllMarks()
                 if (page != null) pages?.awaitRedraw(page, before)
             }
             if (page == null || draft?.page == page) draft = null
+            if (page == null || selectedMark == null || selectedMark?.page == page) moving = null
         }
     }
 
@@ -456,6 +540,8 @@ class Reader(
 
     /** For screenshot tests. */
     fun showMarking(t: Tool, d: Draft?, selected: Mark? = null) { marking = true; tool = t; draft = d; selectedMark = selected }
+    fun showSelectedForTest(m: Mark?, movingTo: Box? = null) { selectedMark = m; moving = movingTo }
+    fun showReflowForTest(on: Boolean, paras: Map<Int, List<Para>>) { reflow = on; paragraphs.clear(); paragraphs.putAll(paras) }
     fun setAllMarksForTest(list: List<Mark>) { allMarks = list }
     fun showSelectionlessDraftForTest() { selection = null }
     fun stopMarkingKeepSelectionForTest() { marking = false }
