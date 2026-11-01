@@ -45,11 +45,11 @@ reference for what the app is, how it is built and what comes next. Update it wi
 - `versionCode` is the Actions run number. `versionName` is `<phase-major>.<phase>.<run>`.
 - Release APK ships arm64-v8a only (the phone); debug builds keep every ABI for the emulator.
 - Toolchain: Gradle 8.11.1, AGP 8.7.3, Kotlin 2.1.0, Compose BOM 2024.12.01, MuPDF fitz 1.28.5,
-  compileSdk/targetSdk 35, minSdk 29.
+  compileSdk/targetSdk 35, minSdk 30 (All files access needs Android 11).
 
 ## Phases
 
-### Phase 0 — foundation (this build)
+### Phase 0 — foundation (done)
 - Project, cloud build, emulator engine tests, fixed signing key, releases.
 - MuPDF wired in; documents open from the system picker, from "Open with" and from "Share".
 - Password-locked PDFs ask for their password.
@@ -57,7 +57,7 @@ reference for what the app is, how it is built and what comes next. Update it wi
   reading-position line, last page remembered per file.
 - Library v0: recent files with pages, size, when opened, and the page reached.
 
-### Phase 1 — library and file management
+### Phase 1 — library and file management (this build)
 All PDFs on the phone found automatically (All files access; personal app, not on Play), folders,
 favourites, tags, thumbnails, rename, move, copy, delete to a recycle bin, sort and filter, and a
 full-text index so search finds words inside documents, not only file names.
@@ -112,3 +112,7 @@ signatures, and a full pass on every screen for clarity.
 
 ## Status log
 - 2026-11-01 — Plan agreed. Phase 0 started.
+- 2026-11-01 — Phase 0 shipped (0.0.2); pinch zoom anchoring fixed (0.0.5). Phase 1 started:
+  Room library (documents, tags, full-text index of every page), All files access scan, rename,
+  move, copy, trash with undo and 30-day purge, tags, folders, sorting, search inside documents
+  that opens at the matching page.

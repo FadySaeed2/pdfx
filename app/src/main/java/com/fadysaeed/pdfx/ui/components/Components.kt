@@ -74,7 +74,7 @@ fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
     }
 }
 
-enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK }
+enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK }
 
 /** Line glyphs drawn in code, so every icon shares one stroke weight and the app ships no icon font. */
 @Composable
@@ -100,6 +100,63 @@ fun GlyphIcon(glyph: Glyph, color: Color, size: Dp = 22.dp) {
                 drawRoundRect(color, Offset(s * 0.22f, s * 0.44f), Size(s * 0.56f, s * 0.42f), style = Stroke(width = w))
                 drawArc(color, 180f, 180f, false, Offset(s * 0.32f, s * 0.16f), Size(s * 0.36f, s * 0.5f), style = Stroke(width = w, cap = StrokeCap.Round))
             }
+            Glyph.STAR, Glyph.STAR_FILLED -> {
+                val p = Path()
+                for (i in 0 until 10) {
+                    val r = if (i % 2 == 0) 0.42f else 0.18f
+                    val a = Math.toRadians((-90 + i * 36).toDouble())
+                    val x = s * (0.5f + r * Math.cos(a).toFloat())
+                    val y = s * (0.53f + r * Math.sin(a).toFloat())
+                    if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
+                }
+                p.close()
+                if (glyph == Glyph.STAR_FILLED) drawPath(p, color)
+                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+            }
+            Glyph.MORE -> listOf(0.22f, 0.5f, 0.78f).forEach { drawCircle(color, w * 0.95f, Offset(s * 0.5f, s * it)) }
+            Glyph.SEARCH -> {
+                drawCircle(color, s * 0.24f, Offset(s * 0.44f, s * 0.44f), style = Stroke(width = w))
+                line(0.62f, 0.62f, 0.82f, 0.82f)
+            }
+            Glyph.FOLDER -> {
+                val p = Path().apply {
+                    moveTo(s * 0.14f, s * 0.26f); lineTo(s * 0.4f, s * 0.26f); lineTo(s * 0.48f, s * 0.34f)
+                    lineTo(s * 0.86f, s * 0.34f); lineTo(s * 0.86f, s * 0.8f); lineTo(s * 0.14f, s * 0.8f); close()
+                }
+                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+            }
+            Glyph.TAG -> {
+                val p = Path().apply {
+                    moveTo(s * 0.16f, s * 0.16f); lineTo(s * 0.5f, s * 0.16f); lineTo(s * 0.86f, s * 0.52f)
+                    lineTo(s * 0.52f, s * 0.86f); lineTo(s * 0.16f, s * 0.5f); close()
+                }
+                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+                drawCircle(color, w * 0.9f, Offset(s * 0.33f, s * 0.33f))
+            }
+            Glyph.TRASH -> {
+                line(0.18f, 0.26f, 0.82f, 0.26f); line(0.4f, 0.26f, 0.42f, 0.16f); line(0.42f, 0.16f, 0.58f, 0.16f); line(0.58f, 0.16f, 0.6f, 0.26f)
+                val p = Path().apply { moveTo(s * 0.26f, s * 0.26f); lineTo(s * 0.32f, s * 0.86f); lineTo(s * 0.68f, s * 0.86f); lineTo(s * 0.74f, s * 0.26f) }
+                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+            }
+            Glyph.RESTORE -> {
+                drawArc(color, 200f, 290f, false, Offset(s * 0.2f, s * 0.2f), Size(s * 0.6f, s * 0.6f), style = Stroke(width = w, cap = StrokeCap.Round))
+                line(0.2f, 0.28f, 0.22f, 0.44f); line(0.22f, 0.44f, 0.37f, 0.4f)
+            }
+            Glyph.RENAME -> { line(0.22f, 0.78f, 0.7f, 0.3f); line(0.62f, 0.22f, 0.78f, 0.38f); line(0.2f, 0.84f, 0.36f, 0.82f) }
+            Glyph.MOVE -> { line(0.18f, 0.5f, 0.78f, 0.5f); line(0.58f, 0.3f, 0.8f, 0.5f); line(0.8f, 0.5f, 0.58f, 0.7f) }
+            Glyph.COPY -> {
+                drawRoundRect(color, Offset(s * 0.34f, s * 0.34f), Size(s * 0.46f, s * 0.48f), style = Stroke(width = w))
+                val p = Path().apply { moveTo(s * 0.24f, s * 0.68f); lineTo(s * 0.2f, s * 0.68f); lineTo(s * 0.2f, s * 0.18f); lineTo(s * 0.64f, s * 0.18f); lineTo(s * 0.64f, s * 0.26f) }
+                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+            }
+            Glyph.SHARE -> {
+                line(0.5f, 0.16f, 0.5f, 0.6f); line(0.34f, 0.3f, 0.5f, 0.16f); line(0.5f, 0.16f, 0.66f, 0.3f)
+                val p = Path().apply { moveTo(s * 0.3f, s * 0.46f); lineTo(s * 0.2f, s * 0.46f); lineTo(s * 0.2f, s * 0.84f); lineTo(s * 0.8f, s * 0.84f); lineTo(s * 0.8f, s * 0.46f); lineTo(s * 0.7f, s * 0.46f) }
+                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+            }
+            Glyph.OPEN -> { line(0.3f, 0.2f, 0.62f, 0.5f); line(0.62f, 0.5f, 0.3f, 0.8f); line(0.72f, 0.2f, 0.72f, 0.8f) }
+            Glyph.SORT -> { line(0.2f, 0.3f, 0.8f, 0.3f); line(0.2f, 0.5f, 0.62f, 0.5f); line(0.2f, 0.7f, 0.44f, 0.7f) }
+            Glyph.CHECK -> { line(0.2f, 0.52f, 0.42f, 0.74f); line(0.42f, 0.74f, 0.82f, 0.28f) }
         }
     }
 }
@@ -169,3 +226,47 @@ fun InkField(
         )
     }
 }
+
+@Composable
+fun Chip(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false) {
+    Box(
+        modifier
+            .heightIn(min = 38.dp)
+            .clip(Corner)
+            .background(if (selected) Ink.Bone else Color.Transparent)
+            .border(1.dp, if (selected) Ink.Bone else Ink.Rule, Corner)
+            .clickable(role = Role.Tab, onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, style = Type.body.copy(fontSize = 14.sp, color = if (selected) Ink.Black else Ink.Sand), maxLines = 1)
+    }
+}
+
+/** A row in a sheet: line glyph, label, optional note underneath. */
+@Composable
+fun SheetRow(glyph: Glyph, label: String, onClick: () -> Unit, note: String? = null, color: Color = Ink.Bone) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        GlyphIcon(glyph, if (color == Ink.Bone) Ink.Dust else color)
+        androidx.compose.foundation.layout.Spacer(Modifier.size(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, style = Type.body.copy(color = color))
+            if (note != null) Text(note, style = Type.small)
+        }
+    }
+}
+
+/** The six tag colours: warm, quiet, and readable on black. */
+val TagColors = listOf(
+    Color(0xFFE0A43B), Color(0xFF3E9F8F), Color(0xFFB07F55), Color(0xFF6F93AD), Color(0xFF8DA066), Color(0xFFCFC6B4),
+)
+
+fun tagColor(i: Int): Color = TagColors[((i % TagColors.size) + TagColors.size) % TagColors.size]
+

@@ -43,7 +43,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.fadysaeed.pdfx.PdfxApp
-import com.fadysaeed.pdfx.data.RecentFile
+import com.fadysaeed.pdfx.data.Doc
+import com.fadysaeed.pdfx.ui.library.LibraryModel
 import com.fadysaeed.pdfx.engine.PdfSession
 import com.fadysaeed.pdfx.ui.components.AmberButton
 import com.fadysaeed.pdfx.ui.components.Corner
@@ -67,25 +68,31 @@ private sealed interface Load {
     data class Failed(val reason: String) : Load
 }
 
-/** Opens [uri], asks for a password when needed, and shows the document. */
+/** A document to open, and the page to start on when it should not be the last one read. */
+data class OpenRequest(val uri: Uri, val page: Int? = null, val id: Long = System.nanoTime())
+
+/** Opens a document, asks for a password when needed, and shows it. */
 @OptIn(FlowPreview::class)
 @Composable
-fun ViewerScreen(uri: Uri, onClose: (failure: String?) -> Unit) {
+fun ViewerScreen(request: OpenRequest, onClose: (failure: String?) -> Unit) {
     val context = LocalContext.current
-    val recents = (context.applicationContext as PdfxApp).recents
-    val (name, size) = remember(uri) { recents.describe(uri) }
-    var load by remember(uri) { mutableStateOf<Load>(Load.Opening) }
+    val library = (context.applicationContext as PdfxApp).library
+    var doc by remember(request) { mutableStateOf<Doc?>(null) }
+    var load by remember(request) { mutableStateOf<Load>(Load.Opening) }
     val scope = rememberCoroutineScope()
+    val fallbackName = remember(request) { library.describe(request.uri).first.removeSuffix(".pdf") }
+    val name = doc?.let { LibraryModel.display(it) } ?: fallbackName
 
-    LaunchedEffect(uri) {
+    LaunchedEffect(request) {
+        doc = runCatching { library.resolve(request.uri) }.getOrNull()
         load = try {
-            val s = PdfSession.open(context, uri)
+            val s = PdfSession.open(context, request.uri)
             if (s.needsPassword) Load.Locked(s, wrong = false) else Load.Ready(s)
         } catch (t: Throwable) {
             Load.Failed(t.message?.takeIf { it.isNotBlank() } ?: "The file is not a readable PDF.")
         }
     }
-    DisposableEffect(uri) {
+    DisposableEffect(request) {
         onDispose {
             when (val l = load) {
                 is Load.Ready -> l.session.close()
@@ -106,17 +113,19 @@ fun ViewerScreen(uri: Uri, onClose: (failure: String?) -> Unit) {
         }
         is Load.Ready -> {
             val session = l.session
-            val start = remember(uri) { recents.find(uri)?.lastPage?.coerceIn(0, (session.pageCount - 1).coerceAtLeast(0)) ?: 0 }
-            LaunchedEffect(uri) {
-                recents.record(RecentFile(uri.toString(), name, size, session.pageCount, System.currentTimeMillis(), start))
+            val last = (session.pageCount - 1).coerceAtLeast(0)
+            val start = remember(request) { (request.page ?: doc?.lastPage ?: 0).coerceIn(0, last) }
+            LaunchedEffect(request, doc?.id) {
+                doc?.let { library.recordOpen(it.id, session.pageCount, locked = false) }
             }
             val listState = rememberLazyListState(initialFirstVisibleItemIndex = start)
             val images = remember(session) { PageImages(session, scope) }
-            LaunchedEffect(listState) {
+            LaunchedEffect(listState, doc?.id) {
+                val id = doc?.id ?: return@LaunchedEffect
                 snapshotFlow { centreItem(listState) }
                     .distinctUntilChanged()
                     .debounce(400)
-                    .collect { recents.updatePage(uri, it) }
+                    .collect { library.updatePage(id, it) }
             }
             ViewerContent(
                 name = name,

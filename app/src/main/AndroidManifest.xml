@@ -3,9 +3,15 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!-- PDFx never talks to the network. Strip the permission even if a library asks for it,
-         so no document can ever leave the phone through this app. -->
+         so no document can ever leave the phone through this app. (WorkManager still declares
+         ACCESS_NETWORK_STATE, which only reads whether a network exists and grants no access.) -->
     <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+
+    <!-- "All files access", so the library can find every PDF on the phone and move, rename and
+         delete them. PDFx is a personal app installed outside the Play Store. -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
 
     <application
         android:name=".PdfxApp"
@@ -41,5 +47,15 @@
                 <data android:mimeType="application/pdf" />
             </intent-filter>
         </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>
