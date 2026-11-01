@@ -133,3 +133,9 @@ signatures, and a full pass on every screen for clarity.
   Phase 4 with signatures: Add today's date (01/11/2026, 1 November 2026, 2026-11-01; remembers the
   last choice), sits under the signature but moves on its own, a standalone Date stamp, and one-tap
   filling of date fields in forms.
+- 2026-11-01 — 3.1 shipped (0.3.21). Fady asked for: a floating bar over selected words with
+  highlight / underline / strike; a side list of every search result with context; changing a
+  highlight's colour after making it, lighter or stronger highlights, a colour picker. He approved
+  the extras too: marks tab filters and copy/share as text, the S Pen button erases, Arabic search
+  that ignores hamza and short vowels. OCR stays in phase 6 (he did not ask to move it).
+  Cross-page selection is left for phase 9. 3.2 shipped as 0.3.25.
