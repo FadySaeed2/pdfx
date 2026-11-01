@@ -1778,10 +1778,19 @@ private fun SignPadHost(reader: Reader, initials: Boolean) {
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun SignPad(initials: Boolean, busy: Boolean = false, onDismiss: () -> Unit, onSave: (List<List<Pair<Float, Float>>>, Int) -> Unit, onChoose: () -> Unit = {}, onShoot: () -> Unit = {}, startStrokes: List<List<Pair<Float, Float>>> = emptyList()) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        SignPadBody(initials, busy, onDismiss, onSave, onChoose, onShoot, startStrokes)
+    }
+}
+
+/** What the signature pad shows; kept apart from the dialog so it can be pictured in tests. */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+internal fun SignPadBody(initials: Boolean, busy: Boolean, onDismiss: () -> Unit, onSave: (List<List<Pair<Float, Float>>>, Int) -> Unit, onChoose: () -> Unit, onShoot: () -> Unit, startStrokes: List<List<Pair<Float, Float>>>) {
     val strokes = remember { mutableStateListOf<List<Pair<Float, Float>>>().apply { addAll(startStrokes) } }
     var live by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
     var color by remember { mutableStateOf(0xFF1A1A1A.toInt()) }
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+    run {
         Column(Modifier.fillMaxWidth().padding(10.dp).background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(if (initials) "Your initials" else "Your signature", style = Type.title, modifier = Modifier.weight(1f))

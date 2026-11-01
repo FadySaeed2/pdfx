@@ -413,7 +413,7 @@ class PdfSession private constructor(
             val st = w.getObject().get("AS")?.asName()
             st != null && st != "Off" && st.isNotEmpty()
         }.getOrDefault(false)
-        val js = if (kind == FieldKind.TEXT) runCatching { w.getObject().get("AA").get("F").get("JS").asString() }.getOrNull() else null
+        val js = if (kind == FieldKind.TEXT) formatScript(w) else null
         val pattern = dateFormatFromScript(js)
         val isDate = kind == FieldKind.TEXT && (pattern != null || runCatching { w.textFormat == PDFWidget.TX_FORMAT_DATE }.getOrDefault(false) ||
             Regex("date|dob|\\bd\\.?o\\.?b\\b|تاريخ", RegexOption.IGNORE_CASE).containsMatchIn(name))
@@ -427,6 +427,21 @@ class PdfSession private constructor(
             maxLen = if (kind == FieldKind.TEXT) runCatching { w.maxLen }.getOrDefault(0) else 0,
         )
     }
+
+    /** A field's format script, from the widget or the field above it; it may be text or a stream. */
+    private fun formatScript(w: PDFWidget): String? = runCatching {
+        var o: com.artifex.mupdf.fitz.PDFObject? = w.getObject()
+        repeat(5) {
+            val cur = o ?: return@runCatching null
+            val js = cur.get("AA")?.get("F")?.get("JS")
+            if (js != null) {
+                val text = if (js.isStream) String(js.readStream() ?: ByteArray(0)) else js.asString()
+                if (!text.isNullOrBlank()) return@runCatching text
+            }
+            o = cur.get("Parent")
+        }
+        null
+    }.getOrNull()
 
     /** The form fields on a page, in the order the page holds them. */
     suspend fun fields(index: Int): List<Field> = onDoc {

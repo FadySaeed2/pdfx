@@ -123,7 +123,8 @@ class Signatures(private val dir: File) {
                 sumB += t * hist[t].toDouble()
                 val mB = sumB / wB; val mF = (sum - sumB) / wF
                 val between = wB * wF * (mB - mF) * (mB - mF)
-                if (between > best) { best = between; thr = t }
+                // Cut half way between the ink's mean and the paper's.
+                if (between > best) { best = between; thr = ((mB + mF) / 2).toInt() }
             }
             var minX = w; var minY = h; var maxX = -1; var maxY = -1
             val out = IntArray(px.size)

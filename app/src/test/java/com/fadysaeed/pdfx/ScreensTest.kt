@@ -455,8 +455,8 @@ class ScreensTest {
     fun signPad() {
         compose.setContent {
             PdfxTheme {
-                com.fadysaeed.pdfx.ui.viewer.SignPad(
-                    initials = false, onDismiss = {}, onSave = { _, _ -> },
+                com.fadysaeed.pdfx.ui.viewer.SignPadBody(
+                    initials = false, busy = false, onDismiss = {}, onSave = { _, _ -> }, onChoose = {}, onShoot = {},
                     startStrokes = listOf(listOf(60f to 220f, 120f to 120f, 170f to 240f, 240f to 140f, 330f to 230f, 430f to 150f, 560f to 210f, 700f to 170f), listOf(150f to 260f, 640f to 250f)),
                 )
             }
