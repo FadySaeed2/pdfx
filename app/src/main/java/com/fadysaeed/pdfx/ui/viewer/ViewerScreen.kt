@@ -1090,7 +1090,7 @@ private fun MarkWordButton(description: String, onClick: () -> Unit, content: @C
 
 @Composable
 private fun FloatAction(label: String, onClick: () -> Unit) {
-    Text(label, style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 14.sp), modifier = Modifier.clip(Corner).clickable(onClick = onClick).padding(horizontal = 9.dp, vertical = 12.dp))
+    Text(label, style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 14.sp), maxLines = 1, softWrap = false, modifier = Modifier.clip(Corner).clickable(onClick = onClick).padding(horizontal = 9.dp, vertical = 12.dp))
 }
 
 /** Every search result, page by page, each with the words around it. Tap one to go there. */
