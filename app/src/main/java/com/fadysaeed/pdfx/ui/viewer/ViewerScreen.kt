@@ -1775,6 +1775,7 @@ private fun SignPadHost(reader: Reader, initials: Boolean) {
 }
 
 /** A wide white pad to sign on with the pen or a finger, like signing on paper. */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun SignPad(initials: Boolean, busy: Boolean = false, onDismiss: () -> Unit, onSave: (List<List<Pair<Float, Float>>>, Int) -> Unit, onChoose: () -> Unit = {}, onShoot: () -> Unit = {}, startStrokes: List<List<Pair<Float, Float>>> = emptyList()) {
     val strokes = remember { mutableStateListOf<List<Pair<Float, Float>>>().apply { addAll(startStrokes) } }
