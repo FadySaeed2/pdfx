@@ -165,39 +165,64 @@ class PdfSession private constructor(
      * Every place [needle] appears on a page; each hit is one or more boxes (it may wrap a line).
      * Case, accents and Arabic marks are ignored, so «اكتئاب» also finds «إكتِئاب».
      */
-    suspend fun search(index: Int, needle: String): List<List<Box>> = onDoc {
-        stext(index).search(needle, SEARCH_FLAGS)?.map { hit -> hit.map { it.box() } } ?: emptyList()
-    }
+    suspend fun search(index: Int, needle: String): List<List<Box>> = onDoc { findOnPage(index, needle).map { it.boxes } }
 
     /** Like [search], with the words around each hit for the list of results. */
-    suspend fun searchHits(index: Int, needle: String): List<Hit> = onDoc {
-        val st = stext(index)
-        val quads = st.search(needle, SEARCH_FLAGS) ?: return@onDoc emptyList()
-        if (quads.isEmpty()) return@onDoc emptyList()
-        // The page's lines, in reading order, with their outlines.
-        val lines = ArrayList<Pair<Rect, String>>()
-        runCatching { st.blocks }.getOrNull()?.forEach { b ->
+    suspend fun searchHits(index: Int, needle: String): List<Hit> = onDoc { findOnPage(index, needle) }
+
+    /** A page's characters in reading order (lines joined by spaces), each with its outline, ready to search. */
+    private class PageChars(val text: String, val quads: Array<Quad?>, val line: IntArray, val folded: Folded)
+
+    private val charsCache = object : LinkedHashMap<Int, PageChars>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, PageChars>) = size > 4
+    }
+
+    private fun pageChars(index: Int): PageChars = charsCache.getOrPut(index) {
+        val sb = StringBuilder()
+        val quads = ArrayList<Quad?>()
+        val lines = ArrayList<Int>()
+        var n = 0
+        runCatching { stext(index).blocks }.getOrNull()?.forEach { b ->
             b.lines?.forEach { l ->
-                val t = buildString { l.chars?.forEach { appendCodePoint(it.c) } }.trim()
-                if (t.isNotEmpty() && l.bbox != null) lines += l.bbox to t
+                val cs = l.chars ?: return@forEach
+                if (cs.isEmpty()) return@forEach
+                cs.forEach { c ->
+                    val units = Character.toChars(c.c)
+                    units.forEach { u -> sb.append(u); quads += c.quad; lines += n }
+                }
+                sb.append(' '); quads += null; lines += n
+                n++
             }
         }
-        quads.map { hit ->
-            val boxes = hit.map { it.box() }
-            val first = boxes.first()
-            val cx = (first.x0 + first.x1) / 2
-            val cy = (first.y0 + first.y1) / 2
-            val li = lines.indexOfFirst { (r, _) -> cx in r.x0..r.x1 && cy in r.y0..r.y1 }
-                .takeIf { it >= 0 } ?: lines.indices.minByOrNull { kotlin.math.abs((lines[it].first.y0 + lines[it].first.y1) / 2 - cy) }
-            if (li == null) return@map Hit(boxes, "", needle, "")
-            val prev = lines.getOrNull(li - 1)?.second.orEmpty()
-            val (r, line) = lines[li]
-            val next = lines.getOrNull(li + 1)?.second.orEmpty()
-            val start = if (prev.isEmpty()) 0 else prev.length + 1
-            val context = listOf(prev, line, next).filter { it.isNotEmpty() }.joinToString(" ")
-            val along = if (r.x1 > r.x0) ((first.x0 - r.x0) / (r.x1 - r.x0)).coerceIn(0f, 1f) else 0f
-            snippet(context, needle, start + (along * line.length).toInt(), boxes)
+        val text = sb.toString()
+        PageChars(text, quads.toTypedArray(), lines.toIntArray(), fold(text))
+    }
+
+    private fun findOnPage(index: Int, needle: String): List<Hit> {
+        val q = fold(needle).text.trim().replace(Regex("\\s+"), " ")
+        if (q.isEmpty()) return emptyList()
+        val pc = pageChars(index)
+        val f = pc.folded
+        val out = ArrayList<Hit>()
+        var from = 0
+        while (out.size < 2000) {
+            val at = f.text.indexOf(q, from)
+            if (at < 0) break
+            from = at + q.length
+            val start = f.map[at]
+            val end = f.map[at + q.length - 1]
+            // One box per line the hit covers.
+            val boxes = (start..end).filter { pc.quads[it] != null }.groupBy { pc.line[it] }.values.map { idx ->
+                val rs = idx.map { pc.quads[it]!!.toRect() }
+                Box(rs.minOf { it.x0 }, rs.minOf { it.y0 }, rs.maxOf { it.x1 }, rs.maxOf { it.y1 })
+            }
+            if (boxes.isEmpty()) continue
+            val ctxStart = (start - 90).coerceAtLeast(0)
+            val ctxEnd = (end + 91).coerceAtMost(pc.text.length)
+            val context = pc.text.substring(ctxStart, ctxEnd)
+            out += snippet(context, needle, start - ctxStart, boxes)
         }
+        return out
     }
 
     suspend fun links(index: Int): List<PageLink> = onDoc {
@@ -571,6 +596,7 @@ class PdfSession private constructor(
     }
 
     private fun dropPages() {
+        charsCache.clear()
         textCache.values.forEach { runCatching { it.destroy() } }
         textCache.clear()
         pageCache.values.forEach { runCatching { it.destroy() } }
@@ -590,6 +616,7 @@ class PdfSession private constructor(
             throw t
         }
         textCache.remove(index)?.let { runCatching { it.destroy() } }
+        charsCache.remove(index)
         refreshFlags()
         dirty = true
         true
@@ -670,8 +697,6 @@ private fun Quad.box(): Box {
     val r = toRect()
     return Box(r.x0, r.y0, r.x1, r.y1)
 }
-
-private const val SEARCH_FLAGS = StructuredText.SEARCH_IGNORE_CASE or StructuredText.SEARCH_IGNORE_DIACRITICS
 
 private val TEXT_MARKS = setOf(MarkKind.HIGHLIGHT, MarkKind.UNDERLINE, MarkKind.STRIKE, MarkKind.SQUIGGLY)
 

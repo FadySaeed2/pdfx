@@ -122,7 +122,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true --stacktrace; s=$?; mkdir -p out/device; adb exec-out run-as com.fadysaeed.pdfx tar c -C files shots > out/device/shots.tar || true; exit $s
+          script: ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true --stacktrace; s=$?; mkdir -p out/device; adb exec-out run-as com.fadysaeed.pdfx tar c -C files shots > out/device/shots.tar || true; adb logcat -d -b crash > out/device/crash.txt || true; adb logcat -d -v brief AndroidRuntime:E DEBUG:I libc:F *:S > out/device/logcat.txt || true; exit $s
 
       - name: Collect device results
         if: always()
