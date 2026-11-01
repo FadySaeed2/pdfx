@@ -106,6 +106,11 @@ data class Para(
     /** For a picture: where it sits on the page (the text is then empty). */
     val figure: Box? = null,
     val marker: String = "",
+    /** For a table: its cells, row by row; [tableHeader] when the first row is the header. */
+    val table: List<List<String>>? = null,
+    val tableHeader: Boolean = false,
+    /** Where the table sits on the page, to show it as a picture too. */
+    val tableBox: Box? = null,
 )
 
 /** A stroke of ink: points in PDF points. */
@@ -359,8 +364,15 @@ class PdfSession private constructor(
         val w = FlowWalker()
         val st = page(index).toStructuredText("preserve-images")
         try { st.walk(w) } finally { runCatching { st.destroy() } }
+        // A second look for tables: the engine finds grids and their cells.
+        val tables = runCatching {
+            val tw = TableWalker()
+            val ts = page(index).toStructuredText("vectors,segment,table-hunt,accurate-bboxes")
+            try { ts.walk(tw) } finally { runCatching { ts.destroy() } }
+            tw.tables.filter { it.box.width > 40f && it.box.height > 20f }
+        }.getOrDefault(emptyList())
         val near = ((index - 2)..(index + 2)).filter { it != index && it in 0 until pageCount }.flatMap { bandLines(it) }.toSet()
-        buildParas(w.blocks, sizeNow(index).height, near)
+        buildParas(mergeTables(w.blocks, tables), sizeNow(index).height, near)
     }
 
     /**

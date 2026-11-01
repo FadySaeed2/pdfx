@@ -136,6 +136,8 @@ class Reader(
     /** A thin line with the page number where each page starts. */
     var reflowPageMarks by mutableStateOf(prefs?.getBoolean("reflow_page_marks", true) ?: true)
         private set
+    /** A picture or table from reflowed text opened full screen to zoom: its page and place. */
+    var zoomFigure by mutableStateOf<Pair<Int, Box>?>(null)
     /** Pictures cut from pages for reflowed text, by page, place and width. */
     val figures = mutableStateMapOf<String, androidx.compose.ui.graphics.ImageBitmap>()
     private val figureOrder = ArrayDeque<String>()

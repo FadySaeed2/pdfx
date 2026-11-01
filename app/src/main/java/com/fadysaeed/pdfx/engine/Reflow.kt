@@ -15,8 +15,114 @@ data class Span(val start: Int, val end: Int, val bold: Boolean, val italic: Boo
 /** One line of a page as the engine read it, with the style of each character. */
 internal class RawLine(val text: String, val bold: BooleanArray, val italic: BooleanArray, val size: Float, val y0: Float, val y1: Float)
 
-/** A block of a page: lines of text, or a picture. */
-internal class RawBlock(val box: Box, val lines: List<RawLine>, val image: Boolean)
+/** A block of a page: lines of text, a picture, or a table found on the page. */
+internal class RawBlock(val box: Box, val lines: List<RawLine>, val image: Boolean, val table: RawTable? = null)
+
+/** A table the engine found: its outline and its cells, row by row, each with its text and whether it is bold. */
+internal class RawTable(val box: Box, val rows: List<List<Pair<String, Boolean>>>)
+
+/**
+ * Walks a page analysed for tables and keeps just the tables: rows and cells with their words.
+ * The engine marks them as Table, TR and TD (or TH) inside the page's structure.
+ */
+internal class TableWalker : StructuredTextWalker {
+    val tables = ArrayList<RawTable>()
+    private val stack = ArrayList<String>()
+    private var rows: ArrayList<ArrayList<Pair<String, Boolean>>>? = null
+    private var cell: StringBuilder? = null
+    private var cellBold = 0
+    private var cellChars = 0
+    private var x0 = Float.MAX_VALUE; private var y0 = Float.MAX_VALUE; private var x1 = -Float.MAX_VALUE; private var y1 = -Float.MAX_VALUE
+    private var lastFont: Font? = null
+    private var lastBold = false
+
+    override fun beginStruct(standard: String?, raw: String?, index: Int) {
+        val kind = standard ?: ""
+        stack += kind
+        when (kind) {
+            "Table" -> if (rows == null) { rows = ArrayList(); x0 = Float.MAX_VALUE; y0 = Float.MAX_VALUE; x1 = -Float.MAX_VALUE; y1 = -Float.MAX_VALUE }
+            "TR" -> rows?.add(ArrayList())
+            "TD", "TH" -> if (rows != null) { cell = StringBuilder(); cellBold = 0; cellChars = 0 }
+        }
+    }
+
+    override fun endStruct() {
+        val kind = stack.removeLastOrNull() ?: return
+        when (kind) {
+            "TD", "TH" -> {
+                val c = cell
+                if (c != null) {
+                    val t = c.toString().replace(Regex("\\s+"), " ").trim()
+                    if (rows?.isEmpty() == true) rows?.add(ArrayList())
+                    rows?.lastOrNull()?.add(t to (cellChars > 0 && cellBold * 10 >= cellChars * 8 || kind == "TH"))
+                }
+                cell = null
+            }
+            "Table" -> if ("Table" !in stack) {
+                val r = rows
+                if (r != null && x1 > x0) tables += RawTable(Box(x0, y0, x1, y1), r.filter { it.isNotEmpty() })
+                rows = null
+            }
+        }
+    }
+
+    override fun beginTextBlock(bbox: Rect, flags: Int) {
+        if (rows != null) { x0 = minOf(x0, bbox.x0); y0 = minOf(y0, bbox.y0); x1 = maxOf(x1, bbox.x1); y1 = maxOf(y1, bbox.y1) }
+    }
+    override fun endTextBlock() {}
+    override fun beginLine(bbox: Rect, wmode: Int, dir: Point?) { cell?.let { if (it.isNotEmpty()) it.append(' ') } }
+    override fun endLine() {}
+    override fun onChar(c: Int, origin: Point?, font: Font?, size: Float, q: Quad?, argb: Int, flags: Int, bidi: Int) {
+        val b = cell ?: return
+        b.appendCodePoint(c)
+        if (font !== lastFont) { lastFont = font; lastBold = runCatching { font?.isBold == true }.getOrDefault(false) }
+        if (!Character.isWhitespace(c)) { cellChars++; if (lastBold || (flags and StructuredText.CHAR_FLAGS_BOLD) != 0) cellBold++ }
+    }
+    override fun onImageBlock(bbox: Rect, transform: Matrix?, image: Image?) {}
+    override fun onVector(bbox: Rect?, info: StructuredTextWalker.VectorInfo?, argb: Int) {}
+}
+
+/**
+ * Puts the tables found on a page in place of the plain text blocks they cover. A table is
+ * kept as rows and cells only when it is clean (a real grid that holds all its words); otherwise
+ * it is shown as a picture of that part of the page, so no number ever lands in the wrong cell.
+ */
+internal fun mergeTables(blocks: List<RawBlock>, tables: List<RawTable>): List<RawBlock> {
+    if (tables.isEmpty()) return blocks
+    val coveredChars = HashMap<RawTable, Int>()
+    val out = ArrayList<RawBlock>()
+    val placed = HashSet<RawTable>()
+    for (b in blocks) {
+        val t = if (b.image) null else tables.firstOrNull { t ->
+            val cx = (b.box.x0 + b.box.x1) / 2
+            val cy = (b.box.y0 + b.box.y1) / 2
+            cx >= t.box.x0 - 2f && cx <= t.box.x1 + 2f && cy >= t.box.y0 - 2f && cy <= t.box.y1 + 2f
+        }
+        if (t == null) { out += b; continue }
+        if (placed.add(t)) out += RawBlock(t.box, emptyList(), false, t)
+        // The covered block's words are now in the table's cells.
+        val prev = coveredChars[t] ?: 0
+        coveredChars[t] = prev + b.lines.sumOf { l -> l.text.count { !it.isWhitespace() } }
+    }
+    val result = out.map { b ->
+        val t = b.table ?: return@map b
+        if (isClean(t, coveredChars[t] ?: 0)) b else RawBlock(t.box, emptyList(), true, null)
+    }
+    return result
+}
+
+/** A grid of at least 2 by 2, every row the same width, mostly filled, holding (nearly) all the words it covers. */
+internal fun isClean(t: RawTable, covered: Int): Boolean {
+    val rows = t.rows
+    if (rows.size < 2) return false
+    val cols = rows[0].size
+    if (cols < 2 || rows.any { it.size != cols }) return false
+    val cells = rows.flatten()
+    if (cells.count { it.first.isNotBlank() } * 10 < cells.size * 5) return false
+    val inCells = cells.sumOf { c -> c.first.count { !it.isWhitespace() } }
+    if (covered > 0 && (inCells * 10 < covered * 9 || inCells * 10 > covered * 11)) return false
+    return true
+}
 
 /** Walks a page's text keeping what plain text loses: fonts (bold, italic), sizes, and where pictures are. */
 internal class FlowWalker : StructuredTextWalker {
@@ -104,6 +210,12 @@ internal fun buildParas(blocks: List<RawBlock>, pageHeight: Float, nearBands: Se
 
     val out = ArrayList<Para>()
     for (b in blocks) {
+        if (b.table != null) {
+            val rows = b.table.rows.map { r -> r.map { it.first } }
+            val header = b.table.rows[0].all { it.second || it.first.isBlank() } && b.table.rows[0].any { it.second }
+            out += Para("", table = rows, tableHeader = header, figure = null, tableBox = b.box)
+            continue
+        }
         if (b.image) {
             if (b.box.width >= 50f && b.box.height >= 36f) out += Para("", figure = b.box)
             continue
@@ -178,7 +290,7 @@ private fun joinLines(lines: List<RawLine>, body: Float): Para {
 /** Whether the last paragraph of one page runs on into the first paragraph of the next. */
 internal fun runsOn(last: Para?, first: Para?): Boolean {
     if (last == null || first == null) return false
-    if (last.figure != null || first.figure != null || last.level > 0 || first.level > 0 || first.list) return false
+    if (last.figure != null || first.figure != null || last.table != null || first.table != null || last.level > 0 || first.level > 0 || first.list) return false
     if (ENDS_SENTENCE.containsMatchIn(last.text)) return false
     val c = first.text.firstOrNull { !it.isWhitespace() } ?: return false
     return c.isLowerCase() || (Character.getDirectionality(c) == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC)

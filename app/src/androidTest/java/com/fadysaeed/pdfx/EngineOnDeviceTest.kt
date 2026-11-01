@@ -151,6 +151,58 @@ class EngineOnDeviceTest {
         session.close()
     }
 
+    /** A page with a ruled table of drugs, doses and checks, between two paragraphs. */
+    private fun tablePdf(): File {
+        val out = File(ctx.cacheDir, "table.pdf")
+        val doc = PdfDocument()
+        val page = doc.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())
+        val c = page.canvas
+        val body = Paint().apply { isAntiAlias = true; textSize = 12f; color = Color.BLACK }
+        val bold = Paint(body).apply { isFakeBoldText = true }
+        val rule = Paint().apply { color = Color.BLACK; strokeWidth = 0.8f; style = Paint.Style.STROKE }
+        c.drawText("Mood stabilisers are monitored as shown in the table below.", 56f, 100f, body)
+        val rows = listOf(listOf("Drug", "Dose", "Check"), listOf("Lithium", "400 mg", "Level at 12 h"), listOf("Valproate", "500 mg", "Liver tests"), listOf("Lamotrigine", "25 mg", "Rash"))
+        val xs = listOf(56f, 206f, 336f, 520f)
+        val top = 130f
+        val h = 24f
+        rows.forEachIndexed { r, cells ->
+            cells.forEachIndexed { k, t -> c.drawText(t, xs[k] + 6f, top + r * h + 16f, if (r == 0) bold else body) }
+        }
+        for (r in 0..rows.size) c.drawLine(xs.first(), top + r * h, xs.last(), top + r * h, rule)
+        for (x in xs) c.drawLine(x, top, x, top + rows.size * h, rule)
+        c.drawText("Check levels again after any change in dose.", 56f, top + rows.size * h + 40f, body)
+        doc.finishPage(page)
+        FileOutputStream(out).use { doc.writeTo(it) }
+        doc.close()
+        return out
+    }
+
+    @Test
+    fun tablesStayTables() = runBlocking<Unit> {
+        val s = PdfSession.open(ctx, Uri.fromFile(tablePdf()))
+        try {
+            val paras = s.paragraphs(0)
+            val table = paras.firstOrNull { it.table != null }
+            File(shots, "table_result.txt").writeText(paras.joinToString("\n") { p ->
+                when {
+                    p.table != null -> "TABLE header=${p.tableHeader} " + p.table!!.joinToString(" | ") { it.joinToString(" ; ") }
+                    p.figure != null -> "FIGURE ${p.figure}"
+                    else -> "PARA ${p.text}"
+                }
+            })
+            // Either a clean table or a picture of it: never cells run together as a paragraph.
+            assertTrue("table cells leaked into text: ${paras.map { it.text }}", paras.none { it.table == null && it.figure == null && it.text.contains("Valproate") })
+            assertTrue("the paragraphs around the table stay", paras.any { it.text.contains("monitored") } && paras.any { it.text.contains("after any change") })
+            assertTrue("a table or its picture is there", table != null || paras.any { it.figure != null })
+            if (table != null) {
+                assertEquals(4, table.table!!.size)
+                assertEquals(listOf("Lithium", "400 mg", "Level at 12 h"), table.table!![1])
+            }
+        } finally {
+            s.close()
+        }
+    }
+
     @Test
     fun selectsCopiesAndDrawsRegions() = runBlocking {
         val file = samplePdf(2)

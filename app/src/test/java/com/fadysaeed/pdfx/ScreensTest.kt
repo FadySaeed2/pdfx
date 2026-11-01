@@ -234,6 +234,7 @@ class ScreensTest {
                 Para("Monitoring", 2),
                 Para("Check levels 12 hours after the last dose, weekly after each change until stable, then every three months for the first year."),
                 Para("يُفضَّل قياس مستوى الليثيوم بعد ١٢ ساعة من آخر جرعة، ومتابعة وظائف الكلى والغدة الدرقية كل ستة أشهر."),
+                Para("", table = listOf(listOf("Drug", "Dose", "Check"), listOf("Lithium", "400 mg", "Level at 12 h"), listOf("Valproate", "500 mg", "Liver tests"), listOf("ليثيوم", "٤٠٠ مجم", "مستوى الدم")), tableHeader = true, tableBox = Box(56f, 130f, 520f, 226f)),
                 Para("Check sodium and creatinine before starting.", list = true, marker = "•"),
                 Para("Avoid NSAIDs where possible, and warn about dehydration.", list = true, marker = "•"),
                 Para("Stopping lithium abruptly raises the risk of relapse; taper over at least four weeks.", spans = listOf(Span(0, 17, bold = true, italic = false), Span(54, 84, bold = false, italic = true))),
@@ -385,6 +386,17 @@ class ScreensTest {
         assertTrue(com.fadysaeed.pdfx.engine.runsOn(Para("and the dose was"), Para("halved after a week.")))
         assertTrue(!com.fadysaeed.pdfx.engine.runsOn(Para("The dose was halved."), Para("after a week.")))
         assertEquals("and the dose was halved.", com.fadysaeed.pdfx.engine.joinParas(Para("and the dose was"), Para("halved.")).text)
+        // Tables: a clean grid stays a table, a ragged one becomes a picture.
+        val grid = com.fadysaeed.pdfx.engine.RawTable(Box(50f, 500f, 500f, 600f), listOf(listOf("A" to true, "B" to true), listOf("1" to false, "2" to false)))
+        val inside = block(520f, line("A B 1 2", y = 520f))
+        val merged = com.fadysaeed.pdfx.engine.mergeTables(listOf(block(450f, line("Before", y = 450f)), inside), listOf(grid))
+        assertEquals(2, merged.size)
+        assertTrue(merged[1].table != null)
+        val ragged = com.fadysaeed.pdfx.engine.RawTable(Box(50f, 500f, 500f, 600f), listOf(listOf("A" to true, "B" to true), listOf("1 2" to false)))
+        val asPicture = com.fadysaeed.pdfx.engine.mergeTables(listOf(inside), listOf(ragged))
+        assertTrue(asPicture[0].image && asPicture[0].table == null)
+        val tp = com.fadysaeed.pdfx.engine.buildParas(merged, 842f, emptySet())
+        assertTrue(tp.any { it.table != null && it.tableHeader })
         // Text box style survives being written and read back.
         val st = com.fadysaeed.pdfx.engine.BoxStyle(font = com.fadysaeed.pdfx.engine.BoxFont.SERIF, size = 18f, bold = true, underline = true, align = com.fadysaeed.pdfx.engine.BoxAlign.CENTER, color = 0xFF2F6FED.toInt(), spacing = 2)
         val back = com.fadysaeed.pdfx.engine.BoxStyle.parse(st.css("hello"), "hello", 12f, 0, null, false, false)

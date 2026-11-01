@@ -111,6 +111,7 @@ import com.fadysaeed.pdfx.engine.BoxSpacings
 import com.fadysaeed.pdfx.engine.BoxStyle
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -516,6 +517,7 @@ fun ViewerContent(
 
     reader.textAsk?.let { ask -> WordsAsk(ask, onDismiss = { reader.textAsk = null }, onDone = reader::submitText) }
     reader.colorPick?.let { pick -> ColorPickerDialog(pick.initial, reader.customColors, onDismiss = { reader.colorPick = null }) { c -> reader.applyPicked(pick, c) } }
+    reader.zoomFigure?.let { (pg, bx) -> FigureViewer(reader, pg, bx) { reader.zoomFigure = null } }
     reader.boxEdit?.let { e ->
         BoxEditor(e.mark?.note ?: "", e.mark?.style ?: reader.boxStyle, isNew = e.mark == null, recent = reader.customColors, onDismiss = { reader.boxEdit = null }) { t, st -> reader.submitBox(e, t, st) }
     }
@@ -889,9 +891,21 @@ private fun ReflowView(reader: Reader, listState: LazyListState, padding: Paddin
                                         val img = reader.figures[reader.figureKey(i, fig, wPx)]
                                         val aspect = (fig.width / fig.height.coerceAtLeast(1f)).coerceIn(0.2f, 6f)
                                         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                            Box(Modifier.fillMaxWidth(frac).aspectRatio(aspect).background(ink.copy(alpha = 0.05f))) {
+                                            Box(Modifier.fillMaxWidth(frac).aspectRatio(aspect).background(ink.copy(alpha = 0.05f)).clickable { reader.zoomFigure = i to fig }) {
                                                 if (img != null) androidx.compose.foundation.Image(img, null, Modifier.fillMaxSize(), colorFilter = filter)
                                             }
+                                        }
+                                        return@forEach
+                                    }
+                                    val rows = p.table
+                                    if (rows != null) {
+                                        ReflowTable(rows, p.tableHeader, size, ink, latin, query, mark)
+                                        val tb = p.tableBox
+                                        if (tb != null) DisableSelection {
+                                            Text(
+                                                "See this table as on the page", style = Type.small.copy(color = ink.copy(alpha = 0.55f), textDecoration = TextDecoration.Underline),
+                                                modifier = Modifier.clickable { reader.zoomFigure = i to tb }.padding(vertical = 4.dp),
+                                            )
                                         }
                                         return@forEach
                                     }
@@ -924,6 +938,85 @@ private fun ReflowView(reader: Reader, listState: LazyListState, padding: Paddin
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * A table from the page as a real table: the same columns left to right as on the page (whatever
+ * the language), cells that wrap, a bold header row, thin rules, and sideways scrolling when it is
+ * wider than the screen.
+ */
+@Composable
+private fun ReflowTable(rows: List<List<String>>, header: Boolean, size: Int, ink: Color, latin: androidx.compose.ui.text.font.FontFamily, query: String?, mark: Color) {
+    val cols = rows.maxOf { it.size }
+    val cell = size * 0.82f
+    val widths = (0 until cols).map { c ->
+        val longest = rows.maxOf { r -> r.getOrNull(c)?.length ?: 0 }
+        val chars = longest.coerceIn(5, 24)
+        (chars * cell * 0.56f + 18f).dp
+    }
+    val rule = ink.copy(alpha = 0.22f)
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
+        Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            Column(Modifier.border(1.dp, rule)) {
+                rows.forEachIndexed { ri, r ->
+                    val head = header && ri == 0
+                    Row(Modifier.height(androidx.compose.foundation.layout.IntrinsicSize.Min).background(if (head) ink.copy(alpha = 0.07f) else Color.Transparent)) {
+                        (0 until cols).forEach { c ->
+                            val t = r.getOrNull(c) ?: ""
+                            Box(Modifier.width(widths[c]).fillMaxHeight().border(0.5.dp, rule).padding(horizontal = 8.dp, vertical = 6.dp)) {
+                                Text(
+                                    styled(com.fadysaeed.pdfx.engine.Para(t), query, mark),
+                                    style = TextStyle(
+                                        fontFamily = if (isArabic(t)) PlexArabic else latin,
+                                        fontWeight = if (head) FontWeight.SemiBold else FontWeight.Normal,
+                                        fontSize = cell.sp, lineHeight = (cell * 1.35f).sp, color = ink,
+                                        textDirection = TextDirection.Content,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A picture or table from the page, full screen: pinch to zoom, drag to look around, double tap to reset. */
+@Composable
+internal fun FigureViewer(reader: Reader, page: Int, box: com.fadysaeed.pdfx.engine.Box, onClose: () -> Unit) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(Ink.Black)) {
+            val wPx = (constraints.maxWidth * 2).coerceAtMost(3200)
+            LaunchedEffect(page, box, wPx) { reader.loadFigure(page, box, wPx) }
+            val img = reader.figures[reader.figureKey(page, box, wPx)]
+            var scale by remember { mutableFloatStateOf(1f) }
+            var shift by remember { mutableStateOf(Offset.Zero) }
+            val filter = remember(reader.mode) { pageFilter(reader.mode)?.let { androidx.compose.ui.graphics.ColorFilter.colorMatrix(it) } }
+            Box(
+                Modifier.fillMaxSize()
+                    .pointerInput(Unit) {
+                        androidx.compose.foundation.gestures.detectTransformGestures { _, pan, zoom, _ ->
+                            scale = (scale * zoom).coerceIn(1f, 6f)
+                            shift = if (scale == 1f) Offset.Zero else shift + pan
+                        }
+                    }
+                    .pointerInput(Unit) { detectTapGestures(onDoubleTap = { scale = 1f; shift = Offset.Zero }) },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (img != null) {
+                    androidx.compose.foundation.Image(
+                        img, contentDescription = "Picture from page ${page + 1}", colorFilter = filter,
+                        modifier = Modifier.fillMaxWidth().aspectRatio((box.width / box.height.coerceAtLeast(1f)).coerceIn(0.1f, 10f))
+                            .graphicsLayer { scaleX = scale; scaleY = scale; translationX = shift.x; translationY = shift.y },
+                    )
+                } else {
+                    Text("Drawing…", style = Type.note)
+                }
+            }
+            IconButton(Glyph.CLOSE, "Close", onClose, color = Ink.Bone, modifier = Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.statusBars).padding(8.dp))
         }
     }
 }
