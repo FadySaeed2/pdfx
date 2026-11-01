@@ -122,8 +122,13 @@ class Library(
         return d.copy(id = dao.insert(d))
     }
 
+    /**
+     * Callers are already off the main thread. It must stay on the calling thread: inside a scan
+     * it runs within a Room transaction, and touching the database from another thread there
+     * would wait for the transaction forever.
+     */
     private suspend fun forgetNow(d: Doc) {
-        withContext(Dispatchers.IO) { text.clear(d.id) }
+        text.clear(d.id)
         dao.untagDoc(d.id)
         dao.delete(d)
     }
