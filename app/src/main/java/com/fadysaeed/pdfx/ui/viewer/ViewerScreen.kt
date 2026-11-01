@@ -113,6 +113,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -228,6 +232,10 @@ fun ViewerScreen(request: OpenRequest, onClose: (message: String?) -> Unit) {
             val prefs = remember { context.getSharedPreferences("reader", Context.MODE_PRIVATE) }
             val reader = remember(session) { Reader(session, session.pageCount, scope, library.bookmarks, doc?.id, prefs) }
             val pages = reader.pages!!
+            LaunchedEffect(reader) {
+                val saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.signatures.list() }.getOrDefault(emptyList()) }
+                reader.signs.clear(); reader.signs.addAll(saved)
+            }
             LaunchedEffect(request, doc?.id) {
                 doc?.let { library.recordOpen(it.id, session.pageCount, locked = false) }
             }
@@ -473,7 +481,7 @@ fun ViewerContent(
 
         val sel = reader.selection
         Column(
-            Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars).padding(bottom = 16.dp),
+            Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars).imePadding().padding(bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             val msg = flash
@@ -494,7 +502,10 @@ fun ViewerContent(
                 Spacer(Modifier.height(10.dp))
             }
             val picked = reader.selectedMark
-            if (picked != null) {
+            val field = reader.editingField
+            if (field != null) {
+                FieldPanel(field, reader)
+            } else if (picked != null) {
                 MarkBar(picked, reader)
             } else if (reader.marking) {
                 MarkupBar(reader)
@@ -502,14 +513,23 @@ fun ViewerContent(
                 Unit
             } else {
                 AnimatedVisibility(showBars, enter = fadeIn(), exit = fadeOut()) {
-                    Box(
-                        Modifier
-                            .background(Ink.Black, Corner)
-                            .border(1.dp, Ink.Edge, Corner)
-                            .clickable { askPage = true }
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                    ) {
-                        Text("${current + 1} / $pageCount", style = Type.figure)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .background(Ink.Black, Corner)
+                                .border(1.dp, Ink.Edge, Corner)
+                                .clickable { askPage = true }
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                        ) {
+                            Text("${current + 1} / $pageCount", style = Type.figure)
+                        }
+                        if (reader.hasForm && !reader.reflow) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "Fill form", style = Type.bodyStrong.copy(color = Ink.Black, fontSize = 14.sp),
+                                modifier = Modifier.background(Ink.Amber, Corner).clickable { reader.startFilling() }.padding(horizontal = 14.dp, vertical = 8.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -519,6 +539,18 @@ fun ViewerContent(
     reader.textAsk?.let { ask -> WordsAsk(ask, onDismiss = { reader.textAsk = null }, onDone = reader::submitText) }
     reader.colorPick?.let { pick -> ColorPickerDialog(pick.initial, reader.customColors, onDismiss = { reader.colorPick = null }) { c -> reader.applyPicked(pick, c) } }
     reader.zoomFigure?.let { (pg, bx) -> FigureViewer(reader, pg, bx) { reader.zoomFigure = null } }
+    reader.signPad?.let { initials -> SignPadHost(reader, initials) }
+    if (reader.stampAsk) StampAsk(onDismiss = { reader.stampAsk = false }) { k -> reader.stampAsk = false; reader.addStamp(k) }
+    reader.deleteSignAsk?.let { sg ->
+        AlertDialog(
+            onDismissRequest = { reader.deleteSignAsk = null },
+            containerColor = Ink.Field, shape = RectangleShape,
+            title = { Text(if (sg.initials) "Delete these initials?" else "Delete this signature?", style = Type.title) },
+            text = { Text("It is removed from this phone. Files you have already signed keep it.", style = Type.note) },
+            confirmButton = { AmberButton("Delete", { reader.deleteSignAsk = null; reader.deleteSign(sg, (context.applicationContext as PdfxApp).signatures) }) },
+            dismissButton = { GhostButton("Keep", { reader.deleteSignAsk = null }, minHeight = 52.dp) },
+        )
+    }
     reader.boxEdit?.let { e ->
         BoxEditor(e.mark?.note ?: "", e.mark?.style ?: reader.boxStyle, isNew = e.mark == null, recent = reader.customColors, onDismiss = { reader.boxEdit = null }) { t, st -> reader.submitBox(e, t, st) }
     }
@@ -1097,6 +1129,21 @@ private fun MarkupBar(reader: Reader) {
                     Text("A tap on handwriting picks", style = Type.small)
                     InkScope.entries.forEach { sc -> Chip(sc.label, { reader.pickInkScope(sc) }, selected = reader.inkScope == sc) }
                 }
+                Tool.SIGN -> {
+                    reader.signs.forEach { sg -> SignThumb(sg, reader.signId == sg.id || (reader.signId == null && sg == reader.signs.first()), { reader.pickSign(sg.id) }, { reader.deleteSignAsk = sg }) }
+                    Chip("New signature", { reader.signPad = false })
+                    Chip("New initials", { reader.signPad = true })
+                    Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
+                    Chip("With date", { reader.pickSignWithDate(!reader.signWithDate) }, selected = reader.signWithDate)
+                    if (reader.signWithDate) DateStyleChips(reader)
+                }
+                Tool.STAMP -> {
+                    (StandardStamps + reader.customStamps).forEach { k -> StampChip(k, reader.stamp == k) { reader.pickStamp(k) } }
+                    Chip("New stamp", { reader.stampAsk = true })
+                    Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
+                    Chip("With date", { reader.pickStampWithDate(!reader.stampWithDate) }, selected = reader.stampWithDate)
+                    if (reader.stampWithDate) DateStyleChips(reader)
+                }
                 else -> {
                     val colors = if (reader.usesPenColors(t)) PenColors else MarkColors
                     (colors + reader.customColors.filter { it !in colors }).forEach { c -> Swatch(c, reader.colorFor(t) == c) { reader.pickColor(c) } }
@@ -1105,7 +1152,11 @@ private fun MarkupBar(reader: Reader) {
                         Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
                         StrengthLabels.forEachIndexed { i, l -> Chip(l, { reader.pickStrength(i) }, selected = reader.strength == i) }
                     }
-                    if (t == Tool.PEN || t == Tool.SHAPE || t == Tool.MARKER || t == Tool.TEXT) {
+                    if (t == Tool.DATE) {
+                        Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
+                        DateStyleChips(reader)
+                    }
+                    if (t == Tool.PEN || t == Tool.SHAPE || t == Tool.MARKER || t == Tool.TEXT || t == Tool.TICK || t == Tool.CROSS || t == Tool.DOT) {
                         Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
                         listOf(0, 1, 2).forEach { step ->
                             val sel = reader.widthStep == step
@@ -1131,6 +1182,12 @@ private fun MarkupBar(reader: Reader) {
             Tool.SHAPE -> "Drag from one corner to the other."
             Tool.TEXT -> "Tap where the text should start."
             Tool.SELECT -> "Draw a loop round marks to pick them all, or tap one."
+            Tool.SIGN -> if (reader.signs.isEmpty()) "Make a signature first: New signature." else "Tap where the signature goes. Then drag or resize it."
+            Tool.STAMP -> "Tap where the stamp goes."
+            Tool.TICK -> "Tap to put a tick."
+            Tool.CROSS -> "Tap to put a cross."
+            Tool.DOT -> "Tap to put a dot."
+            Tool.DATE -> "Tap where today's date goes."
             Tool.NOTE -> "Tap where the note should sit."
             Tool.ERASER -> null
         }
@@ -1600,6 +1657,256 @@ private fun StyleToggle(description: String, on: Boolean, onClick: () -> Unit, c
             .clickable(onClick = onClick).semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) { content(if (on) Ink.Black else Ink.Sand) }
+}
+
+/** The three date styles, written out for today so the choice is plain. */
+@Composable
+private fun DateStyleChips(reader: Reader) {
+    com.fadysaeed.pdfx.engine.DatePatterns.forEachIndexed { i, p -> Chip(com.fadysaeed.pdfx.engine.formatToday(p), { reader.pickDateStyle(i) }, selected = reader.dateStyle == i) }
+}
+
+/** A saved signature drawn small, to pick; a long press offers to delete it. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+internal fun SignThumb(sg: com.fadysaeed.pdfx.data.SavedSign, selected: Boolean, onPick: () -> Unit, onLongPress: () -> Unit) {
+    val w = if (sg.initials) 56.dp else 104.dp
+    Box(
+        Modifier.width(w).height(44.dp).background(Ink.Paper, Corner).border(2.dp, if (selected) Ink.Amber else Ink.Edge, Corner)
+            .combinedClickable(onClick = onPick, onLongClick = onLongPress).padding(5.dp)
+            .semantics { contentDescription = if (sg.initials) "Initials" else "Signature" },
+        contentAlignment = Alignment.Center,
+    ) {
+        val img = remember(sg.image) { sg.image?.let { runCatching { android.graphics.BitmapFactory.decodeFile(it)?.asImageBitmap() }.getOrNull() } }
+        if (img != null) {
+            androidx.compose.foundation.Image(img, null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Fit)
+        } else {
+            Canvas(Modifier.fillMaxSize()) {
+                val k = minOf(size.width, size.height * sg.aspect)
+                val ox = (size.width - k) / 2
+                val oy = (size.height - k / sg.aspect) / 2
+                sg.strokes.forEach { st ->
+                    if (st.size < 2) return@forEach
+                    val path = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(ox + st[0].first * k, oy + st[0].second * k)
+                        st.drop(1).forEach { lineTo(ox + it.first * k, oy + it.second * k) }
+                    }
+                    drawPath(path, Color(sg.color), style = Stroke(width = 1.4.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                }
+            }
+        }
+    }
+}
+
+/** A stamp shown as it will look: bold capitals in a coloured frame. */
+@Composable
+private fun StampChip(k: StampKind, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.height(40.dp).background(if (selected) Ink.Paper else Ink.Black, Corner).border(if (selected) 2.dp else 1.dp, if (selected) Ink.Amber else Ink.Edge, Corner)
+            .clickable(onClick = onClick).padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            k.text, style = Type.bodyStrong.copy(color = if (selected) Color(k.color) else Color(k.color).copy(alpha = 0.9f), fontSize = 12.sp, letterSpacing = 0.06.em),
+            modifier = Modifier.border(1.5.dp, Color(k.color)).padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
+}
+
+/** Making a stamp of your own: its words and colour. */
+@Composable
+private fun StampAsk(onDismiss: () -> Unit, onDone: (StampKind) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    var color by remember { mutableStateOf(0xFFE5484D.toInt()) }
+    AlertDialog(
+        onDismissRequest = onDismiss, containerColor = Ink.Field, shape = RectangleShape,
+        title = { Text("New stamp", style = Type.title) },
+        text = {
+            Column {
+                InkField(text, { text = it.take(28) }, "Words on the stamp, e.g. SEEN BY DR SAEED")
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0xFFE5484D, 0xFF2E9E5B, 0xFF2F6FED, 0xFF6B6B6B, 0xFF1A1A1A).map { it.toInt() }.forEach { c -> Swatch(c, color == c, size = 34.dp) { color = c } }
+                }
+                if (text.isNotBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    StampChip(StampKind(text.trim().uppercase(), color), true) {}
+                }
+            }
+        },
+        confirmButton = { AmberButton("Save stamp", { onDone(StampKind(text.trim().uppercase(), color)) }, enabled = text.isNotBlank()) },
+        dismissButton = { GhostButton("Cancel", onDismiss, minHeight = 52.dp) },
+    )
+}
+
+/** Opens the signature pad and keeps what it makes; photos of a signature are cleaned up here too. */
+@Composable
+private fun SignPadHost(reader: Reader, initials: Boolean) {
+    val context = LocalContext.current
+    val app = context.applicationContext as PdfxApp
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    fun keep(sg: com.fadysaeed.pdfx.data.SavedSign?) {
+        busy = false
+        if (sg == null) { reader.problem = "No signature found in that picture. Try a darker pen on white paper."; return }
+        reader.signs.add(sg)
+        reader.pickSign(sg.id)
+        reader.signPad = null
+        reader.signField?.let { f -> reader.signField = null; reader.placeSign(f.page, 0f, 0f, into = f.box) }
+    }
+    fun fromPhoto(uri: Uri?) {
+        if (uri == null) return
+        busy = true
+        scope.launch { keep(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.signatures.addPhoto(context, uri, initials) }) }
+    }
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { fromPhoto(it) }
+    val photoUri = remember {
+        val f = java.io.File(context.cacheDir, "signature-photo.jpg")
+        androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".files", f)
+    }
+    val shoot = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.TakePicture()) { ok -> if (ok) fromPhoto(photoUri) }
+    SignPad(
+        initials = initials,
+        busy = busy,
+        onDismiss = { reader.signPad = null; reader.signField = null },
+        onSave = { strokes, color -> scope.launch { keep(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.signatures.addDrawn(strokes, initials, color) }) } },
+        onChoose = { pick.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+        onShoot = { runCatching { shoot.launch(photoUri) } },
+    )
+}
+
+/** A wide white pad to sign on with the pen or a finger, like signing on paper. */
+@Composable
+internal fun SignPad(initials: Boolean, busy: Boolean = false, onDismiss: () -> Unit, onSave: (List<List<Pair<Float, Float>>>, Int) -> Unit, onChoose: () -> Unit = {}, onShoot: () -> Unit = {}, startStrokes: List<List<Pair<Float, Float>>> = emptyList()) {
+    val strokes = remember { mutableStateListOf<List<Pair<Float, Float>>>().apply { addAll(startStrokes) } }
+    var live by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
+    var color by remember { mutableStateOf(0xFF1A1A1A.toInt()) }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(Modifier.fillMaxWidth().padding(10.dp).background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (initials) "Your initials" else "Your signature", style = Type.title, modifier = Modifier.weight(1f))
+                IconButton(Glyph.CLOSE, "Close", onDismiss, color = Ink.Dust, size = 44.dp)
+            }
+            Text("Sign with the pen or a finger. It stays on this phone.", style = Type.small)
+            Spacer(Modifier.height(10.dp))
+            Box(Modifier.fillMaxWidth().aspectRatio(if (initials) 2.2f else 2.6f).background(Color.White, Corner)) {
+                Canvas(
+                    Modifier.fillMaxSize()
+                        .pointerInput(Unit) {
+                            awaitEachGesture {
+                                val d = awaitFirstDown()
+                                val pts = arrayListOf(d.position.x to d.position.y)
+                                live = pts.toList()
+                                d.consume()
+                                do {
+                                    val e = awaitPointerEvent()
+                                    val c = e.changes.firstOrNull { it.id == d.id } ?: break
+                                    c.historical.forEach { pts += it.position.x to it.position.y }
+                                    pts += c.position.x to c.position.y
+                                    live = pts.toList()
+                                    c.consume()
+                                } while (c.pressed)
+                                if (pts.size == 1) pts += (pts[0].first + 0.5f) to (pts[0].second + 0.5f)
+                                strokes += pts.toList()
+                                live = emptyList()
+                            }
+                        },
+                ) {
+                    val base = size.height * 0.72f
+                    drawLine(Color(0xFFBDB6A8), Offset(size.width * 0.06f, base), Offset(size.width * 0.94f, base), strokeWidth = 1.dp.toPx())
+                    (strokes + listOf(live)).forEach { st ->
+                        if (st.size < 2) return@forEach
+                        val path = androidx.compose.ui.graphics.Path().apply {
+                            moveTo(st[0].first, st[0].second)
+                            st.drop(1).forEach { lineTo(it.first, it.second) }
+                        }
+                        drawPath(path, Color(color), style = Stroke(width = 2.6.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                    }
+                }
+                if (strokes.isEmpty() && live.isEmpty()) Text("Sign here", style = Type.note.copy(color = Color(0xFFBDB6A8)), modifier = Modifier.align(Alignment.Center))
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(0xFF1A1A1A, 0xFF1F3F9F).map { it.toInt() }.forEach { c -> Swatch(c, color == c, size = 36.dp) { color = c } }
+                Spacer(Modifier.weight(1f))
+                BarAction("Undo") { if (strokes.isNotEmpty()) strokes.removeAt(strokes.size - 1) }
+                BarAction("Clear") { strokes.clear() }
+            }
+            Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                BarAction("Take a photo", onShoot)
+                BarAction("Choose a photo", onChoose)
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                GhostButton("Cancel", onDismiss, minHeight = 48.dp)
+                Spacer(Modifier.width(10.dp))
+                AmberButton(if (busy) "Working…" else "Save", { onSave(strokes.toList(), color) }, enabled = strokes.isNotEmpty() && !busy)
+            }
+        }
+    }
+}
+
+/** Filling one form field: its name, a way to fill it, and Previous, Next and Done. */
+@Composable
+internal fun FieldPanel(f: com.fadysaeed.pdfx.engine.Field, reader: Reader) {
+    var text by remember(f.page, f.index) { mutableStateOf(f.value) }
+    val focus = remember { FocusRequester() }
+    fun commit() { if (f.kind == com.fadysaeed.pdfx.engine.FieldKind.TEXT) reader.fillField(f, text) }
+    Column(
+        Modifier.padding(horizontal = 12.dp).fillMaxWidth().background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(f.label, style = Type.bodyStrong, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Page ${f.page + 1}", style = Type.small)
+            }
+            IconButton(Glyph.CLOSE, "Close", { commit(); reader.closeField() }, color = Ink.Dust, size = 44.dp)
+        }
+        when (f.kind) {
+            com.fadysaeed.pdfx.engine.FieldKind.TEXT -> {
+                LaunchedEffect(f.page, f.index) { runCatching { focus.requestFocus() } }
+                BasicTextField(
+                    value = text,
+                    onValueChange = { text = if (f.maxLen > 0) it.take(f.maxLen) else it },
+                    singleLine = !f.multiline,
+                    textStyle = Type.body.copy(color = Ink.Bone, fontSize = 16.sp, textDirection = TextDirection.Content),
+                    cursorBrush = SolidColor(Ink.Amber),
+                    keyboardOptions = KeyboardOptions(imeAction = if (f.multiline) ImeAction.Default else ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { commit(); reader.moveField(f, true) }),
+                    modifier = Modifier.fillMaxWidth().padding(end = 8.dp, top = 6.dp).focusRequester(focus),
+                    decorationBox = { inner ->
+                        Box(Modifier.fillMaxWidth().heightIn(min = if (f.multiline) 88.dp else 46.dp).background(Ink.Black, Corner).border(1.dp, Ink.Edge, Corner).padding(horizontal = 12.dp, vertical = 10.dp)) {
+                            if (text.isEmpty()) Text(if (f.isDate) reader.todayFor(f) else "Type here", style = Type.body.copy(color = Ink.Ash, fontSize = 16.sp))
+                            inner()
+                        }
+                    },
+                )
+                if (f.isDate) Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Chip("Today", { text = reader.todayFor(f) })
+                    if (f.datePattern == null) DateStyleChips(reader)
+                }
+            }
+            com.fadysaeed.pdfx.engine.FieldKind.CHECKBOX -> Row(Modifier.padding(top = 6.dp)) {
+                Chip(if (f.on) "Ticked" else "Not ticked", { reader.toggleField(f) }, selected = f.on)
+            }
+            com.fadysaeed.pdfx.engine.FieldKind.RADIO -> Row(Modifier.padding(top = 6.dp)) {
+                Chip(if (f.on) "Chosen" else "Choose this", { if (!f.on) reader.toggleField(f) }, selected = f.on)
+            }
+            com.fadysaeed.pdfx.engine.FieldKind.CHOICE -> Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                f.options.forEach { o -> Chip(o, { reader.chooseField(f, o) }, selected = o == f.value) }
+            }
+            com.fadysaeed.pdfx.engine.FieldKind.SIGNATURE -> Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                reader.signs.forEach { sg -> SignThumb(sg, false, { reader.pickSign(sg.id); reader.placeSign(f.page, 0f, 0f, into = f.box); reader.closeField() }, {}) }
+                Chip("New signature", { reader.signField = f; reader.signPad = false; reader.closeField() })
+            }
+            else -> Unit
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BarAction("Previous") { commit(); reader.moveField(f, false) }
+            Spacer(Modifier.weight(1f))
+            BarAction("Next") { commit(); reader.moveField(f, true) }
+            BarAction("Done") { commit(); reader.closeField() }
+        }
+    }
 }
 
 /** Kinds of marks to filter the list by. */

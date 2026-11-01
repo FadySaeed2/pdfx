@@ -10,6 +10,7 @@ import com.artifex.mupdf.fitz.Outline
 import com.artifex.mupdf.fitz.PDFAnnotation
 import com.artifex.mupdf.fitz.PDFDocument
 import com.artifex.mupdf.fitz.PDFPage
+import com.artifex.mupdf.fitz.PDFWidget
 import com.artifex.mupdf.fitz.Page
 import com.artifex.mupdf.fitz.Rect
 import com.artifex.mupdf.fitz.Point
@@ -383,6 +384,96 @@ class PdfSession private constructor(
             if (next != null && runsOn(list.last(), next)) list = list.dropLast(1) + joinParas(list.last(), next)
         }
         list
+    }
+
+    // ------------------------------------------------------------------ forms
+
+    /** True when the file has form fields to fill. */
+    suspend fun hasForm(): Boolean = onDoc {
+        val d = pdf ?: return@onDoc false
+        runCatching { d.trailer.get("Root").get("AcroForm").get("Fields").size() > 0 }.getOrDefault(false)
+    }
+
+    private fun widgets(index: Int): Array<PDFWidget> = runCatching { pdfPage(index).widgets }.getOrNull() ?: emptyArray()
+
+    private fun fieldOf(index: Int, i: Int, w: PDFWidget): Field {
+        val r = w.bounds
+        val kind = when (w.fieldType) {
+            PDFWidget.TYPE_TEXT -> FieldKind.TEXT
+            PDFWidget.TYPE_CHECKBOX -> FieldKind.CHECKBOX
+            PDFWidget.TYPE_RADIOBUTTON -> FieldKind.RADIO
+            PDFWidget.TYPE_COMBOBOX, PDFWidget.TYPE_LISTBOX -> FieldKind.CHOICE
+            PDFWidget.TYPE_SIGNATURE -> FieldKind.SIGNATURE
+            else -> FieldKind.OTHER
+        }
+        val name = runCatching { w.name ?: "" }.getOrDefault("")
+        val value = runCatching { w.value ?: "" }.getOrDefault("")
+        // A box or button is on when its appearance state is anything but Off.
+        val on = (kind == FieldKind.CHECKBOX || kind == FieldKind.RADIO) && runCatching {
+            val st = w.getObject().get("AS")?.asName()
+            st != null && st != "Off" && st.isNotEmpty()
+        }.getOrDefault(false)
+        val js = if (kind == FieldKind.TEXT) runCatching { w.getObject().get("AA").get("F").get("JS").asString() }.getOrNull() else null
+        val pattern = dateFormatFromScript(js)
+        val isDate = kind == FieldKind.TEXT && (pattern != null || runCatching { w.textFormat == PDFWidget.TX_FORMAT_DATE }.getOrDefault(false) ||
+            Regex("date|dob|\bd\.?o\.?b\b|تاريخ", RegexOption.IGNORE_CASE).containsMatchIn(name))
+        return Field(
+            page = index, index = i, kind = kind, name = name, value = value, box = Box(r.x0, r.y0, r.x1, r.y1),
+            readOnly = runCatching { w.isReadOnly }.getOrDefault(false),
+            multiline = kind == FieldKind.TEXT && runCatching { w.isMultiline }.getOrDefault(false),
+            options = if (kind == FieldKind.CHOICE) runCatching { w.options?.toList() ?: emptyList() }.getOrDefault(emptyList()) else emptyList(),
+            on = on,
+            isDate = isDate, datePattern = pattern,
+            maxLen = if (kind == FieldKind.TEXT) runCatching { w.maxLen }.getOrDefault(0) else 0,
+        )
+    }
+
+    /** The form fields on a page, in the order the page holds them. */
+    suspend fun fields(index: Int): List<Field> = onDoc {
+        if (pdf == null) return@onDoc emptyList()
+        widgets(index).mapIndexed { i, w -> fieldOf(index, i, w) }.filter { it.kind != FieldKind.OTHER }
+    }
+
+    /** Every fillable field in the file, page by page, top to bottom: the order Next follows. */
+    suspend fun allFields(): List<Field> = onDoc {
+        if (pdf == null) return@onDoc emptyList()
+        (0 until pageCount).flatMap { p ->
+            widgets(p).mapIndexed { i, w -> fieldOf(p, i, w) }
+                .filter { it.kind != FieldKind.OTHER && !it.readOnly }
+                .sortedWith(compareBy({ (it.box.y0 / 6f).toInt() }, { it.box.x0 }))
+        }
+    }
+
+    suspend fun setFieldText(index: Int, fieldIndex: Int, text: String) = edit("Fill", index) {
+        val w = widgets(index).getOrNull(fieldIndex) ?: return@edit
+        w.setTextValue(text)
+        w.update()
+    }
+
+    /** Ticks or unticks a checkbox; picks a radio button (and clears the others in its group). */
+    suspend fun toggleField(index: Int, fieldIndex: Int) = edit("Tick", index) {
+        val w = widgets(index).getOrNull(fieldIndex) ?: return@edit
+        w.toggle()
+        w.update()
+    }
+
+    suspend fun setFieldChoice(index: Int, fieldIndex: Int, value: String) = edit("Choose", index) {
+        val w = widgets(index).getOrNull(fieldIndex) ?: return@edit
+        w.setChoiceValue(value)
+        w.update()
+    }
+
+    /** A picture (a photographed signature) placed on the page in [box]. */
+    suspend fun addImageStamp(index: Int, box: Box, imagePath: String) = edit("Signature", index) {
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_STAMP)
+        a.rect = Rect(box.x0, box.y0, box.x1, box.y1)
+        val img = com.artifex.mupdf.fitz.Image(imagePath)
+        try {
+            runCatching { a.setStampImage(img) }.getOrElse { a.setAppearance(img) }
+        } finally {
+            runCatching { img.destroy() }
+        }
+        a.update()
     }
 
     // ------------------------------------------------------------------ marks (annotations)

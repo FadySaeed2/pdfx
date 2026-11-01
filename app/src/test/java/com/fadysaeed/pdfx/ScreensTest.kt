@@ -425,6 +425,65 @@ class ScreensTest {
         assertEquals(com.fadysaeed.pdfx.engine.BoxAlign.RIGHT, ar.alignFor("مرحبا"))
     }
 
+    private val formFields = listOf(
+        com.fadysaeed.pdfx.engine.Field(0, 0, com.fadysaeed.pdfx.engine.FieldKind.TEXT, "full_name", "Fady Saeed", Box(170f, 100f, 520f, 120f)),
+        com.fadysaeed.pdfx.engine.Field(0, 1, com.fadysaeed.pdfx.engine.FieldKind.TEXT, "date_of_birth", "", Box(170f, 130f, 320f, 150f), isDate = true, datePattern = "dd/MM/yyyy"),
+        com.fadysaeed.pdfx.engine.Field(0, 2, com.fadysaeed.pdfx.engine.FieldKind.CHECKBOX, "consent", "Yes", Box(170f, 270f, 186f, 286f), on = true),
+        com.fadysaeed.pdfx.engine.Field(0, 3, com.fadysaeed.pdfx.engine.FieldKind.CHOICE, "clinic", "Armadale", Box(170f, 330f, 360f, 350f), options = listOf("Armadale", "Fremantle", "Joondalup")),
+    )
+
+    @Test fun formFilling() = viewerShot("25_form.png") { r ->
+        r.chrome = false
+        r.showFieldsForTest(0, formFields, editing = formFields[1])
+    }
+
+    private val drawnSign = com.fadysaeed.pdfx.data.SavedSign(
+        "a", false,
+        listOf(listOf(0f to 0.25f, 0.1f to 0.05f, 0.18f to 0.3f, 0.3f to 0.1f, 0.45f to 0.28f, 0.62f to 0.12f, 0.8f to 0.26f, 1f to 0.15f), listOf(0.2f to 0.33f, 0.9f to 0.3f)),
+        3f, 0xFF1F3F9F.toInt(),
+    )
+
+    @Test fun signTools() = viewerShot("26_sign_tools.png") { r ->
+        r.setSignsForTest(listOf(drawnSign, drawnSign.copy(id = "b", initials = true, aspect = 1.6f, color = 0xFF1A1A1A.toInt())))
+        r.pickSignWithDate(true)
+        r.showMarking(Tool.SIGN, null)
+    }
+
+    @Test fun stampTools() = viewerShot("27_stamp_tools.png") { r -> r.showMarking(Tool.STAMP, null) }
+
+    @Test
+    fun signPad() {
+        compose.setContent {
+            PdfxTheme {
+                com.fadysaeed.pdfx.ui.viewer.SignPad(
+                    initials = false, onDismiss = {}, onSave = { _, _ -> },
+                    startStrokes = listOf(listOf(60f to 220f, 120f to 120f, 170f to 240f, 240f to 140f, 330f to 230f, 430f to 150f, 560f to 210f, 700f to 170f), listOf(150f to 260f, 640f to 250f)),
+                )
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/28_sign_pad.png")
+    }
+
+    @Test
+    fun formRules() {
+        assertEquals("dd/MM/yyyy", com.fadysaeed.pdfx.engine.acrobatToJavaDate("dd/mm/yyyy"))
+        assertEquals("d-MMM-yy", com.fadysaeed.pdfx.engine.acrobatToJavaDate("d-mmm-yy"))
+        assertEquals("dd/MM/yyyy", com.fadysaeed.pdfx.engine.dateFormatFromScript("AFDate_FormatEx(\"dd/mm/yyyy\");"))
+        val day = java.time.LocalDate.of(2026, 11, 1)
+        assertEquals("01/11/2026", com.fadysaeed.pdfx.engine.formatToday("dd/MM/yyyy", day))
+        assertEquals("1 November 2026", com.fadysaeed.pdfx.engine.formatToday("d MMMM yyyy", day))
+        assertEquals("Date of birth", formFields[1].label)
+        // A photographed signature: the paper goes, the ink stays, trimmed close.
+        val bmp = android.graphics.Bitmap.createBitmap(400, 200, android.graphics.Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(bmp)
+        c.drawColor(android.graphics.Color.rgb(235, 232, 225))
+        c.drawRect(100f, 80f, 300f, 110f, android.graphics.Paint().apply { color = android.graphics.Color.rgb(25, 25, 40) })
+        val clean = com.fadysaeed.pdfx.data.Signatures.clearBackground(bmp)!!
+        assertTrue("trimmed: ${clean.width}x${clean.height}", clean.width in 200..220 && clean.height in 30..50)
+        assertEquals(0, android.graphics.Color.alpha(clean.getPixel(0, 0)))
+        assertTrue(android.graphics.Color.alpha(clean.getPixel(clean.width / 2, clean.height / 2)) > 200)
+    }
+
     @Test
     fun boxesAndText() {
         assertEquals(Box(20f, 30f, 120f, 80f), movedBox(Box(10f, 10f, 110f, 60f), 10f, 20f, 595f, 842f))

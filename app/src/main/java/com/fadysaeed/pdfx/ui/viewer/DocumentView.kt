@@ -407,8 +407,11 @@ fun DocumentView(
                                         val k = size.width / pageWidthPt(i)
                                         val link = reader.linkAt(i, p.x / k, p.y / k)
                                         val mark = reader.markAt(i, p.x / k, p.y / k, 20.dp.toPx() / k)
+                                        val field = reader.fieldAt(i, p.x / k, p.y / k, 6.dp.toPx() / k)
                                         when {
                                             reader.selection != null -> reader.clearSelection()
+                                            field != null -> { reader.tapField(field); haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
+                                            reader.editingField != null -> reader.closeField()
                                             reader.selectedMark != null -> reader.selectMark(null)
                                             mark != null -> { reader.selectMark(mark); haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
                                             link?.page != null -> reader.go(link.page)
@@ -463,9 +466,24 @@ private fun PageMarks(reader: Reader, page: Int, pageWidthPt: Float, pageImage: 
     val cur = reader.currentHit()?.takeIf { it.first == page }?.second
     val draft = reader.draft?.takeIf { it.page == page }
     val picked = reader.selectedMark?.takeIf { it.page == page }
-    if (hits == null && sel == null && draft == null && picked == null) return
+    val fields = reader.fields[page]?.takeIf { it.isNotEmpty() }
+    val editing = reader.editingField?.takeIf { it.page == page }
+    if (hits == null && sel == null && draft == null && picked == null && fields == null) return
     Canvas(Modifier.fillMaxSize()) {
         val k = size.width / pageWidthPt
+        // Form fields: a soft tint on the ones still to fill, a thin outline on all, amber on the open one.
+        fields?.forEach { f ->
+            if (f.readOnly) return@forEach
+            val tl = Offset(f.box.x0 * k, f.box.y0 * k)
+            val sz = Size(f.box.width * k, f.box.height * k)
+            val empty = when (f.kind) {
+                com.fadysaeed.pdfx.engine.FieldKind.TEXT, com.fadysaeed.pdfx.engine.FieldKind.SIGNATURE -> f.value.isBlank()
+                else -> false
+            }
+            if (empty) drawRect(Color(0xFF6FB4FF).copy(alpha = 0.16f), tl, sz)
+            val now = editing?.index == f.index
+            drawRect(if (now) Ink.Amber else Color(0xFF6FB4FF).copy(alpha = 0.6f), tl, sz, style = Stroke(width = if (now) 2.dp.toPx() else 1.dp.toPx()))
+        }
         when (draft) {
             is Draft.Words -> draft.boxes.forEach { b -> mark(b, k, Color(draft.color).copy(alpha = 0.4f), null) }
             is Draft.Ink -> if (draft.points.isNotEmpty()) {

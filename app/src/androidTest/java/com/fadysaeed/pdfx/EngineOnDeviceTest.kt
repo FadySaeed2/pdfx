@@ -151,6 +151,64 @@ class EngineOnDeviceTest {
         session.close()
     }
 
+    @Test
+    fun fillsFormsAndSigns() = runBlocking<Unit> {
+        val f = File(ctx.cacheDir, "form-${System.nanoTime()}.pdf")
+        InstrumentationRegistry.getInstrumentation().context.assets.open("form.pdf").use { i -> f.outputStream().use { i.copyTo(it) } }
+        val s = PdfSession.open(ctx, Uri.fromFile(f))
+        try {
+            assertTrue(s.hasForm())
+            val fields = s.fields(0)
+            assertEquals(8, fields.size)
+            val name = fields.first { it.name == "full_name" }
+            val dob = fields.first { it.name == "date_of_birth" }
+            assertTrue(dob.isDate)
+            assertEquals("dd/MM/yyyy", dob.datePattern)
+            assertTrue(fields.first { it.name == "referral_date" }.isDate)
+            assertTrue(fields.first { it.name == "reason" }.multiline)
+            val consent = fields.first { it.name == "consent" }
+            val radios = fields.filter { it.name == "smoker" }
+            val clinic = fields.first { it.name == "clinic" }
+            assertEquals(listOf("Armadale", "Fremantle", "Joondalup"), clinic.options)
+
+            assertTrue(s.setFieldText(0, name.index, "Fady Saeed"))
+            assertTrue(s.setFieldText(0, dob.index, "05/11/1980"))
+            assertTrue(s.setFieldText(0, fields.first { it.name == "reason" }.index, "Low mood for six weeks.\nمراجعة العلاج"))
+            assertTrue(s.toggleField(0, consent.index))
+            assertTrue(s.toggleField(0, radios[1].index))
+            assertTrue(s.setFieldChoice(0, clinic.index, "Fremantle"))
+            val now = s.fields(0)
+            assertEquals("Fady Saeed", now.first { it.name == "full_name" }.value)
+            assertTrue("consent ticked", now.first { it.name == "consent" }.on)
+            val r2 = now.filter { it.name == "smoker" }
+            assertTrue("second radio on, first off", r2[1].on && !r2[0].on)
+            assertEquals("Fremantle", now.first { it.name == "clinic" }.value)
+
+            // A drawn signature and a photographed one.
+            assertTrue(s.addInk(0, listOf(listOf(180f to 420f, 200f to 400f, 220f to 430f, 260f to 405f)), 0xFF1A1A1A.toInt(), 1.6f))
+            val png = File(ctx.cacheDir, "sig.png")
+            val bmp = Bitmap.createBitmap(300, 100, Bitmap.Config.ARGB_8888)
+            android.graphics.Canvas(bmp).drawLine(20f, 70f, 280f, 30f, Paint().apply { color = Color.BLACK; strokeWidth = 6f })
+            FileOutputStream(png).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            assertTrue(s.addImageStamp(0, Box(300f, 390f, 450f, 440f), png.absolutePath))
+            assertTrue(s.marks(0).any { it.kind == MarkKind.STAMP })
+            save(s.render(0, 1080), "form_filled.png")
+            s.writeTo(f.absolutePath + ".out", false)
+        } finally {
+            s.close()
+        }
+        val again = PdfSession.open(ctx, Uri.fromFile(File(f.absolutePath + ".out")))
+        try {
+            val fs = again.fields(0)
+            assertEquals("Fady Saeed", fs.first { it.name == "full_name" }.value)
+            assertTrue(fs.first { it.name == "consent" }.on)
+            assertEquals("Fremantle", fs.first { it.name == "clinic" }.value)
+            assertTrue(again.marks(0).any { it.kind == MarkKind.STAMP } && again.marks(0).any { it.kind == MarkKind.INK })
+        } finally {
+            again.close()
+        }
+    }
+
     /** A page with a ruled table of drugs, doses and checks, between two paragraphs. */
     private fun tablePdf(): File {
         val out = File(ctx.cacheDir, "table.pdf")

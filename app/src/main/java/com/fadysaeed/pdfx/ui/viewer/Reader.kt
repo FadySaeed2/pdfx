@@ -47,8 +47,23 @@ val ReflowMargins = listOf(14, 24, 40)
 /** The marking tools. */
 enum class Tool(val label: String) {
     SELECT("Select"), HIGHLIGHT("Highlight"), UNDERLINE("Underline"), STRIKE("Strike"), PEN("Pen"), MARKER("Marker"),
-    SHAPE("Shapes"), TEXT("Text"), NOTE("Note"), ERASER("Eraser"),
+    SHAPE("Shapes"), TEXT("Text"), NOTE("Note"),
+    SIGN("Sign"), STAMP("Stamp"), TICK("Tick"), CROSS("Cross"), DOT("Dot"), DATE("Date"),
+    ERASER("Eraser"),
 }
+
+/** Tools that drop one thing where you tap: a tap next to a mark must not pick that mark. */
+val PlacingTools = setOf(Tool.SIGN, Tool.STAMP, Tool.TICK, Tool.CROSS, Tool.DOT, Tool.DATE)
+
+/** Sizes for ticks, crosses and dots, in points. */
+val MarkSizes = listOf(9f, 13f, 18f)
+
+/** A ready-made stamp: its words and colour. Custom ones are kept in the preferences. */
+data class StampKind(val text: String, val color: Int)
+val StandardStamps = listOf(
+    StampKind("APPROVED", 0xFF2E9E5B.toInt()), StampKind("REVIEWED", 0xFF2F6FED.toInt()), StampKind("RECEIVED", 0xFF2F6FED.toInt()),
+    StampKind("CONFIDENTIAL", 0xFFE5484D.toInt()), StampKind("DRAFT", 0xFF6B6B6B.toInt()), StampKind("COPY", 0xFF6B6B6B.toInt()),
+)
 
 enum class ShapeKind(val label: String, val kind: MarkKind) {
     RECT("Box", MarkKind.SQUARE), ELLIPSE("Oval", MarkKind.CIRCLE), ARROW("Arrow", MarkKind.ARROW), LINE("Line", MarkKind.LINE),
@@ -351,6 +366,196 @@ class Reader(
         scope.launch { paragraphs[page] = runCatching { s.paragraphs(page) }.getOrDefault(emptyList()) }
     }
 
+    // ------------------------------------------------------------ forms
+
+    var hasForm by mutableStateOf(false)
+        private set
+    val fields = mutableStateMapOf<Int, List<com.fadysaeed.pdfx.engine.Field>>()
+    /** The field being filled in the panel at the bottom. */
+    var editingField by mutableStateOf<com.fadysaeed.pdfx.engine.Field?>(null)
+        private set
+    /** The field order Next and Previous follow, read once. */
+    private var formOrder: List<com.fadysaeed.pdfx.engine.Field>? = null
+
+    init {
+        if (session != null) checkForm()
+    }
+
+    fun checkForm() {
+        val s = session ?: return
+        scope.launch { hasForm = runCatching { s.hasForm() }.getOrDefault(false); if (hasForm) fields.keys.toList().forEach { loadFields(it) } }
+    }
+
+    fun loadFields(page: Int) {
+        val s = session ?: return
+        if (!hasForm) return
+        scope.launch { fields[page] = runCatching { s.fields(page) }.getOrDefault(emptyList()) }
+    }
+
+    /** The field under a point, within [reach] points. */
+    fun fieldAt(page: Int, x: Float, y: Float, reach: Float = 4f): com.fadysaeed.pdfx.engine.Field? = fields[page]
+        ?.filter { !it.readOnly && com.fadysaeed.pdfx.engine.boxDistance(it.box, x, y) <= reach }
+        ?.minByOrNull { com.fadysaeed.pdfx.engine.boxDistance(it.box, x, y) * 1000 + it.box.width * it.box.height / 1000f }
+
+    /** A tap on a field: boxes tick at once, everything else opens in the panel. */
+    fun tapField(f: com.fadysaeed.pdfx.engine.Field) {
+        clearSelection(); selectedMark = null
+        when (f.kind) {
+            com.fadysaeed.pdfx.engine.FieldKind.CHECKBOX, com.fadysaeed.pdfx.engine.FieldKind.RADIO -> { toggleField(f); editingField = f }
+            else -> editingField = f
+        }
+    }
+
+    fun toggleField(f: com.fadysaeed.pdfx.engine.Field) = change(f.page) { session?.toggleField(f.page, f.index) ?: false }
+
+    fun fillField(f: com.fadysaeed.pdfx.engine.Field, text: String) {
+        if (text == f.value) return
+        change(f.page) { session?.setFieldText(f.page, f.index, text) ?: false }
+    }
+
+    fun chooseField(f: com.fadysaeed.pdfx.engine.Field, value: String) = change(f.page) { session?.setFieldChoice(f.page, f.index, value) ?: false }
+
+    fun closeField() { editingField = null }
+
+    /** Opens the first field that is still empty (or the first one), to start filling the form. */
+    fun startFilling() = moveField(null, true)
+
+    /** Moves to the next (or previous) field in reading order, opening it in the panel and scrolling to it. */
+    fun moveField(from: com.fadysaeed.pdfx.engine.Field?, forward: Boolean) {
+        val s = session ?: return
+        scope.launch {
+            val order = formOrder ?: runCatching { s.allFields() }.getOrDefault(emptyList()).also { formOrder = it }
+            if (order.isEmpty()) return@launch
+            val next = if (from == null) {
+                order.firstOrNull { it.kind == com.fadysaeed.pdfx.engine.FieldKind.TEXT && it.value.isBlank() } ?: order.first()
+            } else {
+                val i = order.indexOfFirst { it.page == from.page && it.index == from.index }
+                order.getOrNull(if (forward) i + 1 else i - 1)
+            } ?: run { editingField = null; return@launch }
+            val fresh = runCatching { s.fields(next.page) }.getOrNull()?.firstOrNull { it.index == next.index } ?: next
+            editingField = fresh
+            go(next.page, next.box.y0)
+        }
+    }
+
+    /** Today's date, as a date field asks for it or in the chosen style. */
+    fun todayFor(f: com.fadysaeed.pdfx.engine.Field?): String =
+        com.fadysaeed.pdfx.engine.formatToday(f?.datePattern ?: com.fadysaeed.pdfx.engine.DatePatterns[dateStyle])
+
+    // ------------------------------------------------------------ fill and sign
+
+    /** Which of [com.fadysaeed.pdfx.engine.DatePatterns] dates are written in. */
+    var dateStyle by mutableIntStateOf(prefs?.getInt("date_style", 0) ?: 0)
+        private set
+    /** Whether today's date goes under a signature, and on stamps. */
+    var signWithDate by mutableStateOf(prefs?.getBoolean("sign_date", false) ?: false)
+        private set
+    var stampWithDate by mutableStateOf(prefs?.getBoolean("stamp_date", true) ?: true)
+        private set
+    /** Saved signatures and initials, and the one in hand. */
+    val signs = mutableStateListOf<com.fadysaeed.pdfx.data.SavedSign>()
+    var signId by mutableStateOf(prefs?.getString("sign_id", null))
+        private set
+    /** The signature pad is open (for initials when the flag says so). */
+    var signPad by mutableStateOf<Boolean?>(null)
+    /** A signature field waiting for a signature. */
+    var signField by mutableStateOf<com.fadysaeed.pdfx.engine.Field?>(null)
+    val customStamps = mutableStateListOf<StampKind>().also { list ->
+        prefs?.getString("stamps", null)?.split('\n')?.mapNotNull { line ->
+            val i = line.lastIndexOf('|'); if (i <= 0) null else line.substring(i + 1).toLongOrNull()?.let { StampKind(line.substring(0, i), it.toInt()) }
+        }?.let { list.addAll(it) }
+    }
+    var stamp by mutableStateOf(StandardStamps[0])
+        private set
+    var stampAsk by mutableStateOf(false)
+
+    fun pickDateStyle(i: Int) { dateStyle = i.coerceIn(0, 2); prefs?.edit()?.putInt("date_style", dateStyle)?.apply() }
+    fun pickSignWithDate(on: Boolean) { signWithDate = on; prefs?.edit()?.putBoolean("sign_date", on)?.apply() }
+    fun pickStampWithDate(on: Boolean) { stampWithDate = on; prefs?.edit()?.putBoolean("stamp_date", on)?.apply() }
+    fun pickSign(id: String?) { signId = id; prefs?.edit()?.putString("sign_id", id)?.apply() }
+    fun pickStamp(k: StampKind) { stamp = k }
+    fun addStamp(k: StampKind) {
+        customStamps.remove(k); customStamps.add(0, k)
+        prefs?.edit()?.putString("stamps", customStamps.joinToString("\n") { "${it.text}|${it.color.toLong() and 0xFFFFFFFFL}" })?.apply()
+        stamp = k
+    }
+
+    fun setSignsForTest(list: List<com.fadysaeed.pdfx.data.SavedSign>) { signs.clear(); signs.addAll(list) }
+
+    /** A saved signature waiting for "delete?" to be answered. */
+    var deleteSignAsk by mutableStateOf<com.fadysaeed.pdfx.data.SavedSign?>(null)
+
+    fun deleteSign(sg: com.fadysaeed.pdfx.data.SavedSign, store: com.fadysaeed.pdfx.data.Signatures) {
+        signs.remove(sg)
+        if (signId == sg.id) pickSign(null)
+        scope.launch(Dispatchers.IO) { runCatching { store.delete(sg.id) } }
+    }
+
+    /** Today's date in the chosen style. */
+    fun today(): String = com.fadysaeed.pdfx.engine.formatToday(com.fadysaeed.pdfx.engine.DatePatterns[dateStyle])
+
+    /** Puts the chosen signature on [page], centred on (x, y) or filling [into]; today's date under it when asked. */
+    fun placeSign(page: Int, x: Float, y: Float, into: Box? = null) {
+        val sg = signs.firstOrNull { it.id == signId } ?: signs.firstOrNull() ?: run { signPad = false; return }
+        val s = session ?: return
+        val w0 = if (sg.initials) 60f else 150f
+        val box = if (into != null) {
+            // Fit inside the field, keeping the signature's shape.
+            val w = minOf(into.width * 0.92f, into.height * 0.85f * sg.aspect)
+            val h = w / sg.aspect
+            Box((into.x0 + into.x1 - w) / 2, (into.y0 + into.y1 - h) / 2, (into.x0 + into.x1 + w) / 2, (into.y0 + into.y1 + h) / 2)
+        } else Box(x - w0 / 2, y - w0 / sg.aspect / 2, x + w0 / 2, y + w0 / sg.aspect / 2)
+        val withDate = signWithDate
+        val date = today()
+        val dateStyle = boxStyle.copy(size = (box.height * 0.32f).coerceIn(8f, 14f), color = sg.color, fill = null, border = false, align = com.fadysaeed.pdfx.engine.BoxAlign.LEFT, dir = com.fadysaeed.pdfx.engine.BoxDir.LTR)
+        change(page, after = { selectLast(page, if (sg.image != null) MarkKind.STAMP else MarkKind.INK) }) {
+            val ok = if (sg.image != null) s.addImageStamp(page, box, sg.image)
+            else {
+                val width = (box.width / 150f * 1.7f).coerceIn(0.7f, 3f)
+                s.addInk(page, sg.strokes.map { st -> st.map { box.x0 + it.first * box.width to box.y0 + it.second * box.width } }, sg.color, width)
+            }
+            if (ok && withDate) s.addTextBox(page, box.x0, box.y1 + 2f, date, dateStyle)
+            ok
+        }
+    }
+
+    /** A tick, cross or dot, centred where tapped. */
+    fun placeMark(page: Int, x: Float, y: Float, tool: Tool) {
+        val s = session ?: return
+        val r = MarkSizes[widthStep] / 2
+        val strokes = when (tool) {
+            Tool.TICK -> listOf(listOf(x - r to y, x - r * 0.25f to y + r * 0.75f, x + r to y - r * 0.85f))
+            Tool.CROSS -> listOf(listOf(x - r * 0.8f to y - r * 0.8f, x + r * 0.8f to y + r * 0.8f), listOf(x + r * 0.8f to y - r * 0.8f, x - r * 0.8f to y + r * 0.8f))
+            else -> listOf(listOf(x to y, x + 0.01f to y + 0.01f))
+        }
+        val width = if (tool == Tool.DOT) r * 1.3f else (r * 0.28f).coerceAtLeast(1.2f)
+        change(page) { s.addInk(page, strokes, penColor, width) }
+    }
+
+    /** Today's date written where tapped. */
+    fun placeDate(page: Int, x: Float, y: Float) {
+        val s = session ?: return
+        val st = boxStyle.copy(color = penColor, fill = null, border = false, align = com.fadysaeed.pdfx.engine.BoxAlign.AUTO, dir = com.fadysaeed.pdfx.engine.BoxDir.LTR)
+        change(page, after = { selectLast(page, MarkKind.TEXT) }) { s.addTextBox(page, x, y - st.size * 0.7f, today(), st) }
+    }
+
+    /** The chosen stamp, with today's date when asked, centred where tapped. */
+    fun placeStamp(page: Int, x: Float, y: Float) {
+        val s = session ?: return
+        val k = stamp
+        val text = if (stampWithDate) "${k.text}\n${today()}" else k.text
+        val st = com.fadysaeed.pdfx.engine.BoxStyle(size = 14f, bold = true, align = com.fadysaeed.pdfx.engine.BoxAlign.CENTER, dir = com.fadysaeed.pdfx.engine.BoxDir.LTR, color = k.color, border = true, spacing = 0)
+        val w = (k.text.length * 14f * 0.62f + 22f).coerceAtLeast(110f)
+        change(page, after = { selectLast(page, MarkKind.TEXT) }) { s.addTextBox(page, x - w / 2, y - 18f, text, st) }
+    }
+
+    /** Picks the newest mark of a kind on a page: the one just placed, ready to move. */
+    private suspend fun selectLast(page: Int, kind: MarkKind) {
+        val s = session ?: return
+        val m = runCatching { s.marks(page) }.getOrNull()?.lastOrNull { it.kind == kind } ?: return
+        selectMark(m)
+    }
+
     // ------------------------------------------------------------ marking
 
     val canMark: Boolean get() = session?.editable == true || session == null
@@ -449,12 +654,13 @@ class Reader(
 
     fun pickWidth(step: Int) { widthStep = step.coerceIn(0, 2); prefs?.edit()?.putInt("width_step", widthStep)?.apply() }
     fun colorFor(t: Tool) = if (usesPenColors(t)) penColor else markColor
-    fun usesPenColors(t: Tool) = t == Tool.PEN || t == Tool.SHAPE || t == Tool.TEXT
+    fun usesPenColors(t: Tool) = t == Tool.PEN || t == Tool.SHAPE || t == Tool.TEXT || t == Tool.TICK || t == Tool.CROSS || t == Tool.DOT || t == Tool.DATE
 
     /** Whether a touch of this kind draws (true) or moves the page (false) in marking mode. */
     fun draws(stylus: Boolean): Boolean = marking && (stylus || !stylusSeen)
 
     fun loadMarks(page: Int) {
+        if (hasForm && !fields.containsKey(page)) loadFields(page)
         val s = session ?: return
         if (!s.editable || marks.containsKey(page)) return
         marks[page] = emptyList()
@@ -598,6 +804,7 @@ class Reader(
             val there = when (gestureTool) {
                 // Pens dot i's and full stops, so only a tap right on a stroke picks it.
                 Tool.PEN, Tool.MARKER -> markAt(page, a.first, a.second, 0f)
+                in PlacingTools -> markAt(page, a.first, a.second, 0f)
                 Tool.TEXT, Tool.NOTE -> markAt(page, a.first, a.second, r)?.takeIf { it.kind == MarkKind.TEXT || it.kind == MarkKind.NOTE }
                 Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKE -> markAt(page, a.first, a.second, r)?.takeIf { it.parts.isNotEmpty() }
                 else -> markAt(page, a.first, a.second, r)
@@ -641,6 +848,10 @@ class Reader(
                 change(page) { s?.addShape(page, d.kind.kind, d.x0, d.y0, d.x1, d.y1, d.color, d.width) ?: false }
             }
             Tool.TEXT -> if (!moved) boxEdit = BoxEdit(page, a.first, a.second)
+            Tool.SIGN -> if (!moved) placeSign(page, a.first, a.second)
+            Tool.STAMP -> if (!moved) placeStamp(page, a.first, a.second)
+            Tool.TICK, Tool.CROSS, Tool.DOT -> if (!moved) placeMark(page, a.first, a.second, gestureTool)
+            Tool.DATE -> if (!moved) placeDate(page, a.first, a.second)
             Tool.NOTE -> if (!moved) textAsk = TextAsk(page, a.first, a.second, note = true)
             Tool.ERASER -> {
                 val gone = erased.toList().sortedDescending()
@@ -804,7 +1015,7 @@ class Reader(
      * Runs one change to the file, then refreshes what is shown: the page is drawn again and the
      * live draft is kept on screen until the new drawing has arrived, so nothing flickers.
      */
-    private fun change(page: Int?, block: suspend () -> Boolean) {
+    private fun change(page: Int?, after: (suspend () -> Unit)? = null, block: suspend () -> Boolean) {
         scope.launch {
             val before = page?.let { pages?.drawCount(it) } ?: 0
             val ok = runCatching { block() }.onFailure { problem = it.message ?: "That change could not be made." }.getOrDefault(false)
@@ -821,7 +1032,14 @@ class Reader(
                     group = if (selectedMark == null || fresh == null) emptyList() else was.mapNotNull { fresh.getOrNull(it) }
                 }
                 if (page != null) loadMarks(page) else marks.keys.toList().forEach { loadMarks(it) }
+                if (hasForm) {
+                    formOrder = null
+                    if (page != null) loadFields(page) else fields.keys.toList().forEach { loadFields(it) }
+                    // The field in the panel shows its new value.
+                    editingField?.let { f -> if (s != null && (page == null || f.page == page)) editingField = runCatching { s.fields(f.page) }.getOrNull()?.firstOrNull { it.index == f.index } ?: f }
+                }
                 if (allMarks != null) loadAllMarks()
+                after?.invoke()
                 if (page != null) pages?.awaitRedraw(page, before)
             }
             if (page == null || draft?.page == page) draft = null
@@ -844,6 +1062,7 @@ class Reader(
 
     /** For screenshot tests. */
     fun showMarking(t: Tool, d: Draft?, selected: Mark? = null) { marking = true; tool = t; draft = d; selectedMark = selected }
+    fun showFieldsForTest(page: Int, list: List<com.fadysaeed.pdfx.engine.Field>, editing: com.fadysaeed.pdfx.engine.Field? = null) { hasForm = true; fields[page] = list; editingField = editing }
     fun showSelectedForTest(m: Mark?, movingTo: Box? = null, with: List<Mark> = emptyList()) { selectedMark = m; group = listOfNotNull(m) + with; moving = movingTo }
     fun setMarksForTest(page: Int, list: List<Mark>) { marks[page] = list }
     fun showReflowForTest(on: Boolean, paras: Map<Int, List<Para>>) { reflow = on; paragraphs.clear(); paragraphs.putAll(paras) }

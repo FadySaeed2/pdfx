@@ -20,6 +20,7 @@ class PdfxApp : Application() {
     val thumbs: Thumbs by lazy { Thumbs(this, library) }
     val indexer: TextIndexer by lazy { TextIndexer(this, library) }
     val saver: Saver by lazy { Saver(library) }
+    val signatures: com.fadysaeed.pdfx.data.Signatures by lazy { com.fadysaeed.pdfx.data.Signatures(filesDir) }
     private val scanLock = Mutex()
     private var prepared = false
     @Volatile private var lastScan = 0L
