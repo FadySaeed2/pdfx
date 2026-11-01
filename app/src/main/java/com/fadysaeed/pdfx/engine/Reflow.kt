@@ -43,7 +43,8 @@ internal fun textWidth(s: String, size: Float): Float = s.sumOf { c ->
  * are joined back. Where columns are clearly apart they stay. Anything in between is unclear,
  * and the table is shown as a picture instead (null).
  */
-internal fun repairColumns(t: RawTable): RawTable? {
+internal fun repairColumns(t: RawTable, source: String = ""): RawTable? {
+    val plain = source.replace(Regex("\\s+"), " ")
     if (t.geo.size != t.rows.size || t.rows.isEmpty()) return t
     val rows = t.rows.map { it.toMutableList() }.toMutableList()
     val geo = t.geo.map { it.toMutableList() }.toMutableList()
@@ -68,6 +69,9 @@ internal fun repairColumns(t: RawTable): RawTable? {
                     val joined = when {
                         a.isBlank() -> b
                         b.isBlank() -> a
+                        // The page's own text says whether a space belongs between them.
+                        plain.contains("$a $b") && !plain.contains(a + b) -> "$a $b"
+                        plain.contains(a + b) && !plain.contains("$a $b") -> a + b
                         else -> {
                             val gap = if (asz > 0f && !al.isNaN() && !bl.isNaN()) (bl - (al + textWidth(a, asz))) / asz else 1f
                             if (gap < 0.11f) a + b else "$a $b"
@@ -187,7 +191,8 @@ internal fun mergeTables(blocks: List<RawBlock>, tables: List<RawTable>): List<R
         // The real outline: the table's lines and every block it took over.
         val box = cov.fold(t.box) { a, c -> Box(minOf(a.x0, c.box.x0), minOf(a.y0, c.box.y0), maxOf(a.x1, c.box.x1), maxOf(a.y1, c.box.y1)) }
         val chars = cov.sumOf { c -> c.lines.sumOf { l -> l.text.count { !it.isWhitespace() } } }
-        val whole = repairColumns(RawTable(box, t.rows, t.geo))
+        val source = cov.joinToString(" ") { c -> c.lines.joinToString(" ") { it.text } }
+        val whole = repairColumns(RawTable(box, t.rows, t.geo), source)
         if (whole != null && isClean(whole, chars)) RawBlock(box, emptyList(), false, whole) else RawBlock(box, emptyList(), true, null)
     }
 }
