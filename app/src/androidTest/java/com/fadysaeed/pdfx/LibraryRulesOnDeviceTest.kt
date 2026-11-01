@@ -1,6 +1,7 @@
 package com.fadysaeed.pdfx
 
-import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.fadysaeed.pdfx.data.Library
 import com.fadysaeed.pdfx.data.LibraryDb
 import com.fadysaeed.pdfx.data.PageText
@@ -16,26 +17,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
-import org.robolectric.annotation.SQLiteMode
 import java.io.File
-import java.nio.file.Files
 
-/** The library's file handling, run against a throwaway folder that stands in for phone storage. */
-@RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
-@SQLiteMode(SQLiteMode.Mode.NATIVE)
-class LibraryTest {
+/**
+ * The library's rules on a real Android system, against a throwaway folder in the app's cache
+ * that stands in for phone storage: what a scan finds and forgets, file operations, the trash,
+ * tags and the full-text index.
+ */
+@RunWith(AndroidJUnit4::class)
+class LibraryRulesOnDeviceTest {
     private lateinit var root: File
     private lateinit var db: LibraryDb
     private lateinit var lib: Library
 
     @Before
     fun setUp() {
-        root = Files.createTempDirectory("pdfx-root").toFile()
-        db = LibraryDb.inMemory(ApplicationProvider.getApplicationContext())
-        lib = Library(ApplicationProvider.getApplicationContext(), db, root, allFilesAccess = { true })
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        root = File(ctx.cacheDir, "pdfx-root-${System.nanoTime()}").apply { mkdirs() }
+        db = LibraryDb.inMemory(ctx)
+        lib = Library(ctx, db, root, allFilesAccess = { true })
     }
 
     @After

@@ -72,6 +72,11 @@ android {
     }
 }
 
+// A hung test must fail the build rather than hold the runner for its full time limit.
+tasks.withType<Test>().configureEach {
+    timeout.set(java.time.Duration.ofMinutes(12))
+}
+
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
