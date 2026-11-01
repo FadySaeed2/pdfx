@@ -19,8 +19,8 @@ class TextIndex(private val db: LibraryDb) {
         val s = sql
         s.beginTransaction()
         try {
-            s.execSQL("DELETE FROM page_text WHERE docId = ?", arrayOf<Any>(docId))
-            val insert = s.compileStatement("INSERT INTO page_text(body, docId, page) VALUES (?, ?, ?)")
+            s.execSQL("DELETE FROM page_text WHERE ref = ?", arrayOf<Any>(docId))
+            val insert = s.compileStatement("INSERT INTO page_text(body, ref, page) VALUES (?, ?, ?)")
             for (p in pages) {
                 insert.clearBindings()
                 insert.bindString(1, p.body)
@@ -34,11 +34,11 @@ class TextIndex(private val db: LibraryDb) {
         }
     }
 
-    fun clear(docId: Long) = sql.execSQL("DELETE FROM page_text WHERE docId = ?", arrayOf<Any>(docId))
+    fun clear(docId: Long) = sql.execSQL("DELETE FROM page_text WHERE ref = ?", arrayOf<Any>(docId))
 
     fun search(match: String, limit: Int = 400): List<TextHit> {
         val q = SimpleSQLiteQuery(
-            "SELECT docId, page, snippet(page_text, ?, ?, ?, 0, 14) FROM page_text WHERE page_text MATCH ? LIMIT $limit",
+            "SELECT ref, page, snippet(page_text, ?, ?, ?, 0, 14) FROM page_text WHERE page_text MATCH ? LIMIT $limit",
             arrayOf<Any>(MARK_START, MARK_END, "…", match),
         )
         val out = ArrayList<TextHit>()
@@ -49,15 +49,16 @@ class TextIndex(private val db: LibraryDb) {
     }
 
     fun pagesIndexed(docId: Long): Int =
-        sql.query(SimpleSQLiteQuery("SELECT COUNT(*) FROM page_text WHERE docId = ?", arrayOf<Any>(docId))).use { c ->
+        sql.query(SimpleSQLiteQuery("SELECT COUNT(*) FROM page_text WHERE ref = ?", arrayOf<Any>(docId))).use { c ->
             if (c.moveToFirst()) c.getInt(0) else 0
         }
 
     object Setup : RoomDatabase.Callback() {
         override fun onOpen(db: SupportSQLiteDatabase) {
             db.execSQL(
+                // "docid" is FTS4's own name for the row id, so the document column is "ref".
                 "CREATE VIRTUAL TABLE IF NOT EXISTS page_text USING fts4(" +
-                    "body, docId, page, tokenize=porter, notindexed=docId, notindexed=page)",
+                    "body, ref, page, tokenize=porter, notindexed=ref, notindexed=page)",
             )
         }
     }
