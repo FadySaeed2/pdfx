@@ -112,6 +112,7 @@ import com.fadysaeed.pdfx.engine.BoxStyle
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -998,7 +999,7 @@ internal fun FigureViewer(reader: Reader, page: Int, box: com.fadysaeed.pdfx.eng
             Box(
                 Modifier.fillMaxSize()
                     .pointerInput(Unit) {
-                        androidx.compose.foundation.gestures.detectTransformGestures { _, pan, zoom, _ ->
+                        detectTransformGestures { _, pan, zoom, _ ->
                             scale = (scale * zoom).coerceIn(1f, 6f)
                             shift = if (scale == 1f) Offset.Zero else shift + pan
                         }
