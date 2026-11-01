@@ -19,7 +19,72 @@ internal class RawLine(val text: String, val bold: BooleanArray, val italic: Boo
 internal class RawBlock(val box: Box, val lines: List<RawLine>, val image: Boolean, val table: RawTable? = null)
 
 /** A table the engine found: its outline and its cells, row by row, each with its text and whether it is bold. */
-internal class RawTable(val box: Box, val rows: List<List<Pair<String, Boolean>>>)
+internal class RawTable(
+    val box: Box,
+    val rows: List<List<Pair<String, Boolean>>>,
+    /** For each cell: the left edge of its first line, its type size, and how many lines it has. */
+    val geo: List<List<Triple<Float, Float, Int>>> = emptyList(),
+)
+
+/** A rough width for [s] set at [size]: capitals and digits wider, spaces and stops narrower. */
+internal fun textWidth(s: String, size: Float): Float = s.sumOf { c ->
+    when {
+        c.isUpperCase() -> 0.68
+        c.isDigit() -> 0.55
+        c == ' ' -> 0.28
+        c.isLetter() -> 0.5
+        else -> 0.33
+    }
+}.toFloat() * size
+
+/**
+ * The engine sometimes cuts one column into several, splitting words ("Le" | "vel"). Where, in
+ * every row, a cell's words run straight on into the next cell's, the two columns are one and
+ * are joined back. Where columns are clearly apart they stay. Anything in between is unclear,
+ * and the table is shown as a picture instead (null).
+ */
+internal fun repairColumns(t: RawTable): RawTable? {
+    if (t.geo.size != t.rows.size || t.rows.isEmpty()) return t
+    val rows = t.rows.map { it.toMutableList() }.toMutableList()
+    val geo = t.geo.map { it.toMutableList() }.toMutableList()
+    if (rows.any { it.size != rows[0].size } || geo.indices.any { geo[it].size != rows[it].size }) return t
+    var c = 0
+    while (c < rows[0].size - 1) {
+        val gaps = rows.indices.mapNotNull { r ->
+            val a = rows[r][c].first
+            val b = rows[r][c + 1].first
+            val (al, asz, alines) = geo[r][c]
+            val (bl, _, _) = geo[r][c + 1]
+            if (a.isBlank() || b.isBlank() || alines != 1 || al.isNaN() || bl.isNaN() || asz <= 0f) null
+            else (bl - (al + textWidth(a, asz))) / asz
+        }
+        when {
+            gaps.isNotEmpty() && gaps.all { it < 0.9f } -> {
+                for (r in rows.indices) {
+                    val (a, ab) = rows[r][c]
+                    val (b, bb) = rows[r][c + 1]
+                    val (al, asz, alines) = geo[r][c]
+                    val (bl, bsz, blines) = geo[r][c + 1]
+                    val joined = when {
+                        a.isBlank() -> b
+                        b.isBlank() -> a
+                        else -> {
+                            val gap = if (asz > 0f && !al.isNaN() && !bl.isNaN()) (bl - (al + textWidth(a, asz))) / asz else 1f
+                            if (gap < 0.11f) a + b else "$a $b"
+                        }
+                    }
+                    rows[r][c] = joined to (if (a.isBlank()) bb else if (b.isBlank()) ab else ab && bb)
+                    geo[r][c] = if (a.isBlank()) Triple(bl, bsz, blines) else Triple(al, asz, maxOf(alines, blines))
+                    rows[r].removeAt(c + 1)
+                    geo[r].removeAt(c + 1)
+                }
+            }
+            gaps.isEmpty() || gaps.all { it > 1.8f } -> c++
+            else -> return null
+        }
+    }
+    return RawTable(t.box, rows, geo)
+}
 
 /**
  * Reads the tables out of the engine's HTML for a page analysed for tables. (Walking that page
@@ -34,23 +99,31 @@ internal fun parseTablesHtml(html: String): List<RawTable> {
     val pRe = Regex("<p style=\"top:([0-9.\\-]+)pt;left:([0-9.\\-]+)pt;line-height:([0-9.\\-]+)pt\">(.*?)</p>", RegexOption.DOT_MATCHES_ALL)
     for (t in tableRe.findAll(html)) {
         var x0 = Float.MAX_VALUE; var y0 = Float.MAX_VALUE; var x1 = -Float.MAX_VALUE; var y1 = -Float.MAX_VALUE
+        val geo = ArrayList<List<Triple<Float, Float, Int>>>()
         val rows = rowRe.findAll(t.groupValues[1]).map { r ->
-            cellRe.findAll(r.groupValues[1]).map { c ->
+            val rowGeo = ArrayList<Triple<Float, Float, Int>>()
+            val cells = cellRe.findAll(r.groupValues[1]).map { c ->
+                var firstLeft = Float.NaN
+                var firstSize = 0f
                 val lines = pRe.findAll(c.groupValues[1]).map { pm ->
                     val top = pm.groupValues[1].toFloatOrNull() ?: 0f
                     val left = pm.groupValues[2].toFloatOrNull() ?: 0f
                     val lh = pm.groupValues[3].toFloatOrNull() ?: 0f
                     x0 = minOf(x0, left); y0 = minOf(y0, top); y1 = maxOf(y1, top + lh * 1.25f); x1 = maxOf(x1, left)
+                    if (firstLeft.isNaN()) { firstLeft = left; firstSize = lh }
                     pm.groupValues[4]
                 }.toList()
+                rowGeo += Triple(firstLeft, firstSize, lines.size)
                 val raw = lines.joinToString(" ")
                 val text = htmlText(raw)
                 val boldText = Regex("<b>(.*?)</b>", RegexOption.DOT_MATCHES_ALL).findAll(raw).sumOf { htmlText(it.groupValues[1]).count { ch -> !ch.isWhitespace() } }
                 val chars = text.count { !it.isWhitespace() }
                 text to (chars > 0 && boldText * 10 >= chars * 8)
             }.toList()
+            if (cells.isNotEmpty()) geo += rowGeo
+            cells
         }.filter { it.isNotEmpty() }.toList()
-        if (rows.isNotEmpty() && x0 < Float.MAX_VALUE) out += RawTable(Box(x0, y0, maxOf(x1, x0 + 1f), y1), rows)
+        if (rows.isNotEmpty() && x0 < Float.MAX_VALUE) out += RawTable(Box(x0, y0, maxOf(x1, x0 + 1f), y1), rows, geo)
     }
     return out
 }
@@ -114,8 +187,8 @@ internal fun mergeTables(blocks: List<RawBlock>, tables: List<RawTable>): List<R
         // The real outline: the table's lines and every block it took over.
         val box = cov.fold(t.box) { a, c -> Box(minOf(a.x0, c.box.x0), minOf(a.y0, c.box.y0), maxOf(a.x1, c.box.x1), maxOf(a.y1, c.box.y1)) }
         val chars = cov.sumOf { c -> c.lines.sumOf { l -> l.text.count { !it.isWhitespace() } } }
-        val whole = RawTable(box, t.rows)
-        if (isClean(whole, chars)) RawBlock(box, emptyList(), false, whole) else RawBlock(box, emptyList(), true, null)
+        val whole = repairColumns(RawTable(box, t.rows, t.geo))
+        if (whole != null && isClean(whole, chars)) RawBlock(box, emptyList(), false, whole) else RawBlock(box, emptyList(), true, null)
     }
 }
 

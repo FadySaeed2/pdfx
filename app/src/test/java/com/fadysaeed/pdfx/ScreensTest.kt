@@ -404,6 +404,18 @@ class ScreensTest {
         assertEquals(listOf("Drug" to true, "Dose" to true), parsed[0].rows[0])
         assertEquals(listOf("Lithium & co" to false, "٤٠٠ mg" to false), parsed[0].rows[1])
         assertEquals(62f, parsed[0].box.x0, 0.1f)
+        // A column cut through words is joined back; clearly separate columns stay.
+        val cut = com.fadysaeed.pdfx.engine.RawTable(
+            Box(56f, 130f, 520f, 230f),
+            listOf(listOf("Drug" to true, "Dose" to true, "C" to true, "heck" to true), listOf("Lithium" to false, "400 mg" to false, "Le" to false, "vel at 12 h" to false)),
+            listOf(
+                listOf(Triple(62f, 12f, 1), Triple(212f, 12f, 1), Triple(342f, 12f, 1), Triple(350.7f, 12f, 1)),
+                listOf(Triple(62f, 12f, 1), Triple(212f, 12f, 1), Triple(342f, 12f, 1), Triple(355.4f, 12f, 1)),
+            ),
+        )
+        val fixed = com.fadysaeed.pdfx.engine.repairColumns(cut)!!
+        assertEquals(listOf("Drug", "Dose", "Check"), fixed.rows[0].map { it.first })
+        assertEquals(listOf("Lithium", "400 mg", "Level at 12 h"), fixed.rows[1].map { it.first })
         // Text box style survives being written and read back.
         val st = com.fadysaeed.pdfx.engine.BoxStyle(font = com.fadysaeed.pdfx.engine.BoxFont.SERIF, size = 18f, bold = true, underline = true, align = com.fadysaeed.pdfx.engine.BoxAlign.CENTER, color = 0xFF2F6FED.toInt(), spacing = 2)
         val back = com.fadysaeed.pdfx.engine.BoxStyle.parse(st.css("hello"), "hello", 12f, 0, null, false, false)
