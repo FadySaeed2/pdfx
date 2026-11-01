@@ -1342,7 +1342,9 @@ private fun MarksList(reader: Reader, marks: List<Mark>?, name: String, onPage: 
         marks == null -> Text("Reading the marks…", style = Type.note, modifier = Modifier.padding(20.dp))
         marks.isEmpty() -> Text("No marks yet. Select words to highlight them, or tap the pencil at the top to draw, add text or notes.", style = Type.note, modifier = Modifier.padding(20.dp))
         else -> {
-            val shown = marks.filter { m -> (filter.kinds == null || m.kind in filter.kinds) && (colour == null || (m.color and 0xFFFFFF) == (colour!! and 0xFFFFFF)) }
+            val kinds = filter.kinds
+            val only = colour
+            val shown = marks.filter { m -> (kinds == null || m.kind in kinds) && (only == null || (m.color and 0xFFFFFF) == (only and 0xFFFFFF)) }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 MarkFilter.entries.filter { f -> f.kinds == null || marks.any { it.kind in f.kinds } }.forEach { f -> Chip(f.label, { filter = f }, selected = filter == f) }
             }
