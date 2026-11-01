@@ -102,6 +102,15 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.verticalScroll
+import com.fadysaeed.pdfx.engine.BoxAlign
+import com.fadysaeed.pdfx.engine.BoxDir
+import com.fadysaeed.pdfx.engine.BoxFont
+import com.fadysaeed.pdfx.engine.BoxSpacings
+import com.fadysaeed.pdfx.engine.BoxStyle
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -507,7 +516,9 @@ fun ViewerContent(
 
     reader.textAsk?.let { ask -> WordsAsk(ask, onDismiss = { reader.textAsk = null }, onDone = reader::submitText) }
     reader.colorPick?.let { pick -> ColorPickerDialog(pick.initial, reader.customColors, onDismiss = { reader.colorPick = null }) { c -> reader.applyPicked(pick, c) } }
-    reader.textEdit?.let { m -> TextEdit(m, onDismiss = { reader.textEdit = null }) { t, sz, c -> reader.submitTextEdit(m, t, sz, c) } }
+    reader.boxEdit?.let { e ->
+        BoxEditor(e.mark?.note ?: "", e.mark?.style ?: reader.boxStyle, isNew = e.mark == null, recent = reader.customColors, onDismiss = { reader.boxEdit = null }) { t, st -> reader.submitBox(e, t, st) }
+    }
 
     if (askPage) {
         GoToPage(pageCount, onDismiss = { askPage = false }) { p -> askPage = false; reader.go(p - 1) }
@@ -785,6 +796,8 @@ internal fun DisplaySheet(reader: Reader, onFlatten: () -> Unit = {}, onReflow: 
         ReflowChoice("Font", ReflowFont.entries.map { it.label }, reader.reflowFont.ordinal) { reader.changeReflowFont(ReflowFont.entries[it]) }
         ReflowChoice("Line spacing", listOf("Tight", "Normal", "Loose"), reader.reflowSpacing, reader::changeReflowSpacing)
         ReflowChoice("Margins", listOf("Narrow", "Normal", "Wide"), reader.reflowMargin, reader::changeReflowMargin)
+        ReflowChoice("Lines", listOf("Ragged", "Justified"), if (reader.reflowJustify) 1 else 0) { reader.changeReflowJustify(it == 1) }
+        ReflowChoice("Page marks", listOf("Hide", "Show"), if (reader.reflowPageMarks) 1 else 0) { reader.changeReflowPageMarks(it == 1) }
         Text("Arabic paragraphs use IBM Plex Sans Arabic and read right to left.", style = Type.small, modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
     }
     if (reader.canMark) {
@@ -819,9 +832,10 @@ fun reflowInk(mode: PaperMode): Color = when (mode) {
 }
 
 /**
- * Each page's words as paragraphs, in the chosen size, font, spacing and colours. Headings are set
- * larger, Arabic paragraphs run right to left in IBM Plex Sans Arabic, search hits are marked, and
- * any of the text can be selected and copied.
+ * Each page's words as paragraphs, in the chosen size, font, spacing and colours: headings larger,
+ * bold and italic kept, lists with hanging bullets, pictures in place, Arabic right to left in IBM
+ * Plex Sans Arabic, lines no longer than is comfortable to read, search hits marked, and any of
+ * it can be selected and copied.
  */
 @Composable
 private fun ReflowView(reader: Reader, listState: LazyListState, padding: PaddingValues) {
@@ -833,6 +847,8 @@ private fun ReflowView(reader: Reader, listState: LazyListState, padding: Paddin
     val latin = if (reader.reflowFont == ReflowFont.SERIF) ReadingSerif else PlexArabic
     val query = reader.query.trim().takeIf { reader.searchOpen && it.isNotEmpty() }
     val mark = Ink.Amber.copy(alpha = if (reader.mode == PaperMode.NIGHT) 0.45f else 0.5f)
+    val filter = remember(reader.mode) { pageFilter(reader.mode)?.let { androidx.compose.ui.graphics.ColorFilter.colorMatrix(it) } }
+    val density = androidx.compose.ui.platform.LocalDensity.current
     // Search, contents and bookmarks land on the page they point to.
     LaunchedEffect(reader.jump) {
         val j = reader.jump ?: return@LaunchedEffect
@@ -847,36 +863,86 @@ private fun ReflowView(reader: Reader, listState: LazyListState, padding: Paddin
             items(reader.pageCount, key = { it }) { i ->
                 LaunchedEffect(i) { reader.loadParagraphs(i) }
                 val paras = reader.paragraphs[i]
-                Column(Modifier.fillMaxWidth().padding(horizontal = margin, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy((size * 0.7f).dp)) {
-                    DisableSelection {
-                        Text("PAGE ${i + 1}", style = Type.eyebrow.copy(color = ink.copy(alpha = 0.55f)))
-                    }
-                    when {
-                        paras == null -> Spacer(Modifier.height(240.dp))
-                        paras.isEmpty() -> DisableSelection {
-                            Text("No text on this page. It may be a picture or a scan.", style = Type.note.copy(color = ink.copy(alpha = 0.6f)))
-                        }
-                        else -> paras.forEach { p ->
-                            val arabic = isArabic(p.text)
-                            val scale = when (p.level) { 1 -> 1.4f; 2 -> 1.15f; else -> 1f }
-                            Text(
-                                highlighted(p.text, query, mark),
-                                style = TextStyle(
-                                    fontFamily = if (arabic) PlexArabic else latin,
-                                    fontWeight = if (p.level > 0) FontWeight.SemiBold else FontWeight.Normal,
-                                    fontSize = (size * scale).sp,
-                                    lineHeight = (size * scale * if (p.level > 0) 1.3f else spacing).sp,
-                                    color = ink,
-                                    textDirection = TextDirection.Content,
-                                    textAlign = TextAlign.Start,
-                                ),
-                                modifier = Modifier.fillMaxWidth().padding(top = if (p.level > 0) (size * 0.5f).dp else 0.dp),
-                            )
+                Box(Modifier.fillMaxWidth().padding(horizontal = margin), contentAlignment = Alignment.TopCenter) {
+                    // About 70 characters to a line, however wide the screen.
+                    BoxWithConstraints(Modifier.widthIn(max = (size * 36).dp).fillMaxWidth()) {
+                        val colPx = with(density) { maxWidth.roundToPx() }
+                        Column(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy((size * 0.85f).dp)) {
+                            if (reader.reflowPageMarks) DisableSelection {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(Modifier.weight(1f).height(1.dp).background(ink.copy(alpha = 0.14f)))
+                                    Text("${i + 1}", style = Type.small.copy(color = ink.copy(alpha = 0.45f)), modifier = Modifier.padding(start = 10.dp))
+                                }
+                            }
+                            when {
+                                paras == null -> Spacer(Modifier.height(240.dp))
+                                paras.isEmpty() -> DisableSelection {
+                                    Text("No text on this page. It may be a picture or a scan.", style = Type.note.copy(color = ink.copy(alpha = 0.6f)))
+                                }
+                                else -> paras.forEach { p ->
+                                    val fig = p.figure
+                                    if (fig != null) {
+                                        val pw = reader.pages?.widths?.getOrNull(i)?.takeIf { it > 0f } ?: 595f
+                                        val frac = (fig.width / pw * 1.15f).coerceIn(0.4f, 1f)
+                                        val wPx = (colPx * frac).toInt().coerceAtLeast(1)
+                                        LaunchedEffect(i, fig, wPx) { reader.loadFigure(i, fig, wPx) }
+                                        val img = reader.figures[reader.figureKey(i, fig, wPx)]
+                                        val aspect = (fig.width / fig.height.coerceAtLeast(1f)).coerceIn(0.2f, 6f)
+                                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                            Box(Modifier.fillMaxWidth(frac).aspectRatio(aspect).background(ink.copy(alpha = 0.05f))) {
+                                                if (img != null) androidx.compose.foundation.Image(img, null, Modifier.fillMaxSize(), colorFilter = filter)
+                                            }
+                                        }
+                                        return@forEach
+                                    }
+                                    val arabic = isArabic(p.text)
+                                    val scale = when (p.level) { 1 -> 1.45f; 2 -> 1.18f; else -> 1f }
+                                    val style = TextStyle(
+                                        fontFamily = if (arabic) PlexArabic else latin,
+                                        fontWeight = if (p.level > 0) FontWeight.SemiBold else FontWeight.Normal,
+                                        fontSize = (size * scale).sp,
+                                        lineHeight = (size * scale * if (p.level > 0) 1.3f else spacing).sp,
+                                        color = ink,
+                                        textDirection = TextDirection.Content,
+                                        textAlign = if (reader.reflowJustify && p.level == 0) TextAlign.Justify else TextAlign.Start,
+                                        hyphens = if (reader.reflowJustify && !arabic) androidx.compose.ui.text.style.Hyphens.Auto else androidx.compose.ui.text.style.Hyphens.None,
+                                        lineBreak = androidx.compose.ui.text.style.LineBreak.Paragraph,
+                                    )
+                                    val words = styled(p, query, mark)
+                                    if (p.list) {
+                                        Row(Modifier.fillMaxWidth()) {
+                                            val marker = p.marker.let { m -> if (m.length == 1 && !m[0].isLetterOrDigit()) "•" else m }
+                                            Text(marker, style = style.copy(textAlign = TextAlign.End, color = ink.copy(alpha = 0.7f)), modifier = Modifier.width((size * 1.9f).dp).padding(end = (size * 0.5f).dp))
+                                            Text(words, style = style, modifier = Modifier.weight(1f))
+                                        }
+                                    } else {
+                                        Text(words, style = style, modifier = Modifier.fillMaxWidth().padding(top = if (p.level > 0) (size * 0.6f).dp else 0.dp))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/** A paragraph's words with its bold and italic runs, and search hits marked. */
+internal fun styled(p: com.fadysaeed.pdfx.engine.Para, query: String?, mark: Color): AnnotatedString = buildAnnotatedString {
+    append(p.text)
+    p.spans.forEach { sp ->
+        val end = sp.end.coerceAtMost(p.text.length)
+        if (sp.start < end) addStyle(
+            SpanStyle(
+                fontWeight = if (sp.bold) FontWeight.Bold else null,
+                fontStyle = if (sp.italic) androidx.compose.ui.text.font.FontStyle.Italic else null,
+            ),
+            sp.start, end,
+        )
+    }
+    if (!query.isNullOrEmpty()) {
+        com.fadysaeed.pdfx.engine.findAll(p.text, query).forEach { r -> addStyle(SpanStyle(background = mark), r.first, r.last + 1) }
     }
 }
 
@@ -1312,62 +1378,134 @@ private fun WordsAsk(ask: TextAsk, onDismiss: () -> Unit, onDone: (String) -> Un
     )
 }
 
-/** Text sizes offered when editing a text box, in points. */
-val EditTextSizes = listOf(9f, 11f, 15f, 20f, 28f)
+/** Soft backgrounds for text boxes, chosen to keep dark text readable. */
+val BoxFills = listOf(0xFFFFFFFF, 0xFFFFF4C2, 0xFFDDEBFF, 0xFFFFE0EA, 0xFFDDF5DD).map { it.toInt() }
 
-/** Changing a text box: its words, size and colour. */
-@Composable
-internal fun TextEdit(m: Mark, onDismiss: () -> Unit, onDone: (String, Float, Int) -> Unit) {
-    var text by remember(m) { mutableStateOf(m.note) }
-    var size by remember(m) { mutableFloatStateOf(m.size.takeIf { it > 0f } ?: 15f) }
-    var color by remember(m) { mutableStateOf(m.color) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Ink.Field,
-        shape = RectangleShape,
-        title = { Text("Edit text", style = Type.title) },
-        text = { TextEditFields(text, size, color, { text = it }, { size = it }, { color = it }) },
-        confirmButton = { AmberButton(if (text.isBlank()) "Remove box" else "Save", { onDone(text, size, color) }) },
-        dismissButton = { GhostButton("Cancel", onDismiss, minHeight = 52.dp) },
-    )
+private fun nextSize(s: Float, up: Boolean): Float {
+    val step = when { s < 12f -> 1f; s < 24f -> 2f; else -> 4f }
+    return (if (up) s + step else s - (if (s <= 12f) 1f else if (s <= 24f) 2f else 4f)).coerceIn(6f, 72f)
 }
 
-/** The words, size and colour of a text box being edited. */
+/** Writing a new text box or changing one: its words and every part of its style, with a preview. */
 @Composable
-internal fun TextEditFields(text: String, size: Float, color: Int, onText: (String) -> Unit, onSize: (Float) -> Unit, onColor: (Int) -> Unit) {
-    Column {
-        BasicTextField(
-            value = text,
-            onValueChange = onText,
-            textStyle = Type.body.copy(color = Ink.Bone, fontSize = 16.sp),
-            cursorBrush = SolidColor(Ink.Amber),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
-            decorationBox = { inner ->
-                Box(Modifier.fillMaxWidth().heightIn(min = 110.dp).background(Ink.Black, Corner).border(1.dp, Ink.Edge, Corner).padding(12.dp)) {
-                    if (text.isEmpty()) Text("Write the text. Leave it empty to remove the box.", style = Type.body.copy(color = Ink.Ash, fontSize = 15.sp))
-                    inner()
-                }
-            },
-        )
-        Spacer(Modifier.height(14.dp))
-        Text("SIZE", style = Type.eyebrow)
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            EditTextSizes.forEach { sz ->
-                val sel = kotlin.math.abs(size - sz) < 0.5f
-                Box(
-                    Modifier.size(40.dp).border(1.dp, if (sel) Ink.Bone else Ink.Rule, Corner).clickable { onSize(sz) },
-                    contentAlignment = Alignment.Center,
-                ) { Text("A", style = Type.bodyStrong.copy(color = if (sel) Ink.Bone else Ink.Dust, fontSize = (8 + sz * 0.55f).sp)) }
+internal fun BoxEditor(startText: String, startStyle: BoxStyle, isNew: Boolean, recent: List<Int>, onDismiss: () -> Unit, onDone: (String, BoxStyle) -> Unit) {
+    var text by remember { mutableStateOf(startText) }
+    var style by remember { mutableStateOf(startStyle) }
+    var picking by remember { mutableStateOf<Int?>(null) } // 0 for the words, 1 for the background
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp).background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).imePadding(),
+        ) {
+            Text(if (isNew) "New text" else "Edit text", style = Type.title, modifier = Modifier.padding(start = 18.dp, top = 16.dp, bottom = 8.dp))
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
+                BoxStyleFields(text, style, recent, { text = it }, { style = it }, { picking = it })
+            }
+            Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                GhostButton("Cancel", onDismiss, minHeight = 48.dp)
+                Spacer(Modifier.width(10.dp))
+                AmberButton(if (!isNew && text.isBlank()) "Remove box" else if (isNew) "Add" else "Save", { onDone(text, style) }, enabled = text.isNotBlank() || !isNew)
             }
         }
-        Spacer(Modifier.height(14.dp))
-        Text("COLOUR", style = Type.eyebrow)
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            PenColors.forEach { c -> Swatch(c, (color and 0xFFFFFF) == (c and 0xFFFFFF)) { onColor(c) } }
+    }
+    picking?.let { which ->
+        val initial = if (which == 0) style.color else style.fill ?: BoxFills[1]
+        ColorPickerDialog(initial, recent, onDismiss = { picking = null }) { c ->
+            style = if (which == 0) style.copy(color = c) else style.copy(fill = c)
+            picking = null
         }
     }
+}
+
+/** The preview, the words, and the style controls of a text box. [onPick] opens the picker: 0 words, 1 background. */
+@Composable
+internal fun BoxStyleFields(text: String, style: BoxStyle, recent: List<Int>, onText: (String) -> Unit, onStyle: (BoxStyle) -> Unit, onPick: (Int) -> Unit) {
+    val family = when (style.font) {
+        BoxFont.SANS -> androidx.compose.ui.text.font.FontFamily.SansSerif
+        BoxFont.SERIF -> androidx.compose.ui.text.font.FontFamily.Serif
+        BoxFont.MONO -> androidx.compose.ui.text.font.FontFamily.Monospace
+    }
+    val shown = TextStyle(
+        fontFamily = family,
+        fontSize = (style.size * 1.15f).coerceIn(9f, 40f).sp,
+        lineHeight = (style.size * 1.15f * BoxSpacings[style.spacing]).coerceIn(9f, 70f).sp,
+        fontWeight = if (style.bold) FontWeight.Bold else FontWeight.Normal,
+        fontStyle = if (style.italic) androidx.compose.ui.text.font.FontStyle.Italic else androidx.compose.ui.text.font.FontStyle.Normal,
+        textDecoration = if (style.underline) TextDecoration.Underline else null,
+        color = Color(style.color),
+        textAlign = when (style.align) { BoxAlign.AUTO -> TextAlign.Start; BoxAlign.LEFT -> TextAlign.Left; BoxAlign.CENTER -> TextAlign.Center; BoxAlign.RIGHT -> TextAlign.Right },
+        textDirection = when (style.dir) { BoxDir.AUTO -> TextDirection.Content; BoxDir.RTL -> TextDirection.Rtl; BoxDir.LTR -> TextDirection.Ltr },
+    )
+    Text("PREVIEW", style = Type.eyebrow)
+    Spacer(Modifier.height(6.dp))
+    Box(Modifier.fillMaxWidth().background(Ink.Paper, Corner).padding(14.dp)) {
+        Box(
+            Modifier.fillMaxWidth()
+                .background(style.fill?.let { Color(it) } ?: Color.Transparent)
+                .then(if (style.border) Modifier.border(1.dp, Color(style.color)) else Modifier)
+                .padding(8.dp),
+        ) {
+            Text(text.ifBlank { "Your words, as they will sit on the page" }, style = shown, modifier = Modifier.fillMaxWidth())
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+    BasicTextField(
+        value = text,
+        onValueChange = onText,
+        textStyle = Type.body.copy(color = Ink.Bone, fontSize = 16.sp, textDirection = TextDirection.Content),
+        cursorBrush = SolidColor(Ink.Amber),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 84.dp),
+        decorationBox = { inner ->
+            Box(Modifier.fillMaxWidth().heightIn(min = 84.dp).background(Ink.Black, Corner).border(1.dp, Ink.Edge, Corner).padding(12.dp)) {
+                if (text.isEmpty()) Text("Write the text", style = Type.body.copy(color = Ink.Ash, fontSize = 15.sp))
+                inner()
+            }
+        },
+    )
+    StyleRow("FONT") { BoxFont.entries.forEach { f -> Chip(f.label, { onStyle(style.copy(font = f)) }, selected = style.font == f) } }
+    StyleRow("SIZE") {
+        GhostButton("−", { onStyle(style.copy(size = nextSize(style.size, false))) }, minHeight = 44.dp)
+        Text("${if (style.size % 1f == 0f) style.size.toInt() else style.size} pt", style = Type.figure, modifier = Modifier.padding(horizontal = 8.dp))
+        GhostButton("+", { onStyle(style.copy(size = nextSize(style.size, true))) }, minHeight = 44.dp)
+    }
+    StyleRow("STYLE") {
+        StyleToggle("Bold", style.bold, { onStyle(style.copy(bold = !style.bold)) }) { Text("B", style = Type.bodyStrong.copy(fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, color = it)) }
+        StyleToggle("Italic", style.italic, { onStyle(style.copy(italic = !style.italic)) }) { Text("I", style = Type.body.copy(fontSize = 18.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, fontFamily = androidx.compose.ui.text.font.FontFamily.Serif, color = it)) }
+        StyleToggle("Underline", style.underline, { onStyle(style.copy(underline = !style.underline)) }) { Text("U", style = Type.body.copy(fontSize = 17.sp, textDecoration = TextDecoration.Underline, color = it)) }
+    }
+    StyleRow("ALIGN") { BoxAlign.entries.forEach { a -> Chip(a.label, { onStyle(style.copy(align = a)) }, selected = style.align == a) } }
+    StyleRow("DIRECTION") { BoxDir.entries.forEach { d -> Chip(d.label, { onStyle(style.copy(dir = d)) }, selected = style.dir == d) } }
+    StyleRow("COLOUR") {
+        (PenColors + recent.filter { it !in PenColors }.take(3)).forEach { c -> Swatch(c, (style.color and 0xFFFFFF) == (c and 0xFFFFFF), size = 34.dp) { onStyle(style.copy(color = c)) } }
+        AddColor { onPick(0) }
+    }
+    StyleRow("BACKGROUND") {
+        Chip("None", { onStyle(style.copy(fill = null)) }, selected = style.fill == null)
+        BoxFills.forEach { c -> Swatch(c, style.fill != null && (style.fill and 0xFFFFFF) == (c and 0xFFFFFF), size = 34.dp) { onStyle(style.copy(fill = c)) } }
+        AddColor { onPick(1) }
+    }
+    StyleRow("BORDER") {
+        Chip("None", { onStyle(style.copy(border = false)) }, selected = !style.border)
+        Chip("Thin line", { onStyle(style.copy(border = true)) }, selected = style.border)
+    }
+    StyleRow("LINE SPACING") { listOf("Tight", "Normal", "Loose").forEachIndexed { i, l -> Chip(l, { onStyle(style.copy(spacing = i)) }, selected = style.spacing == i) } }
+    Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+private fun StyleRow(label: String, content: @Composable () -> Unit) {
+    Spacer(Modifier.height(14.dp))
+    Text(label, style = Type.eyebrow)
+    Spacer(Modifier.height(6.dp))
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) { content() }
+}
+
+@Composable
+private fun StyleToggle(description: String, on: Boolean, onClick: () -> Unit, content: @Composable (Color) -> Unit) {
+    Box(
+        Modifier.size(44.dp).background(if (on) Ink.Bone else Color.Transparent, Corner).border(1.dp, if (on) Ink.Bone else Ink.Rule, Corner)
+            .clickable(onClick = onClick).semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) { content(if (on) Ink.Black else Ink.Sand) }
 }
 
 /** Kinds of marks to filter the list by. */

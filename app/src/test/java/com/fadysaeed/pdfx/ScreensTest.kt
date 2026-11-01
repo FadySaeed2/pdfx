@@ -49,7 +49,8 @@ import com.fadysaeed.pdfx.ui.viewer.PenColors
 import com.fadysaeed.pdfx.ui.viewer.Tool
 import com.fadysaeed.pdfx.ui.viewer.ContentsSheetOnTab
 import com.fadysaeed.pdfx.ui.viewer.ReflowFont
-import com.fadysaeed.pdfx.ui.viewer.TextEditFields
+import com.fadysaeed.pdfx.ui.viewer.BoxStyleFields
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
 import com.fadysaeed.pdfx.ui.viewer.movedBox
@@ -57,6 +58,7 @@ import com.fadysaeed.pdfx.ui.viewer.resizedBox
 import com.fadysaeed.pdfx.ui.viewer.isArabic
 import com.fadysaeed.pdfx.ui.viewer.highlighted
 import com.fadysaeed.pdfx.engine.Para
+import com.fadysaeed.pdfx.engine.Span
 import com.fadysaeed.pdfx.engine.Hit
 import com.fadysaeed.pdfx.engine.findAll
 import com.fadysaeed.pdfx.engine.snippet
@@ -232,6 +234,9 @@ class ScreensTest {
                 Para("Monitoring", 2),
                 Para("Check levels 12 hours after the last dose, weekly after each change until stable, then every three months for the first year."),
                 Para("يُفضَّل قياس مستوى الليثيوم بعد ١٢ ساعة من آخر جرعة، ومتابعة وظائف الكلى والغدة الدرقية كل ستة أشهر."),
+                Para("Check sodium and creatinine before starting.", list = true, marker = "•"),
+                Para("Avoid NSAIDs where possible, and warn about dehydration.", list = true, marker = "•"),
+                Para("Stopping lithium abruptly raises the risk of relapse; taper over at least four weeks.", spans = listOf(Span(0, 17, bold = true, italic = false), Span(54, 84, bold = false, italic = true))),
             ),
             1 to listOf(Para("Combining lithium with an ACE inhibitor, an ARB or a thiazide raises levels; check within a week of starting any of them.")),
         ))
@@ -250,7 +255,13 @@ class ScreensTest {
                 Column(Modifier.fillMaxSize().background(Ink.Field).padding(24.dp)) {
                     androidx.compose.material3.Text("Edit text", style = com.fadysaeed.pdfx.ui.theme.Type.title)
                     androidx.compose.foundation.layout.Spacer(Modifier.padding(8.dp))
-                    TextEditFields("Recheck levels after the dose change\nراجع المستوى بعد تغيير الجرعة", 15f, PenColors[2], {}, {}, {})
+                    androidx.compose.foundation.layout.Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                        BoxStyleFields(
+                            "راجع المستوى بعد تغيير الجرعة\nRecheck levels after the dose change",
+                            com.fadysaeed.pdfx.engine.BoxStyle(font = com.fadysaeed.pdfx.engine.BoxFont.SERIF, size = 16f, bold = true, italic = true, color = PenColors[2], fill = 0xFFFFF4C2.toInt(), border = true, spacing = 1),
+                            listOf(0xFFB39DDB.toInt()), {}, {}, {},
+                        )
+                    }
                 }
             }
         }
@@ -348,6 +359,39 @@ class ScreensTest {
         r.chrome = false
         r.setMarksForTest(0, ink)
         r.showSelectedForTest(ink[0], with = ink.subList(1, 3))
+    }
+
+    @Test
+    fun reflowRules() {
+        fun line(t: String, size: Float = 10f, y: Float = 300f, b: Boolean = false, it: Boolean = false) =
+            com.fadysaeed.pdfx.engine.RawLine(t, BooleanArray(t.length) { b }, BooleanArray(t.length) { it }, size, y, y + size)
+        fun block(y0: Float, vararg l: com.fadysaeed.pdfx.engine.RawLine) = com.fadysaeed.pdfx.engine.RawBlock(Box(50f, y0, 500f, y0 + 12f * l.size), l.toList(), false)
+        val blocks = listOf(
+            block(30f, line("Clinical Guideline 2026", y = 30f)),
+            block(100f, line("Maintenance", 16f, 100f)),
+            block(140f, line("Lithium remains the first-line treat-", y = 140f), line("ment for bipolar disorder.", y = 152f)),
+            block(180f, line("• Check sodium first.", y = 180f), line("• Then creatinine.", y = 192f)),
+            com.fadysaeed.pdfx.engine.RawBlock(Box(60f, 220f, 400f, 420f), emptyList(), true),
+            block(800f, line("12", y = 800f)),
+        )
+        val paras = com.fadysaeed.pdfx.engine.buildParas(blocks, 842f, setOf(com.fadysaeed.pdfx.engine.bandKey("Clinical Guideline 2027")))
+        val texts = paras.map { it.text }
+        assertTrue("running head dropped: $texts", texts.none { it.contains("Clinical Guideline") })
+        assertTrue("page number dropped: $texts", texts.none { it == "12" })
+        assertEquals(1, paras.first { it.text == "Maintenance" }.level)
+        assertTrue(texts.contains("Lithium remains the first-line treatment for bipolar disorder."))
+        assertEquals(2, paras.count { it.list })
+        assertEquals(1, paras.count { it.figure != null })
+        assertTrue(com.fadysaeed.pdfx.engine.runsOn(Para("and the dose was"), Para("halved after a week.")))
+        assertTrue(!com.fadysaeed.pdfx.engine.runsOn(Para("The dose was halved."), Para("after a week.")))
+        assertEquals("and the dose was halved.", com.fadysaeed.pdfx.engine.joinParas(Para("and the dose was"), Para("halved.")).text)
+        // Text box style survives being written and read back.
+        val st = com.fadysaeed.pdfx.engine.BoxStyle(font = com.fadysaeed.pdfx.engine.BoxFont.SERIF, size = 18f, bold = true, underline = true, align = com.fadysaeed.pdfx.engine.BoxAlign.CENTER, color = 0xFF2F6FED.toInt(), spacing = 2)
+        val back = com.fadysaeed.pdfx.engine.BoxStyle.parse(st.css("hello"), "hello", 12f, 0, null, false, false)
+        assertEquals(st, back)
+        val ar = com.fadysaeed.pdfx.engine.BoxStyle()
+        assertTrue(ar.rich("مرحبا\nhello").contains("<p dir=\"rtl\">مرحبا</p><p dir=\"ltr\">hello</p>"))
+        assertEquals(com.fadysaeed.pdfx.engine.BoxAlign.RIGHT, ar.alignFor("مرحبا"))
     }
 
     @Test

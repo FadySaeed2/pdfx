@@ -58,6 +58,8 @@ data class Mark(
     val parts: List<Box> = emptyList(),
     /** The strokes of a drawing, or the two ends of a line, for the same. */
     val path: List<List<Pair<Float, Float>>> = emptyList(),
+    /** How a text box looks; null for other marks. */
+    val style: BoxStyle? = null,
 ) {
     /** How far a point is from the mark itself (0 when it is on it), in PDF points. */
     fun distanceTo(x: Float, y: Float): Float = when {
@@ -94,7 +96,17 @@ internal fun segmentDistance(x: Float, y: Float, a: Pair<Float, Float>, b: Pair<
 }
 
 /** A paragraph of reflowed text. [level] is 0 for body text, 1 for a heading, 2 for a smaller heading. */
-data class Para(val text: String, val level: Int = 0)
+data class Para(
+    val text: String,
+    val level: Int = 0,
+    /** Bold and italic runs inside the text. */
+    val spans: List<Span> = emptyList(),
+    /** A list item; [marker] is its bullet or number. */
+    val list: Boolean = false,
+    /** For a picture: where it sits on the page (the text is then empty). */
+    val figure: Box? = null,
+    val marker: String = "",
+)
 
 /** A stroke of ink: points in PDF points. */
 typealias Stroke = List<Pair<Float, Float>>
@@ -324,57 +336,46 @@ class PdfSession private constructor(
         return Selection(index, ax, ay, bx, by, quads.map { it.box() }, text)
     }
 
+    private val rawCache = object : LinkedHashMap<Int, List<Para>>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, List<Para>>) = size > 8
+    }
+    private val bandCache = HashMap<Int, Set<String>>()
+
+    /** The lines in a page's top and bottom bands, numbers blanked. */
+    private fun bandLines(index: Int): Set<String> = bandCache.getOrPut(index) {
+        val h = sizeNow(index).height
+        val out = HashSet<String>()
+        runCatching { stext(index).blocks }.getOrNull()?.forEach { b ->
+            val r = b.bbox ?: return@forEach
+            if (r.y1 <= h * 0.085f || r.y0 >= h * 0.915f) {
+                val t = b.lines?.joinToString(" ") { l -> buildString { l.chars?.forEach { appendCodePoint(it.c) } }.trim() }.orEmpty()
+                if (t.isNotBlank() && t.length <= 90) out += bandKey(t)
+            }
+        }
+        out
+    }
+
+    private fun rawParas(index: Int): List<Para> = rawCache.getOrPut(index) {
+        val w = FlowWalker()
+        val st = page(index).toStructuredText("preserve-images")
+        try { st.walk(w) } finally { runCatching { st.destroy() } }
+        val near = ((index - 2)..(index + 2)).filter { it != index && it in 0 until pageCount }.flatMap { bandLines(it) }.toSet()
+        buildParas(w.blocks, sizeNow(index).height, near)
+    }
+
     /**
-     * A page's text as paragraphs, for reading reflowed to the screen width. Lines are joined,
-     * words split across lines by a hyphen are put back together, and blocks set noticeably larger
-     * than the page's body text (or short and all bold) are marked as headings.
+     * A page's text as paragraphs, for reading reflowed to the screen width: bold and italic kept,
+     * headings found, lists split out, pictures in place, running heads and page numbers left out,
+     * and a paragraph that runs over the page break joined back together (on the page it starts on).
      */
     suspend fun paragraphs(index: Int): List<Para> = onDoc {
-        val blocks = runCatching { stext(index).blocks }.getOrNull() ?: emptyArray()
-        class Raw(val lines: List<String>, val height: Float, val bold: Boolean)
-        val raws = ArrayList<Raw>()
-        val heights = ArrayList<Pair<Float, Int>>() // line height, characters on it
-        for (b in blocks) {
-            val lines = b.lines ?: continue
-            val texts = ArrayList<String>()
-            var hSum = 0f; var hN = 0; var chars = 0; var boldChars = 0
-            for (l in lines) {
-                val cs = l.chars ?: continue
-                val t = buildString { cs.forEach { appendCodePoint(it.c) } }.trim()
-                if (t.isEmpty()) continue
-                texts += t
-                val h = l.bbox?.let { r -> (r.y1 - r.y0).coerceAtLeast(0f) } ?: 0f
-                if (h > 0f) { hSum += h; hN++; heights += h to t.length }
-                chars += cs.size
-                boldChars += cs.count { (it.flags and StructuredText.CHAR_FLAGS_BOLD) != 0 }
-            }
-            if (texts.isEmpty()) continue
-            raws += Raw(texts, if (hN > 0) hSum / hN else 0f, chars > 0 && boldChars * 10 >= chars * 9)
+        var list = rawParas(index)
+        if (index > 0 && runsOn(rawParas(index - 1).lastOrNull(), list.firstOrNull())) list = list.drop(1)
+        if (index + 1 < pageCount && list.isNotEmpty()) {
+            val next = rawParas(index + 1).firstOrNull()
+            if (next != null && runsOn(list.last(), next)) list = list.dropLast(1) + joinParas(list.last(), next)
         }
-        // The body size is the line height most characters are set in.
-        val body = heights.sortedBy { it.first }.let { list ->
-            val total = list.sumOf { it.second }
-            var acc = 0
-            list.firstOrNull { acc += it.second; acc * 2 >= total }?.first ?: 0f
-        }
-        raws.map { r ->
-            val text = r.lines.fold(StringBuilder()) { acc, line ->
-                when {
-                    acc.isEmpty() -> acc.append(line)
-                    acc.endsWith("-") && acc.length > 1 && acc[acc.length - 2].isLetter() && line.first().isLowerCase() ->
-                        acc.setLength(acc.length - 1).let { acc.append(line) }
-                    else -> acc.append(' ').append(line)
-                }
-            }.toString()
-            val short = r.lines.size <= 3 && text.length <= 160
-            val level = when {
-                body > 0f && short && r.height >= body * 1.45f -> 1
-                body > 0f && short && r.height >= body * 1.18f -> 2
-                short && r.bold && r.lines.size <= 2 && text.length <= 100 && raws.size > 1 -> 2
-                else -> 0
-            }
-            Para(text, level)
-        }
+        list
     }
 
     // ------------------------------------------------------------------ marks (annotations)
@@ -424,7 +425,9 @@ class PdfSession private constructor(
                 else -> emptyList()
             }
             val width = if (kind in setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW)) runCatching { a.borderWidth }.getOrDefault(1f) else 0f
-            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), color, runCatching { a.contents ?: "" }.getOrDefault(""), quoted, da?.size ?: 0f, opacity, width, parts, path)
+            val contents = runCatching { a.contents ?: "" }.getOrDefault("")
+            val style = if (kind == MarkKind.TEXT) runCatching { styleOf(a, contents, da?.size ?: 12f, color) }.getOrNull() else null
+            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), style?.color ?: color, contents, quoted, style?.size ?: da?.size ?: 0f, opacity, width, parts, path, style)
         }
         return out
     }
@@ -481,16 +484,46 @@ class PdfSession private constructor(
     }
 
     /** Typed words placed on the page. */
-    suspend fun addTextBox(index: Int, x: Float, y: Float, text: String, color: Int, size: Float) = edit("Text", index) {
+    suspend fun addTextBox(index: Int, x: Float, y: Float, text: String, color: Int, size: Float) =
+        addTextBox(index, x, y, text, BoxStyle(size = size, color = color))
+
+    /** Typed words placed on the page, in [style]. A right-to-left box grows leftwards from the tap. */
+    suspend fun addTextBox(index: Int, x: Float, y: Float, text: String, style: BoxStyle) = edit("Text", index) {
+        val size = style.size
         val lines = text.lines()
-        val w = (lines.maxOf { it.length } * size * 0.55f + size).coerceIn(size * 3, (sizeNow(index).width - x).coerceAtLeast(size * 3))
-        val h = textHeight(text, w, size)
+        val pageW = sizeNow(index).width
+        val w = (lines.maxOf { it.length } * size * (if (style.font == BoxFont.MONO) 0.62f else 0.55f) + size * 1.4f).coerceIn(size * 3, pageW * 0.9f)
+        val rtl = style.rtl(lines.firstOrNull { it.isNotBlank() } ?: "")
+        val x0 = (if (rtl) x - w else x).coerceIn(0f, (pageW - w).coerceAtLeast(0f))
         val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_FREE_TEXT)
-        a.rect = Rect(x, y, x + w, y + h)
-        a.contents = text
-        a.setDefaultAppearance("Helv", size, rgb(color))
-        a.borderWidth = 0f
+        a.rect = Rect(x0, y, x0 + w, y + textHeight(text, w, style))
+        applyText(a, text, style)
         a.update()
+    }
+
+    /** Writes words and style into a text box, for this app and for other PDF apps alike. */
+    private fun applyText(a: PDFAnnotation, text: String, style: BoxStyle) {
+        a.contents = text
+        a.setDefaultAppearance(style.font.da, style.size, rgb(style.color))
+        runCatching { a.quadding = style.quadding(text) }
+        runCatching { a.setRichDefaults(style.css(text)) }
+        runCatching { a.setRichContents(text, style.rich(text)) }
+        runCatching { a.interiorColor = style.fill?.let { rgb(it) } ?: FloatArray(0) }
+        if (style.border) {
+            a.borderWidth = 0.8f
+            a.color = rgb(style.color)
+        } else {
+            a.borderWidth = 0f
+        }
+    }
+
+    private fun styleOf(a: PDFAnnotation, text: String, size: Float, color: Int): BoxStyle {
+        val ds = runCatching { if (a.hasRichDefaults()) a.richDefaults else null }.getOrNull()
+        val rc = runCatching { if (a.hasRichContents()) a.richContents else null }.getOrNull()
+        val fill = runCatching { a.interiorColor?.takeIf { it.isNotEmpty() }?.let { argb(it) } }.getOrNull()
+        val border = runCatching { a.borderWidth > 0.05f }.getOrDefault(false)
+        val rtl = rc?.let { r -> if (r.contains("dir=\"rtl\"")) true else if (r.contains("dir=\"ltr\"")) false else null }
+        return BoxStyle.parse(ds, text, size, color, fill, border, rtl)
     }
 
     /** A sticky note: an icon on the page that opens to show its words. */
@@ -531,9 +564,11 @@ class PdfSession private constructor(
 
     private fun colorNow(a: PDFAnnotation, color: Int) {
         if (a.type == PDFAnnotation.TYPE_FREE_TEXT) {
-            // A text box's words take their colour from its default appearance.
+            // A text box's words take their colour from its style.
+            val text = runCatching { a.contents ?: "" }.getOrDefault("")
             val da = runCatching { a.defaultAppearance }.getOrNull()
-            a.setDefaultAppearance(da?.font ?: "Helv", da?.size?.takeIf { it > 0f } ?: 12f, rgb(color))
+            val style = styleOf(a, text, da?.size?.takeIf { it > 0f } ?: 12f, argb(da?.color))
+            applyText(a, text, style.copy(color = color))
         } else {
             a.color = rgb(color)
         }
@@ -547,16 +582,20 @@ class PdfSession private constructor(
         a.update()
     }
 
-    /** Changes a text box's words, size and colour. The box keeps its width and grows or shrinks to fit. */
-    suspend fun editTextBox(index: Int, markIndex: Int, text: String, size: Float, color: Int) = edit("Edit text", index) {
+    /** Changes a text box's words, size and colour, keeping the rest of its style. */
+    suspend fun editTextBox(index: Int, markIndex: Int, text: String, size: Float, color: Int): Boolean {
+        val now = marks(index).getOrNull(markIndex)?.style ?: BoxStyle()
+        return editTextBox(index, markIndex, text, now.copy(size = size, color = color))
+    }
+
+    /** Changes a text box's words and style. The box keeps its width and grows or shrinks to fit. */
+    suspend fun editTextBox(index: Int, markIndex: Int, text: String, style: BoxStyle) = edit("Edit text", index) {
         val a = pdfPage(index).annotations?.getOrNull(markIndex) ?: return@edit
         if (a.type != PDFAnnotation.TYPE_FREE_TEXT) return@edit
-        val da = runCatching { a.defaultAppearance }.getOrNull()
-        a.contents = text
-        a.setDefaultAppearance(da?.font ?: "Helv", size, rgb(color))
         val r = a.rect
-        val w = (r.x1 - r.x0).coerceAtLeast(size * 3)
-        a.rect = Rect(r.x0, r.y0, r.x0 + w, r.y0 + textHeight(text, w, size))
+        val w = (r.x1 - r.x0).coerceAtLeast(style.size * 3)
+        a.rect = Rect(r.x0, r.y0, r.x0 + w, r.y0 + textHeight(text, w, style))
+        applyText(a, text, style)
         a.update()
     }
 
@@ -618,11 +657,14 @@ class PdfSession private constructor(
         a.update()
     }
 
-    /** Height a text box needs for [text] at [size] when it is [width] wide, by a generous estimate. */
-    private fun textHeight(text: String, width: Float, size: Float): Float {
-        val perLine = ((width - size * 0.4f) / (size * 0.52f)).coerceAtLeast(1f)
+    /** Height a text box needs for [text] in [style] when it is [width] wide, by a generous estimate. */
+    private fun textHeight(text: String, width: Float, style: BoxStyle): Float {
+        val size = style.size
+        val charW = size * (if (style.font == BoxFont.MONO) 0.62f else if (style.bold) 0.56f else 0.52f)
+        val perLine = ((width - size * 0.8f) / charW).coerceAtLeast(1f)
         val lines = text.lines().sumOf { l -> kotlin.math.ceil(l.length.coerceAtLeast(1) / perLine).toInt().coerceAtLeast(1) }
-        return lines * size * 1.3f + size * 0.6f
+        val lh = maxOf(1.25f, BoxSpacings[style.spacing.coerceIn(0, 2)] + 0.1f)
+        return lines * size * lh + size * 0.8f + (if (style.border) 2f else 0f)
     }
 
     suspend fun deleteMark(index: Int, markIndex: Int) = deleteMarks(index, listOf(markIndex))
@@ -679,6 +721,8 @@ class PdfSession private constructor(
 
     private fun dropPages() {
         charsCache.clear()
+        rawCache.clear()
+        bandCache.clear()
         textCache.values.forEach { runCatching { it.destroy() } }
         textCache.clear()
         pageCache.values.forEach { runCatching { it.destroy() } }
@@ -699,6 +743,8 @@ class PdfSession private constructor(
         }
         textCache.remove(index)?.let { runCatching { it.destroy() } }
         charsCache.remove(index)
+        rawCache.clear()
+        bandCache.remove(index)
         refreshFlags()
         dirty = true
         true

@@ -9,8 +9,13 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.asImageBitmap
 import com.fadysaeed.pdfx.data.Bookmarks
 import com.fadysaeed.pdfx.engine.Box
+import com.fadysaeed.pdfx.engine.BoxAlign
+import com.fadysaeed.pdfx.engine.BoxDir
+import com.fadysaeed.pdfx.engine.BoxFont
+import com.fadysaeed.pdfx.engine.BoxStyle
 import com.fadysaeed.pdfx.engine.Hit
 import com.fadysaeed.pdfx.engine.Mark
 import com.fadysaeed.pdfx.engine.MarkKind
@@ -77,6 +82,22 @@ sealed interface Draft {
 /** Asking for words: a new text box or note at a point, or the note of an existing mark. */
 data class TextAsk(val page: Int, val x: Float, val y: Float, val note: Boolean, val mark: Mark? = null)
 
+/** A text box being written or changed: [mark] is null for a new box at ([x], [y]) on [page]. */
+data class BoxEdit(val page: Int, val x: Float, val y: Float, val mark: Mark? = null)
+
+/** Saves a text box style in one line for preferences. */
+internal fun styleToPref(s: BoxStyle): String = listOf(
+    s.font.name, s.size, s.bold, s.italic, s.underline, s.align.name, s.dir.name, s.color, s.fill ?: "", s.border, s.spacing,
+).joinToString("|")
+
+internal fun styleFromPref(p: String?): BoxStyle? = runCatching {
+    val f = p!!.split('|')
+    BoxStyle(
+        BoxFont.valueOf(f[0]), f[1].toFloat(), f[2].toBoolean(), f[3].toBoolean(), f[4].toBoolean(),
+        BoxAlign.valueOf(f[5]), BoxDir.valueOf(f[6]), f[7].toInt(), f[8].takeIf { it.isNotEmpty() }?.toInt(), f[9].toBoolean(), f[10].toInt(),
+    )
+}.getOrNull()
+
 /** The colour picker is open: for the tool in hand, for selected words, or to recolour [mark]. */
 data class ColorPick(val initial: Int, val mark: Mark? = null, val forWords: Boolean = false)
 
@@ -109,6 +130,15 @@ class Reader(
         private set
     var reflowMargin by mutableIntStateOf(prefs?.getInt("reflow_margin", 1) ?: 1)
         private set
+    /** Reflowed text set flush on both sides, with long English words broken by hyphens. */
+    var reflowJustify by mutableStateOf(prefs?.getBoolean("reflow_justify", true) ?: true)
+        private set
+    /** A thin line with the page number where each page starts. */
+    var reflowPageMarks by mutableStateOf(prefs?.getBoolean("reflow_page_marks", true) ?: true)
+        private set
+    /** Pictures cut from pages for reflowed text, by page, place and width. */
+    val figures = mutableStateMapOf<String, androidx.compose.ui.graphics.ImageBitmap>()
+    private val figureOrder = ArrayDeque<String>()
     /**
      * Where reading was when switching between pages and reflowed text: the page, and how far down
      * it the reading line was (0 to 1). The other view opens at the same place.
@@ -166,6 +196,29 @@ class Reader(
     fun changeReflowSize(sp: Int) { reflowSize = sp.coerceIn(14, 28); prefs?.edit()?.putInt("reflow_size", reflowSize)?.apply() }
     fun changeReflowFont(f: ReflowFont) { reflowFont = f; prefs?.edit()?.putString("reflow_font", f.name)?.apply() }
     fun changeReflowSpacing(step: Int) { reflowSpacing = step.coerceIn(0, 2); prefs?.edit()?.putInt("reflow_spacing", reflowSpacing)?.apply() }
+    fun changeReflowJustify(on: Boolean) { reflowJustify = on; prefs?.edit()?.putBoolean("reflow_justify", on)?.apply() }
+    fun changeReflowPageMarks(on: Boolean) { reflowPageMarks = on; prefs?.edit()?.putBoolean("reflow_page_marks", on)?.apply() }
+
+    fun figureKey(page: Int, box: Box, widthPx: Int) = "$page:${box.x0}:${box.y0}:$widthPx"
+
+    /** Draws the part of a page a picture covers, [widthPx] wide, for reflowed text. Keeps the last 16. */
+    fun loadFigure(page: Int, box: Box, widthPx: Int) {
+        val s = session ?: return
+        val key = figureKey(page, box, widthPx)
+        if (key in figureOrder) return
+        figureOrder.addLast(key)
+        while (figureOrder.size > 16) figures.remove(figureOrder.removeFirst())
+        scope.launch {
+            val pw = runCatching { s.pageSize(page).width }.getOrNull() ?: return@launch
+            val pagePx = (pw * widthPx / box.width.coerceAtLeast(1f)).toInt().coerceIn(1, 6000)
+            val k = pagePx / pw
+            val bmp = runCatching {
+                s.renderRegion(page, pagePx, (box.x0 * k).toInt(), (box.y0 * k).toInt(), (box.width * k).toInt().coerceAtLeast(1), (box.height * k).toInt().coerceAtLeast(1))
+            }.getOrNull() ?: return@launch
+            if (key in figureOrder) figures[key] = bmp.asImageBitmap()
+        }
+    }
+
     fun changeReflowMargin(step: Int) { reflowMargin = step.coerceIn(0, 2); prefs?.edit()?.putInt("reflow_margin", reflowMargin)?.apply() }
 
     /** Switches between pages and reflowed text, keeping the place: [spot] is where reading was. */
@@ -335,8 +388,11 @@ class Reader(
     var inkScope by mutableStateOf(prefs?.getString("ink_scope", null)?.let { runCatching { InkScope.valueOf(it) }.getOrNull() } ?: InkScope.WORD)
         private set
     var textAsk by mutableStateOf<TextAsk?>(null)
-    /** The text box whose words are being edited. */
-    var textEdit by mutableStateOf<Mark?>(null)
+    /** The text box being written or changed. */
+    var boxEdit by mutableStateOf<BoxEdit?>(null)
+    /** The style new text boxes start with: the last one used. */
+    var boxStyle by mutableStateOf(styleFromPref(prefs?.getString("box_style", null)) ?: BoxStyle())
+        private set
     /** Where the selected mark is being dragged to, shown live until the page is drawn again. */
     var moving by mutableStateOf<Box?>(null)
         private set
@@ -582,7 +638,8 @@ class Reader(
                 if (!moved || d == null) { draft = null; return }
                 change(page) { s?.addShape(page, d.kind.kind, d.x0, d.y0, d.x1, d.y1, d.color, d.width) ?: false }
             }
-            Tool.TEXT, Tool.NOTE -> if (!moved) textAsk = TextAsk(page, a.first, a.second, note = gestureTool == Tool.NOTE)
+            Tool.TEXT -> if (!moved) boxEdit = BoxEdit(page, a.first, a.second)
+            Tool.NOTE -> if (!moved) textAsk = TextAsk(page, a.first, a.second, note = true)
             Tool.ERASER -> {
                 val gone = erased.toList().sortedDescending()
                 erased.clear()
@@ -686,14 +743,24 @@ class Reader(
     fun editNote(m: Mark) { selectedMark = null; textAsk = TextAsk(m.page, m.box.x0, m.box.y0, note = true, mark = m) }
 
     /** Opens the editor for a text box's words. */
-    fun editText(m: Mark) { if (m.kind == MarkKind.TEXT) textEdit = m }
+    fun editText(m: Mark) { if (m.kind == MarkKind.TEXT) boxEdit = BoxEdit(m.page, m.box.x0, m.box.y0, m) }
 
     /** Writes a text box's new words, size and colour; the box stays selected. */
-    fun submitTextEdit(m: Mark, text: String, size: Float, color: Int) {
-        textEdit = null
-        if (text.isBlank()) { delete(m); return }
-        change(m.page) { session?.editTextBox(m.page, m.index, text.trimEnd(), size, color) ?: false }
+    /** Writes a new text box, or changes one, in [style]; the style becomes the one new boxes start with. */
+    fun submitBox(e: BoxEdit, text: String, style: BoxStyle) {
+        boxEdit = null
+        boxStyle = style
+        prefs?.edit()?.putString("box_style", styleToPref(style))?.apply()
+        val m = e.mark
+        val s = session ?: return
+        when {
+            m != null && text.isBlank() -> delete(m)
+            m != null -> change(m.page) { s.editTextBox(m.page, m.index, text.trimEnd(), style) }
+            text.isBlank() -> Unit
+            else -> change(e.page) { s.addTextBox(e.page, e.x, e.y, text.trimEnd(), style) }
+        }
     }
+
 
     /** A tap on the chosen mark: a text box opens for editing, a note shows its words. */
     fun tapSelected(m: Mark) {
