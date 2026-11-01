@@ -416,7 +416,7 @@ class PdfSession private constructor(
         val js = if (kind == FieldKind.TEXT) runCatching { w.getObject().get("AA").get("F").get("JS").asString() }.getOrNull() else null
         val pattern = dateFormatFromScript(js)
         val isDate = kind == FieldKind.TEXT && (pattern != null || runCatching { w.textFormat == PDFWidget.TX_FORMAT_DATE }.getOrDefault(false) ||
-            Regex("date|dob|\bd\.?o\.?b\b|تاريخ", RegexOption.IGNORE_CASE).containsMatchIn(name))
+            Regex("date|dob|\\bd\\.?o\\.?b\\b|تاريخ", RegexOption.IGNORE_CASE).containsMatchIn(name))
         return Field(
             page = index, index = i, kind = kind, name = name, value = value, box = Box(r.x0, r.y0, r.x1, r.y1),
             readOnly = runCatching { w.isReadOnly }.getOrDefault(false),
