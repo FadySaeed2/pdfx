@@ -162,3 +162,9 @@ signatures, and a full pass on every screen for clarity.
 - 2026-11-01 — Fady on 0.3.38: table finding is a mess on his files (ordinary text taken for tables
   and the other way round). Switched off at once (0.3.39 restores 0.3.32 reflow, keeps picture
   zoom). Any return needs his real files as test cases and must be strictly conservative.
+- 2026-11-01 — Phase 4a shipped (0.3.45): interactive forms (text with Next/Previous, Today in the
+  field's own date format read from its AFDate script, checkboxes, radios, choices, signature
+  fields), saved signatures and initials (drawn, or photographed with the paper cleared), sign with
+  today's date, stamps (standard and custom, with date), tick / cross / dot / date tools. Tested on
+  a real AcroForm fixture made with PyMuPDF (same MuPDF 1.28.5). Next: 4b digital signing with a
+  PKCS#12 certificate and verifying signatures.
