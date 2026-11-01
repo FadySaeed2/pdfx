@@ -139,3 +139,10 @@ signatures, and a full pass on every screen for clarity.
   the extras too: marks tab filters and copy/share as text, the S Pen button erases, Arabic search
   that ignores hamza and short vowels. OCR stays in phase 6 (he did not ask to move it).
   Cross-page selection is left for phase 9. 3.2 shipped as 0.3.25.
+- 2026-11-01 — Fady: rotating closed the file; picking handwriting and resizing felt fiddly;
+  selection overall not coherent; wants handwriting picked by stroke, word or line. 3.3: rotation
+  handled in place (and the open file survives recreation); taps pick the nearest mark within 20dp
+  measured to the stroke; tap picks instead of drawing (pens only right on a stroke); Stroke / Word
+  / Line for handwriting (default Word); Select tool with lasso; group move, resize, colour, width,
+  delete as one step; 20dp handles outside the frame; word-snapped text selection with a loupe;
+  haptics.

@@ -1032,7 +1032,7 @@ private fun MarkBar(m: Mark, reader: Reader) {
         val widthKinds = setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW)
         if (all.all { it.kind in widthKinds } && m.opacity >= 0.99f) {
             Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Line", style = Type.small, modifier = Modifier.padding(end = 4.dp))
+                Text("Width", style = Type.small, modifier = Modifier.padding(end = 4.dp))
                 val near = PenWidths.indices.minByOrNull { kotlin.math.abs(PenWidths[it] - m.width) } ?: 1
                 PenWidths.forEachIndexed { i, w ->
                     Box(
