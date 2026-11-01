@@ -7,7 +7,11 @@ import com.artifex.mupdf.fitz.Document
 import com.artifex.mupdf.fitz.Matrix
 import com.artifex.mupdf.fitz.Link
 import com.artifex.mupdf.fitz.Outline
+import com.artifex.mupdf.fitz.PDFAnnotation
+import com.artifex.mupdf.fitz.PDFDocument
+import com.artifex.mupdf.fitz.PDFPage
 import com.artifex.mupdf.fitz.Page
+import com.artifex.mupdf.fitz.Rect
 import com.artifex.mupdf.fitz.Point
 import com.artifex.mupdf.fitz.Quad
 import com.artifex.mupdf.fitz.StructuredText
@@ -33,6 +37,19 @@ data class OutlineEntry(val title: String, val page: Int, val depth: Int)
 
 /** A text selection on one page: its two ends, the boxes to highlight, and the text. */
 data class Selection(val page: Int, val ax: Float, val ay: Float, val bx: Float, val by: Float, val boxes: List<Box>, val text: String)
+
+/** The kinds of marks PDFx makes and lists. Anything else in a file shows as OTHER. */
+enum class MarkKind(val label: String) {
+    HIGHLIGHT("Highlight"), UNDERLINE("Underline"), STRIKE("Strikethrough"), SQUIGGLY("Squiggle"),
+    INK("Drawing"), SQUARE("Rectangle"), CIRCLE("Ellipse"), LINE("Line"), ARROW("Arrow"),
+    TEXT("Text box"), NOTE("Note"), STAMP("Stamp"), OTHER("Mark"),
+}
+
+/** A mark on a page: where it is, what it is, its colour, and its words (a note, or the text under a highlight). */
+data class Mark(val page: Int, val index: Int, val kind: MarkKind, val box: Box, val color: Int, val note: String, val quoted: String)
+
+/** A stroke of ink: points in PDF points. */
+typealias Stroke = List<Pair<Float, Float>>
 
 /** Width and height of a page in PDF points (1/72 inch). */
 data class PageSize(val width: Float, val height: Float) {
@@ -71,9 +88,21 @@ class PdfSession private constructor(
         }
     }
 
+    /** The PDF view of the document, for anything that changes it. Null for non-PDF files. */
+    private val pdf: PDFDocument? = runCatching { doc.asPDF() }.getOrNull()
+    val editable: Boolean get() = pdf != null
+    @Volatile var canUndo = false
+        private set
+    @Volatile var canRedo = false
+        private set
+    /** True once anything has changed since opening or the last save. */
+    @Volatile var dirty = false
+        private set
+
     private fun prepare() {
         locked = doc.needsPassword()
         if (!locked) pageCount = doc.countPages()
+        runCatching { pdf?.enableJournal() }
     }
 
     /** Tries a password. True when the document is now readable. */
@@ -196,6 +225,207 @@ class PdfSession private constructor(
             .filter { it.isNotBlank() }
     }
 
+    // ------------------------------------------------------------------ marks (annotations)
+
+    private fun pdfPage(index: Int): PDFPage = page(index) as PDFPage
+
+    private fun kindOf(t: Int, a: PDFAnnotation): MarkKind = when (t) {
+        PDFAnnotation.TYPE_HIGHLIGHT -> MarkKind.HIGHLIGHT
+        PDFAnnotation.TYPE_UNDERLINE -> MarkKind.UNDERLINE
+        PDFAnnotation.TYPE_STRIKE_OUT -> MarkKind.STRIKE
+        PDFAnnotation.TYPE_SQUIGGLY -> MarkKind.SQUIGGLY
+        PDFAnnotation.TYPE_INK -> MarkKind.INK
+        PDFAnnotation.TYPE_SQUARE -> MarkKind.SQUARE
+        PDFAnnotation.TYPE_CIRCLE -> MarkKind.CIRCLE
+        PDFAnnotation.TYPE_LINE -> if (runCatching { a.lineEndingStyles.any { it != PDFAnnotation.LINE_ENDING_NONE } }.getOrDefault(false)) MarkKind.ARROW else MarkKind.LINE
+        PDFAnnotation.TYPE_FREE_TEXT -> MarkKind.TEXT
+        PDFAnnotation.TYPE_TEXT -> MarkKind.NOTE
+        PDFAnnotation.TYPE_STAMP -> MarkKind.STAMP
+        else -> MarkKind.OTHER
+    }
+
+    private fun marksNow(index: Int): List<Mark> {
+        if (pdf == null) return emptyList()
+        val annots = pdfPage(index).annotations ?: return emptyList()
+        val out = ArrayList<Mark>()
+        annots.forEachIndexed { i, a ->
+            val t = a.type
+            if (t == PDFAnnotation.TYPE_LINK || t == PDFAnnotation.TYPE_POPUP || t == PDFAnnotation.TYPE_WIDGET) return@forEachIndexed
+            val r = a.bounds
+            val kind = kindOf(t, a)
+            val c = runCatching { a.color }.getOrNull()
+            val quoted = if (kind in TEXT_MARKS) runCatching {
+                val st = stext(index)
+                (0 until a.quadPointCount).joinToString(" ") { k ->
+                    val q = a.getQuadPoint(k).toRect()
+                    val y = (q.y0 + q.y1) / 2
+                    st.copy(Point(q.x0 + 0.3f, y), Point(q.x1 - 0.3f, y)) ?: ""
+                }.replace(Regex("\\s+"), " ").trim()
+            }.getOrDefault("") else ""
+            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), argb(c), runCatching { a.contents ?: "" }.getOrDefault(""), quoted)
+        }
+        return out
+    }
+
+    suspend fun marks(index: Int): List<Mark> = onDoc { marksNow(index) }
+
+    /** Every mark in the file, page by page, for the list of marks. */
+    suspend fun allMarks(): List<Mark> = onDoc { (0 until pageCount).flatMap { runCatching { marksNow(it) }.getOrDefault(emptyList()) } }
+
+    /** Highlight, underline, strike or squiggle over text, given the boxes of the selected words. */
+    suspend fun addTextMark(index: Int, kind: MarkKind, boxes: List<Box>, color: Int) = edit("Mark text", index) {
+        val t = when (kind) {
+            MarkKind.UNDERLINE -> PDFAnnotation.TYPE_UNDERLINE
+            MarkKind.STRIKE -> PDFAnnotation.TYPE_STRIKE_OUT
+            MarkKind.SQUIGGLY -> PDFAnnotation.TYPE_SQUIGGLY
+            else -> PDFAnnotation.TYPE_HIGHLIGHT
+        }
+        val a = pdfPage(index).createAnnotation(t)
+        a.setQuadPoints(boxes.map { Quad(Rect(it.x0, it.y0, it.x1, it.y1)) }.toTypedArray())
+        a.color = rgb(color)
+        a.update()
+    }
+
+    /** Freehand ink. [opacity] below 1 makes a marker. */
+    suspend fun addInk(index: Int, strokes: List<Stroke>, color: Int, width: Float, opacity: Float = 1f) = edit("Draw", index) {
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_INK)
+        a.setInkList(strokes.filter { it.size >= 2 }.map { s -> s.map { Point(it.first, it.second) }.toTypedArray() }.toTypedArray())
+        a.color = rgb(color)
+        a.borderWidth = width
+        if (opacity < 1f) a.opacity = opacity
+        a.update()
+    }
+
+    suspend fun addShape(index: Int, kind: MarkKind, x0: Float, y0: Float, x1: Float, y1: Float, color: Int, width: Float) = edit("Shape", index) {
+        val p = pdfPage(index)
+        when (kind) {
+            MarkKind.LINE, MarkKind.ARROW -> {
+                val a = p.createAnnotation(PDFAnnotation.TYPE_LINE)
+                a.setLine(Point(x0, y0), Point(x1, y1))
+                if (kind == MarkKind.ARROW) a.setLineEndingStyles(PDFAnnotation.LINE_ENDING_NONE, PDFAnnotation.LINE_ENDING_OPEN_ARROW)
+                a.color = rgb(color)
+                a.borderWidth = width
+                a.update()
+            }
+            else -> {
+                val a = p.createAnnotation(if (kind == MarkKind.CIRCLE) PDFAnnotation.TYPE_CIRCLE else PDFAnnotation.TYPE_SQUARE)
+                a.rect = Rect(minOf(x0, x1), minOf(y0, y1), maxOf(x0, x1), maxOf(y0, y1))
+                a.color = rgb(color)
+                a.borderWidth = width
+                a.update()
+            }
+        }
+    }
+
+    /** Typed words placed on the page. */
+    suspend fun addTextBox(index: Int, x: Float, y: Float, text: String, color: Int, size: Float) = edit("Text", index) {
+        val lines = text.lines()
+        val w = (lines.maxOf { it.length } * size * 0.55f + size).coerceIn(size * 3, sizeNow(index).width - x)
+        val h = lines.size * size * 1.3f + size * 0.6f
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_FREE_TEXT)
+        a.rect = Rect(x, y, x + w, y + h)
+        a.contents = text
+        a.setDefaultAppearance("Helv", size, rgb(color))
+        a.borderWidth = 0f
+        a.update()
+    }
+
+    /** A sticky note: an icon on the page that opens to show its words. */
+    suspend fun addNote(index: Int, x: Float, y: Float, text: String, color: Int) = edit("Note", index) {
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_TEXT)
+        a.rect = Rect(x, y, x + 20f, y + 20f)
+        a.contents = text
+        a.icon = "Comment"
+        a.color = rgb(color)
+        a.update()
+    }
+
+    suspend fun setMarkNote(index: Int, markIndex: Int, text: String) = edit("Edit note", index) {
+        val a = pdfPage(index).annotations?.getOrNull(markIndex) ?: return@edit
+        a.contents = text
+        a.update()
+    }
+
+    suspend fun setMarkColor(index: Int, markIndex: Int, color: Int) = edit("Colour", index) {
+        val a = pdfPage(index).annotations?.getOrNull(markIndex) ?: return@edit
+        a.color = rgb(color)
+        a.update()
+    }
+
+    suspend fun deleteMark(index: Int, markIndex: Int) = edit("Delete", index) {
+        val p = pdfPage(index)
+        val a = p.annotations?.getOrNull(markIndex) ?: return@edit
+        p.deleteAnnotation(a)
+    }
+
+    /** Undo or redo one change. Pages are reloaded afterwards, since a step can touch any of them. */
+    suspend fun undo(): Boolean = onDoc { step(true) }
+    suspend fun redo(): Boolean = onDoc { step(false) }
+
+    private fun step(back: Boolean): Boolean {
+        val d = pdf ?: return false
+        if (back && !d.canUndo()) return false
+        if (!back && !d.canRedo()) return false
+        if (back) d.undo() else d.redo()
+        dropPages()
+        refreshFlags()
+        dirty = true
+        return true
+    }
+
+    /** Makes every mark part of the page itself, so no app can hide, move or delete it. */
+    suspend fun flatten(): Boolean = onDoc {
+        val d = pdf ?: return@onDoc false
+        d.beginOperation("Flatten")
+        try { d.bake(true, false) } finally { d.endOperation() }
+        dropPages()
+        refreshFlags()
+        dirty = true
+        true
+    }
+
+    val canSaveIncrementally: Boolean get() = runCatching { pdf?.canBeSavedIncrementally() ?: false }.getOrDefault(false)
+
+    /**
+     * Writes the document to [path]. Incremental saving appends only the changes, so [path] must
+     * already hold an exact copy of the original file; the caller makes that copy first.
+     */
+    suspend fun writeTo(path: String, incremental: Boolean) = onDoc {
+        val d = pdf ?: error("Only PDF files can be saved.")
+        d.save(path, if (incremental) "incremental" else "garbage=compact")
+    }
+
+    private fun refreshFlags() {
+        val d = pdf ?: return
+        canUndo = runCatching { d.canUndo() }.getOrDefault(false)
+        canRedo = runCatching { d.canRedo() }.getOrDefault(false)
+    }
+
+    private fun dropPages() {
+        textCache.values.forEach { runCatching { it.destroy() } }
+        textCache.clear()
+        pageCache.values.forEach { runCatching { it.destroy() } }
+        pageCache.clear()
+    }
+
+    /** One undoable change on one page; the page's own drawing is refreshed when it is done. */
+    private suspend fun edit(name: String, index: Int, block: () -> Unit): Boolean = onDoc {
+        val d = pdf ?: return@onDoc false
+        d.beginOperation(name)
+        try {
+            block()
+            runCatching { pdfPage(index).update() }
+            d.endOperation()
+        } catch (t: Throwable) {
+            runCatching { d.abandonOperation() }
+            throw t
+        }
+        textCache.remove(index)?.let { runCatching { it.destroy() } }
+        refreshFlags()
+        dirty = true
+        true
+    }
+
     /** The plain text of a page, in reading order. */
     suspend fun text(index: Int): String = onDoc {
         val st = page(index).toStructuredText()
@@ -270,4 +500,23 @@ class PdfSession private constructor(
 private fun Quad.box(): Box {
     val r = toRect()
     return Box(r.x0, r.y0, r.x1, r.y1)
+}
+
+private val TEXT_MARKS = setOf(MarkKind.HIGHLIGHT, MarkKind.UNDERLINE, MarkKind.STRIKE, MarkKind.SQUIGGLY)
+
+private fun rgb(color: Int): FloatArray = floatArrayOf(
+    ((color shr 16) and 0xFF) / 255f, ((color shr 8) and 0xFF) / 255f, (color and 0xFF) / 255f,
+)
+
+private fun argb(c: FloatArray?): Int {
+    if (c == null || c.isEmpty()) return 0xFF000000.toInt()
+    fun ch(v: Float) = (v.coerceIn(0f, 1f) * 255).toInt()
+    return when (c.size) {
+        1 -> (0xFF shl 24) or (ch(c[0]) shl 16) or (ch(c[0]) shl 8) or ch(c[0])
+        4 -> {
+            val k = c[3]
+            (0xFF shl 24) or (ch((1 - c[0]) * (1 - k)) shl 16) or (ch((1 - c[1]) * (1 - k)) shl 8) or ch((1 - c[2]) * (1 - k))
+        }
+        else -> (0xFF shl 24) or (ch(c[0]) shl 16) or (ch(c[1]) shl 8) or ch(c[2])
+    }
 }

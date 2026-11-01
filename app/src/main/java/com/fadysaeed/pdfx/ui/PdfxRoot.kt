@@ -57,8 +57,8 @@ fun PdfxRoot(incoming: Uri?, onIncomingHandled: () -> Unit) {
             onPick = { picker.launch(arrayOf("application/pdf")) },
         )
     } else {
-        ViewerScreen(current) { failure ->
-            if (failure != null) vm.notice.value = Notice("$failure If it came from another app, open it again from there.")
+        ViewerScreen(current) { message ->
+            if (message != null) vm.notice.value = Notice(message)
             open = null
         }
     }

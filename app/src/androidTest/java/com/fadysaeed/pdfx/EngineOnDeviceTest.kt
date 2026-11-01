@@ -13,6 +13,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.artifex.mupdf.fitz.Document
 import com.fadysaeed.pdfx.engine.PdfSession
+import com.fadysaeed.pdfx.engine.MarkKind
+import com.fadysaeed.pdfx.data.Library
+import com.fadysaeed.pdfx.data.LibraryDb
+import com.fadysaeed.pdfx.data.Saver
 import com.fadysaeed.pdfx.ui.theme.PdfxTheme
 import com.fadysaeed.pdfx.ui.viewer.PaperMode
 import com.fadysaeed.pdfx.ui.viewer.Reader
@@ -170,6 +174,63 @@ class EngineOnDeviceTest {
         } finally {
             s.close()
         }
+    }
+
+    @Test
+    fun marksUndoSaveAndReopen() = runBlocking {
+        val root = File(ctx.cacheDir, "marks-${System.nanoTime()}").apply { mkdirs() }
+        val src = samplePdf(3)
+        val f = File(root, "Marked.pdf")
+        src.copyTo(f, overwrite = true)
+        val db = LibraryDb.inMemory(ctx)
+        val lib = Library(ctx, db, root, allFilesAccess = { true })
+        lib.scan()
+        val doc = db.dao().all().single()
+
+        val s = PdfSession.open(ctx, Uri.fromFile(f))
+        try {
+            assertTrue(s.editable)
+            val words = s.select(0, 57f, 82f, 299f, 82f)!!
+            assertTrue(s.addTextMark(0, MarkKind.HIGHLIGHT, words.boxes, 0xFFFFD54A.toInt()))
+            assertTrue(s.addInk(0, listOf(listOf(100f to 400f, 200f to 420f, 300f to 400f)), 0xFFE5484D.toInt(), 2f))
+            assertTrue(s.addShape(1, MarkKind.ARROW, 100f, 100f, 300f, 200f, 0xFF2F6FED.toInt(), 2f))
+            assertTrue(s.addTextBox(1, 80f, 600f, "Check with the team\nملاحظة بالعربي", 0xFF1A1A1A.toInt(), 15f))
+            assertTrue(s.addNote(2, 400f, 100f, "Ask about the renal guidance", 0xFFFF7FAE.toInt()))
+
+            val m0 = s.marks(0)
+            assertEquals(setOf(MarkKind.HIGHLIGHT, MarkKind.INK), m0.map { it.kind }.toSet())
+            assertTrue(m0.first { it.kind == MarkKind.HIGHLIGHT }.quoted.contains("engine check"))
+            assertEquals(setOf(MarkKind.ARROW, MarkKind.TEXT), s.marks(1).map { it.kind }.toSet())
+            assertEquals(5, s.allMarks().size)
+            save(s.render(1, 1080), "marks_page2.png")
+
+            assertTrue(s.canUndo)
+            assertTrue(s.undo())
+            assertEquals(4, s.allMarks().size)
+            assertTrue(s.redo())
+            assertEquals(5, s.allMarks().size)
+
+            val saved = Saver(lib).save(s, doc, Uri.fromFile(f)).getOrThrow()
+            assertTrue(saved is Saver.Saved.InPlace)
+            assertEquals(1, lib.versions.list(doc.id).size)
+        } finally {
+            s.close()
+        }
+
+        // The saved file opens on its own and holds every mark.
+        val again = PdfSession.open(ctx, Uri.fromFile(f))
+        try {
+            assertEquals(3, again.pageCount)
+            assertEquals(5, again.allMarks().size)
+            assertTrue(again.allMarks().any { it.kind == MarkKind.NOTE && it.note.contains("renal") })
+            // Flattening turns marks into page content.
+            assertTrue(again.flatten())
+            assertTrue(again.allMarks().none { it.kind == MarkKind.HIGHLIGHT || it.kind == MarkKind.INK || it.kind == MarkKind.ARROW })
+        } finally {
+            again.close()
+        }
+        db.close()
+        root.deleteRecursively()
     }
 
     private fun darkPixels(b: Bitmap): Int {

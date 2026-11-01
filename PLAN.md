@@ -62,17 +62,22 @@ All PDFs on the phone found automatically (All files access; personal app, not o
 favourites, tags, thumbnails, rename, move, copy, delete to a recycle bin, sort and filter, and a
 full-text index so search finds words inside documents, not only file names.
 
-### Phase 2 — the reader (this build)
+### Phase 2 — the reader (done)
 Sharp deep zoom (past 2x only the part on screen is drawn, at full size), fast scrubber and
 go-to-page, table of contents, bookmarks, find in document with every hit highlighted and the
 current one outlined (also opened straight from a library search), text selection with handles
 and copy, find or share, internal and web links, Paper, Night and Sepia page colours, and a
 reflow mode with adjustable text size. Single-page and two-page landscape layouts move to phase 9.
 
-### Phase 3 — annotation and S Pen
-Highlight, underline and strike that snap to text; notes; freehand ink with pressure and palm
-rejection; shapes, arrows, text boxes, stamps; eraser; unlimited undo and redo; a panel listing every
-annotation; flatten.
+### Phase 3 — annotation and S Pen (this build)
+Highlight, underline and strike that snap to words; pen and marker; boxes, ovals, lines and
+arrows; text boxes; sticky notes; eraser; undo and redo (MuPDF's journal); tap a mark to recolour
+it, give it a note or delete it; a list of every mark with the words it covers; flatten. With an
+S Pen the pen draws and fingers scroll and zoom. Saving is safe: written beside the original,
+reopened and checked, the original kept as one of the last three versions, then swapped in;
+incremental when the file allows, which keeps existing signatures valid. Files that belong to
+another app are saved as a copy in Documents/PDFx. Earlier versions can be restored from the
+library. Not in this phase: pressure-varying ink (PDF ink has one width per stroke) and stamps.
 
 ### Phase 4 — forms and signatures
 Fill interactive forms; type, tick and date anywhere on flat forms; saved signature and initials
@@ -119,3 +124,4 @@ signatures, and a full pass on every screen for clarity.
   that opens at the matching page.
 - 2026-11-01 — Phase 1 shipped (0.1.12). Fady: search works well but should highlight the words
   inside the opened file; asked where night mode is (planned for phase 2). Phase 2 started.
+- 2026-11-01 — Phase 2 shipped (0.2.14); Fady: all good, carry on. Phase 3 started.

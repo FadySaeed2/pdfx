@@ -76,10 +76,10 @@ jobs:
         run: |
           mkdir -p out/apk
           if [ "$PDFX_SIGNED" = "true" ]; then
-            cp app/build/outputs/apk/release/app-release.apk "out/apk/PDFx-0.2.${GITHUB_RUN_NUMBER}.apk"
+            cp app/build/outputs/apk/release/app-release.apk "out/apk/PDFx-0.3.${GITHUB_RUN_NUMBER}.apk"
             echo signed > out/apk/SIGNED
           else
-            cp app/build/outputs/apk/release/app-release-unsigned.apk "out/apk/PDFx-0.2.${GITHUB_RUN_NUMBER}-unsigned.apk"
+            cp app/build/outputs/apk/release/app-release-unsigned.apk "out/apk/PDFx-0.3.${GITHUB_RUN_NUMBER}-unsigned.apk"
           fi
           rm -f "$RUNNER_TEMP/pdfx-release.p12"
 
@@ -175,6 +175,6 @@ jobs:
           APK=$(ls art/build-out/apk/*.apk)
           MSG="$(git log -1 --pretty=%B)"
           gh release create "build-${GITHUB_RUN_NUMBER}" "$APK" \
-            --title "PDFx 0.2.${GITHUB_RUN_NUMBER}" \
+            --title "PDFx 0.3.${GITHUB_RUN_NUMBER}" \
             --notes "$MSG" \
             --target "${GITHUB_SHA}"

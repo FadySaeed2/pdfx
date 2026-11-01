@@ -23,7 +23,7 @@ android {
         minSdk = 30
         targetSdk = 35
         versionCode = ciRun
-        versionName = "0.2.$ciRun"
+        versionName = "0.3.$ciRun"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

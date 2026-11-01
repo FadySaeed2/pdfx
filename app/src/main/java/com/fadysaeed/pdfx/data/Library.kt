@@ -20,7 +20,7 @@ import java.io.IOException
  * cannot be a rename is a copy, a size check, and only then a delete.
  */
 class Library(
-    private val context: Context,
+    val context: Context,
     val db: LibraryDb,
     /** The shared storage root, /storage/emulated/0 on a phone. */
     val root: File = Environment.getExternalStorageDirectory(),
@@ -29,6 +29,7 @@ class Library(
     val dao = db.dao()
     val text = TextIndex(db)
     val bookmarks = Bookmarks(db)
+    val versions = Versions(File(context.filesDir, "versions"))
     val trashDir = File(root, ".pdfx-trash")
     /** Where copies saved from other apps go, and the default place for new folders. */
     val homeDir = File(root, "Documents/PDFx")
@@ -131,6 +132,7 @@ class Library(
     private suspend fun forgetNow(d: Doc) {
         text.clear(d.id)
         bookmarks.clear(d.id)
+        versions.clear(d.id)
         dao.untagDoc(d.id)
         dao.delete(d)
     }
@@ -223,6 +225,25 @@ class Library(
         dao.update(kept)
         forgetNow(d)
         kept
+    }
+
+    /** Brings the library's record in line with a file PDFx has just saved. */
+    suspend fun afterSave(d: Doc, f: File): Doc {
+        val now = dao.byId(d.id) ?: d
+        val wasRead = now.indexedAt == now.modified
+        val updated = now.copy(size = f.length(), modified = f.lastModified(), indexedAt = if (wasRead) f.lastModified() else now.indexedAt)
+        dao.update(updated)
+        return updated
+    }
+
+    /** Records a saved copy of a file from another app, carrying over its place and star. */
+    suspend fun adoptCopy(f: File, from: Doc?): Doc {
+        val kept = (dao.byKey(f.absolutePath) ?: insertFile(f)).let { d ->
+            if (from == null) d else d.copy(lastOpened = System.currentTimeMillis(), lastPage = from.lastPage, pages = from.pages, starred = from.starred)
+        }
+        dao.update(kept)
+        if (from != null && !from.isFile) forgetNow(from)
+        return kept
     }
 
     /** Takes a file shared from another app off the list. The file itself is untouched. */

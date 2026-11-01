@@ -3,6 +3,7 @@ package com.fadysaeed.pdfx
 import android.app.Application
 import com.fadysaeed.pdfx.data.Library
 import com.fadysaeed.pdfx.data.LibraryDb
+import com.fadysaeed.pdfx.data.Saver
 import com.fadysaeed.pdfx.data.TextIndexer
 import com.fadysaeed.pdfx.data.Thumbs
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +19,7 @@ class PdfxApp : Application() {
     val library: Library by lazy { Library(this, db) }
     val thumbs: Thumbs by lazy { Thumbs(this, library) }
     val indexer: TextIndexer by lazy { TextIndexer(this, library) }
+    val saver: Saver by lazy { Saver(library) }
     private val scanLock = Mutex()
     private var prepared = false
     @Volatile private var lastScan = 0L

@@ -38,6 +38,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -76,6 +78,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fadysaeed.pdfx.PdfxApp
 import com.fadysaeed.pdfx.data.Doc
+import com.fadysaeed.pdfx.data.Saver
+import com.fadysaeed.pdfx.engine.Mark
+import com.fadysaeed.pdfx.engine.MarkKind
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.fadysaeed.pdfx.engine.PdfSession
 import com.fadysaeed.pdfx.ui.components.AmberButton
 import com.fadysaeed.pdfx.ui.components.Chip
@@ -109,14 +116,22 @@ private sealed interface Load {
  */
 data class OpenRequest(val uri: Uri, val page: Int? = null, val query: String? = null, val id: Long = System.nanoTime())
 
-/** Opens a document, asks for a password when needed, and shows it. */
+/**
+ * Opens a document, asks for a password when needed, and shows it. Changes are saved when the
+ * document is closed and when the app goes to the background; [onClose] gets a message to show
+ * in the library, or null.
+ */
 @OptIn(FlowPreview::class)
 @Composable
-fun ViewerScreen(request: OpenRequest, onClose: (failure: String?) -> Unit) {
+fun ViewerScreen(request: OpenRequest, onClose: (message: String?) -> Unit) {
     val context = LocalContext.current
-    val library = (context.applicationContext as PdfxApp).library
+    val app = context.applicationContext as PdfxApp
+    val library = app.library
     var doc by remember(request) { mutableStateOf<Doc?>(null) }
     var load by remember(request) { mutableStateOf<Load>(Load.Opening) }
+    var password by remember(request) { mutableStateOf<String?>(null) }
+    var saving by remember(request) { mutableStateOf(false) }
+    var saveError by remember(request) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val fallbackName = remember(request) { library.describe(request.uri).first.removeSuffix(".pdf") }
     val name = doc?.let { LibraryModel.display(it) } ?: fallbackName
@@ -142,12 +157,12 @@ fun ViewerScreen(request: OpenRequest, onClose: (failure: String?) -> Unit) {
 
     when (val l = load) {
         Load.Opening -> { BackHandler { onClose(null) }; Box(Modifier.fillMaxSize().background(Ink.Black)) }
-        is Load.Failed -> LaunchedEffect(l) { onClose("Couldn't open $name. ${l.reason}") }
+        is Load.Failed -> LaunchedEffect(l) { onClose("Couldn't open $name. ${l.reason} If it came from another app, open it again from there.") }
         is Load.Locked -> {
             BackHandler { onClose(null) }
             LockedPanel(name, l.wrong, onCancel = { onClose(null) }) { pw ->
                 scope.launch {
-                    load = if (l.session.unlock(pw)) Load.Ready(l.session) else Load.Locked(l.session, wrong = true)
+                    load = if (l.session.unlock(pw)) { password = pw; Load.Ready(l.session) } else Load.Locked(l.session, wrong = true)
                 }
             }
         }
@@ -173,6 +188,38 @@ fun ViewerScreen(request: OpenRequest, onClose: (failure: String?) -> Unit) {
                     .debounce(400)
                     .collect { library.updatePage(id, it) }
             }
+
+            fun save(then: (Saver.Saved) -> Unit) {
+                if (saving) return
+                saving = true
+                scope.launch {
+                    val r = app.saver.save(session, doc, request.uri)
+                    saving = false
+                    r.fold(then) { saveError = it.message ?: "The file could not be saved." }
+                }
+            }
+            fun leave() {
+                if (!session.dirty) { onClose(null); return }
+                save { saved ->
+                    onClose(if (saved is Saver.Saved.AsCopy) "${saved.doc.name.removeSuffix(".pdf")} belongs to another app, so your changes are saved as a copy in Documents/PDFx." else null)
+                }
+            }
+            // Going to the background: save, then carry on from the saved file when back.
+            LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+                if (session.dirty) save { saved ->
+                    doc = saved.doc
+                    scope.launch {
+                        val uri = if (saved is Saver.Saved.AsCopy) Uri.fromFile(java.io.File(saved.doc.path!!)) else request.uri
+                        val fresh = runCatching { PdfSession.open(context, uri) }.getOrNull() ?: return@launch
+                        if (fresh.needsPassword) password?.let { fresh.unlock(it) }
+                        if (fresh.needsPassword) { fresh.close(); return@launch }
+                        val old = session
+                        load = Load.Ready(fresh)
+                        old.close()
+                    }
+                }
+            }
+
             ViewerContent(
                 name = name,
                 reader = reader,
@@ -183,8 +230,24 @@ fun ViewerScreen(request: OpenRequest, onClose: (failure: String?) -> Unit) {
                 listState = listState,
                 onWant = pages::want,
                 onTiles = pages::wantTiles,
-                onBack = { onClose(null) },
+                onBack = ::leave,
             )
+            if (saving) {
+                Box(Modifier.fillMaxSize().background(Ink.Black.copy(alpha = 0.55f)).pointerInput(Unit) { detectTapGestures { } }, contentAlignment = Alignment.Center) {
+                    Text("Saving…", style = Type.title, modifier = Modifier.background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(horizontal = 20.dp, vertical = 14.dp))
+                }
+            }
+            saveError?.let { err ->
+                AlertDialog(
+                    onDismissRequest = { saveError = null },
+                    containerColor = Ink.Field,
+                    shape = RectangleShape,
+                    title = { Text("Couldn't save", style = Type.title) },
+                    text = { Text("$err The original file is unchanged.", style = Type.note) },
+                    confirmButton = { AmberButton("Keep working", { saveError = null }) },
+                    dismissButton = { GhostButton("Close without saving", { saveError = null; onClose("Changes to $name were not saved.") }, minHeight = 52.dp) },
+                )
+            }
         }
     }
 }
@@ -214,17 +277,21 @@ fun ViewerContent(
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     var sheet by remember { mutableStateOf<ViewerSheet?>(null) }
     var askPage by remember { mutableStateOf(false) }
+    var askFlatten by remember { mutableStateOf(false) }
     var flash by remember { mutableStateOf<String?>(null) }
-    val showBars = reader.chrome || reader.searchOpen
+    val showBars = reader.chrome || reader.searchOpen || reader.marking
 
     BackHandler {
         when {
             reader.selection != null -> reader.clearSelection()
+            reader.selectedMark != null -> reader.selectMark(null)
+            reader.marking -> reader.stopMarking()
             reader.searchOpen -> reader.closeSearch()
             else -> onBack()
         }
     }
     LaunchedEffect(flash) { if (flash != null) { delay(1600); flash = null } }
+    LaunchedEffect(reader.problem) { reader.problem?.let { flash = it; reader.problem = null } }
 
     Box(Modifier.fillMaxSize().background(Ink.Black)) {
         val padding = PaddingValues(top = top + 64.dp, bottom = bottom + 72.dp)
@@ -247,7 +314,17 @@ fun ViewerContent(
 
         AnimatedVisibility(showBars, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter)) {
             Column(Modifier.fillMaxWidth().background(Ink.Black).windowInsetsPadding(WindowInsets.statusBars)) {
-                if (reader.searchOpen) {
+                if (reader.marking) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Done", style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 15.sp), modifier = Modifier.clickable { reader.stopMarking() }.padding(horizontal = 14.dp, vertical = 12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Mark up", style = Type.title)
+                            Text(if (reader.dirty) "Saved when you close the file" else name, style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        IconButton(Glyph.UNDO, "Undo", reader::undo, color = if (reader.canUndo) Ink.Bone else Ink.Slate, size = 44.dp)
+                        IconButton(Glyph.REDO, "Redo", reader::redo, color = if (reader.canRedo) Ink.Bone else Ink.Slate, size = 44.dp)
+                    }
+                } else if (reader.searchOpen) {
                     SearchBar(reader, current)
                 } else {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -257,6 +334,7 @@ fun ViewerContent(
                             Text(if (pageCount == 1) "1 page" else "$pageCount pages", style = Type.small)
                         }
                         IconButton(Glyph.SEARCH, "Find in document", { reader.searchOpen = true }, color = Ink.Sand, size = 44.dp)
+                        if (reader.canMark) IconButton(Glyph.PEN, "Mark up", reader::startMarking, color = Ink.Sand, size = 44.dp)
                         val marked = current in reader.bookmarks
                         IconButton(
                             if (marked) Glyph.BOOKMARK_FILLED else Glyph.BOOKMARK,
@@ -283,7 +361,7 @@ fun ViewerContent(
                 .background(Ink.Amber),
         )
 
-        AnimatedVisibility(showBars && pageCount > 1, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterEnd)) {
+        AnimatedVisibility(showBars && pageCount > 1 && !reader.marking, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterEnd)) {
             Scrubber(current, pageCount, Modifier.padding(top = top + 72.dp, bottom = bottom + 80.dp)) { p ->
                 scope.launch { listState.scrollToItem(p) }
             }
@@ -299,7 +377,12 @@ fun ViewerContent(
                 Text(msg, style = Type.note.copy(color = Ink.Bone), modifier = Modifier.background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(horizontal = 14.dp, vertical = 9.dp))
                 Spacer(Modifier.height(10.dp))
             }
-            if (sel != null) {
+            val picked = reader.selectedMark
+            if (picked != null) {
+                MarkBar(picked, reader)
+            } else if (reader.marking) {
+                MarkupBar(reader)
+            } else if (sel != null) {
                 SelectionBar(
                     words = sel.text.trim().split(Regex("\\s+")).count { it.isNotBlank() },
                     onCopy = { if (reader.copySelection(context)) flash = "Copied"; reader.clearSelection() },
@@ -326,8 +409,21 @@ fun ViewerContent(
         }
     }
 
+    reader.textAsk?.let { ask -> WordsAsk(ask, onDismiss = { reader.textAsk = null }, onDone = reader::submitText) }
+
     if (askPage) {
         GoToPage(pageCount, onDismiss = { askPage = false }) { p -> askPage = false; reader.go(p - 1) }
+    }
+    if (askFlatten) {
+        AlertDialog(
+            onDismissRequest = { askFlatten = false },
+            containerColor = Ink.Field,
+            shape = RectangleShape,
+            title = { Text("Flatten every mark?", style = Type.title) },
+            text = { Text("Highlights, drawings, text and notes become part of the pages. After the file is saved, no app (PDFx included) can move, change or remove them. Undo still works until then.", style = Type.note) },
+            confirmButton = { AmberButton("Flatten", { askFlatten = false; reader.flatten(); flash = "Marks are now part of the pages" }) },
+            dismissButton = { GhostButton("Cancel", { askFlatten = false }, minHeight = 52.dp) },
+        )
     }
 
     val open = sheet
@@ -343,8 +439,8 @@ fun ViewerContent(
         ) {
             Column(Modifier.windowInsetsPadding(WindowInsets.navigationBars).padding(bottom = 8.dp)) {
                 when (open) {
-                    ViewerSheet.CONTENTS -> ContentsSheet(reader, current) { p -> sheet = null; reader.go(p) }
-                    ViewerSheet.DISPLAY -> DisplaySheet(reader)
+                    ViewerSheet.CONTENTS -> ContentsSheet(reader, current) { p, y -> sheet = null; reader.go(p, y) }
+                    ViewerSheet.DISPLAY -> DisplaySheet(reader) { sheet = null; askFlatten = true }
                 }
             }
         }
@@ -493,11 +589,22 @@ private fun GoToPage(pageCount: Int, onDismiss: () -> Unit, onGo: (Int) -> Unit)
 }
 
 @Composable
-internal fun ContentsSheet(reader: Reader, current: Int, onPage: (Int) -> Unit) {
-    var tab by remember { mutableStateOf(if (reader.outline.isNullOrEmpty() && reader.bookmarks.isNotEmpty()) 1 else 0) }
+internal fun ContentsSheet(reader: Reader, current: Int, onPage: (Int, Float) -> Unit) = ContentsSheetOnTab(reader, null, current, onPage)
+
+/** The contents sheet opened on a given tab (screenshot tests); null picks the sensible one. */
+@Composable
+internal fun ContentsSheetOnTab(reader: Reader, startTab: Int?, current: Int = 0, onPage: (Int, Float) -> Unit = { _, _ -> }) {
+    var tab by remember { mutableStateOf(startTab ?: if (reader.outline.isNullOrEmpty() && reader.bookmarks.isNotEmpty()) 1 else 0) }
+    LaunchedEffect(tab) { if (tab == 2) reader.loadAllMarks() }
     Row(Modifier.padding(horizontal = 20.dp).padding(top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Chip("Contents", { tab = 0 }, selected = tab == 0)
         Chip(if (reader.bookmarks.isEmpty()) "Bookmarks" else "Bookmarks  ${reader.bookmarks.size}", { tab = 1 }, selected = tab == 1)
+        if (reader.canMark) Chip("Marks", { tab = 2 }, selected = tab == 2)
+    }
+    if (tab == 2) {
+        Hairline(color = Ink.Rule)
+        MarksList(reader.allMarks, onPage)
+        return
     }
     Hairline(color = Ink.Rule)
     if (tab == 0) {
@@ -512,7 +619,7 @@ internal fun ContentsSheet(reader: Reader, current: Int, onPage: (Int) -> Unit) 
                     items(outline.size) { i ->
                         val e = outline[i]
                         Row(
-                            Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = e.page >= 0) { onPage(e.page) }
+                            Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = e.page >= 0) { onPage(e.page, 0f) }
                                 .padding(start = 20.dp + (16 * e.depth.coerceAtMost(4)).dp, end = 20.dp, top = 8.dp, bottom = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -534,7 +641,7 @@ internal fun ContentsSheet(reader: Reader, current: Int, onPage: (Int) -> Unit) 
             LazyColumn(Modifier.heightIn(max = 520.dp)) {
                 items(reader.bookmarks.toList()) { p ->
                     Row(
-                        Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { onPage(p) }.padding(start = 20.dp, end = 4.dp),
+                        Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { onPage(p, 0f) }.padding(start = 20.dp, end = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         GlyphIcon(Glyph.BOOKMARK_FILLED, Ink.Amber, size = 18.dp)
@@ -549,7 +656,7 @@ internal fun ContentsSheet(reader: Reader, current: Int, onPage: (Int) -> Unit) 
 }
 
 @Composable
-internal fun DisplaySheet(reader: Reader) {
+internal fun DisplaySheet(reader: Reader, onFlatten: () -> Unit = {}) {
     Column(Modifier.padding(horizontal = 20.dp).padding(top = 4.dp, bottom = 8.dp)) {
         Text("PAGES", style = Type.eyebrow)
         Spacer(Modifier.height(4.dp))
@@ -591,6 +698,18 @@ internal fun DisplaySheet(reader: Reader) {
             GhostButton("A+", { reader.changeReflowSize(reader.reflowSize + 2) }, minHeight = 44.dp)
         }
     }
+    if (reader.canMark) {
+        Hairline(color = Ink.Rule)
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(onClick = onFlatten).padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Flatten marks", style = Type.body)
+                Text("Make every highlight, drawing and note part of the page, so no app can change it.", style = Type.small)
+            }
+        }
+    }
 }
 
 fun reflowInk(mode: PaperMode): Color = when (mode) {
@@ -621,6 +740,167 @@ private fun ReflowView(reader: Reader, listState: LazyListState, padding: Paddin
                     else -> paras.forEach { p ->
                         Text(p, style = Type.body.copy(color = ink, fontSize = size.sp, lineHeight = (size * 1.55f).sp))
                     }
+                }
+            }
+        }
+    }
+}
+
+
+private val MarkLabelColor = Ink.Sand
+
+/** Tools on the first row; colours, widths or shapes for the chosen tool on the second. */
+@Composable
+private fun MarkupBar(reader: Reader) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Ink.Black)
+            .padding(top = 8.dp),
+    ) {
+        Hairline(color = Ink.Rule)
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Tool.entries.forEach { t -> Chip(t.label, { reader.pickTool(t) }, selected = reader.tool == t) }
+        }
+        val t = reader.tool
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 8.dp).heightIn(min = 44.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            when (t) {
+                Tool.ERASER -> Text(if (reader.stylusSeen) "Touch a mark with the pen to remove it. Undo brings it back." else "Tap or drag over a mark to remove it. Undo brings it back.", style = Type.small)
+                else -> {
+                    val colors = if (reader.usesPenColors(t)) PenColors else MarkColors
+                    colors.forEach { c -> Swatch(c, reader.colorFor(t) == c) { reader.pickColor(c) } }
+                    if (t == Tool.PEN || t == Tool.SHAPE || t == Tool.MARKER || t == Tool.TEXT) {
+                        Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
+                        listOf(0, 1, 2).forEach { step ->
+                            val sel = reader.widthStep == step
+                            Box(
+                                Modifier.size(36.dp).border(1.dp, if (sel) Ink.Bone else Ink.Rule, Corner).clickable { reader.pickWidth(step) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (t == Tool.TEXT) Text("A", style = Type.bodyStrong.copy(color = if (sel) Ink.Bone else Ink.Dust, fontSize = listOf(11, 15, 20)[step].sp))
+                                else Box(Modifier.size(listOf(4, 7, 11)[step].dp).background(if (sel) Ink.Bone else Ink.Dust, RoundedCornerShape(50)))
+                            }
+                        }
+                    }
+                    if (t == Tool.SHAPE) {
+                        Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
+                        ShapeKind.entries.forEach { k -> Chip(k.label, { reader.pickShape(k) }, selected = reader.shape == k) }
+                    }
+                }
+            }
+        }
+        val hint = when (t) {
+            Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKE -> "Drag across the words, or tap one word."
+            Tool.PEN, Tool.MARKER -> if (reader.stylusSeen) "Draw with the pen. Fingers scroll and zoom." else "Draw with one finger. Two fingers scroll and zoom."
+            Tool.SHAPE -> "Drag from one corner to the other."
+            Tool.TEXT -> "Tap where the text should start."
+            Tool.NOTE -> "Tap where the note should sit."
+            Tool.ERASER -> null
+        }
+        if (hint != null) Text(hint, style = Type.small, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp))
+    }
+}
+
+@Composable
+private fun Swatch(color: Int, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .border(2.dp, if (selected) Ink.Bone else Ink.Black, RoundedCornerShape(50))
+            .padding(5.dp)
+            .background(Color(color), RoundedCornerShape(50))
+            .clickable(onClick = onClick),
+    )
+}
+
+/** A mark someone tapped: change its colour, add or edit its note, or delete it. */
+@Composable
+private fun MarkBar(m: Mark, reader: Reader) {
+    Column(
+        Modifier
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth()
+            .background(Ink.Field, Corner)
+            .border(1.dp, Ink.Edge, Corner)
+            .padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(m.kind.label, style = Type.bodyStrong)
+                val words = m.note.ifBlank { m.quoted }
+                if (words.isNotBlank()) Text(words, style = Type.small, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(Glyph.CLOSE, "Close", { reader.selectMark(null) }, color = Ink.Dust, size = 44.dp)
+        }
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (m.kind != MarkKind.NOTE) {
+                val colors = if (m.kind in setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW, MarkKind.TEXT)) PenColors else MarkColors
+                colors.forEach { c -> Swatch(c, (m.color and 0xFFFFFF) == (c and 0xFFFFFF)) { reader.recolor(m, c) } }
+            }
+            BarAction(if (m.note.isBlank()) "Add note" else "Edit note") { reader.editNote(m) }
+            BarAction("Delete") { reader.delete(m) }
+        }
+    }
+}
+
+/** Typing the words for a text box or a note. */
+@Composable
+private fun WordsAsk(ask: TextAsk, onDismiss: () -> Unit, onDone: (String) -> Unit) {
+    var text by remember(ask) { mutableStateOf(ask.mark?.note ?: "") }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(ask) { runCatching { focus.requestFocus() } }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text(if (ask.mark != null) "Note" else if (ask.note) "New note" else "Text on the page", style = Type.title) },
+        text = {
+            BasicTextField(
+                value = text,
+                onValueChange = { text = it },
+                textStyle = Type.body.copy(color = Ink.Bone, fontSize = 16.sp),
+                cursorBrush = SolidColor(Ink.Amber),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp).focusRequester(focus),
+                decorationBox = { inner ->
+                    Box(Modifier.fillMaxWidth().heightIn(min = 120.dp).background(Ink.Black, Corner).border(1.dp, Ink.Edge, Corner).padding(12.dp)) {
+                        if (text.isEmpty()) Text(if (ask.note || ask.mark != null) "Write the note" else "Write the text", style = Type.body.copy(color = Ink.Ash, fontSize = 16.sp))
+                        inner()
+                    }
+                },
+            )
+        },
+        confirmButton = { AmberButton(if (ask.mark != null) "Save note" else "Add", { onDone(text) }, enabled = text.isNotBlank() || ask.mark != null) },
+        dismissButton = { GhostButton("Cancel", onDismiss, minHeight = 52.dp) },
+    )
+}
+
+/** Every mark in the file, in page order, with the words it covers or holds. */
+@Composable
+private fun MarksList(marks: List<Mark>?, onPage: (Int, Float) -> Unit) {
+    when {
+        marks == null -> Text("Reading the marks…", style = Type.note, modifier = Modifier.padding(20.dp))
+        marks.isEmpty() -> Text("No marks yet. Tap the pen at the top to highlight, draw or add notes.", style = Type.note, modifier = Modifier.padding(20.dp))
+        else -> LazyColumn(Modifier.heightIn(max = 520.dp)) {
+            items(marks) { m ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { onPage(m.page, m.box.y0) }.padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Box(Modifier.padding(top = 4.dp).size(12.dp).background(Color(m.color)))
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(m.kind.label, style = Type.bodyStrong.copy(fontSize = 14.sp))
+                        val words = listOf(m.quoted, m.note).filter { it.isNotBlank() }.joinToString("  ·  ")
+                        if (words.isNotBlank()) Text(words, style = Type.small.copy(color = MarkLabelColor), maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    }
+                    Text("p. ${m.page + 1}", style = Type.figure, modifier = Modifier.padding(start = 10.dp))
                 }
             }
         }

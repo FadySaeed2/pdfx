@@ -66,6 +66,7 @@ import java.io.File
 
 private sealed interface Sheet {
     data class Actions(val doc: Doc) : Sheet
+    data class History(val doc: Doc) : Sheet
     data class Destination(val doc: Doc, val copy: Boolean) : Sheet
     data class Tags(val doc: Doc) : Sheet
     data object Sorting : Sheet
@@ -140,6 +141,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
                     is Sheet.Actions -> ActionsSheet(
                         d = current.doc,
                         label = vm.library.folderLabel(current.doc.folder),
+                        versions = remember(current.doc.id) { vm.library.versions.list(current.doc.id).size },
                         pick = { a ->
                             sheet = null
                             val d = current.doc
@@ -157,6 +159,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
                                 DocAction.SAVE_COPY -> vm.saveCopy(d)
                                 DocAction.FORGET -> vm.forget(d)
                                 DocAction.FOLDER -> d.folder?.let { vm.openFolder(it) }
+                                DocAction.VERSIONS -> sheet = Sheet.History(d)
                             }
                         },
                     )
@@ -176,6 +179,14 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
                         newTag = { sheet = null; ask = Ask.NewTag(current.doc) },
                     )
                     Sheet.Sorting -> SortSheet(ui.sort) { by -> vm.setSort(by); sheet = null }
+                    is Sheet.History -> {
+                        val list = remember(current.doc.id) { vm.library.versions.list(current.doc.id) }
+                        SheetTitle("Earlier versions", LibraryModel.display(current.doc))
+                        Text("PDFx keeps the file as it was before each of your last three saves. Putting one back keeps today's version too, so nothing is lost.", style = Type.note, modifier = Modifier.padding(20.dp))
+                        list.forEach { v ->
+                            SheetRow(Glyph.RESTORE, whenText(v.savedAt, System.currentTimeMillis()), { sheet = null; vm.restoreVersion(current.doc, v) }, note = humanSize(v.size) + "  ·  tap to put this one back")
+                        }
+                    }
                     is Sheet.TagMenu -> {
                         SheetTitle(current.tag.name, "${current.tag.count} ${if (current.tag.count == 1) "document" else "documents"}")
                         SheetRow(Glyph.OPEN, "Show documents", { sheet = null; vm.openTag(current.tag.id) })
@@ -227,7 +238,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     }
 }
 
-enum class DocAction { OPEN, STAR, RENAME, MOVE, COPY, TAGS, SHARE, TRASH, RESTORE, DELETE, SAVE_COPY, FORGET, FOLDER }
+enum class DocAction { OPEN, STAR, RENAME, MOVE, COPY, TAGS, SHARE, TRASH, RESTORE, DELETE, SAVE_COPY, FORGET, FOLDER, VERSIONS }
 
 @Composable
 private fun SheetTitle(title: String, note: String?) {
@@ -239,7 +250,7 @@ private fun SheetTitle(title: String, note: String?) {
 }
 
 @Composable
-fun ActionsSheet(d: Doc, label: String, pick: (DocAction) -> Unit) {
+fun ActionsSheet(d: Doc, label: String, versions: Int = 0, pick: (DocAction) -> Unit) {
     SheetTitle(LibraryModel.display(d), if (d.isFile) label else "Shared from another app")
     Column(Modifier.verticalScroll(rememberScrollState())) {
         when {
@@ -264,6 +275,7 @@ fun ActionsSheet(d: Doc, label: String, pick: (DocAction) -> Unit) {
                 SheetRow(Glyph.COPY, "Copy to…", { pick(DocAction.COPY) })
                 SheetRow(Glyph.FOLDER, "Show its folder", { pick(DocAction.FOLDER) }, note = label)
                 SheetRow(Glyph.SHARE, "Share", { pick(DocAction.SHARE) })
+                if (versions > 0) SheetRow(Glyph.RESTORE, "Earlier versions", { pick(DocAction.VERSIONS) }, note = if (versions == 1) "1 saved before your last change" else "$versions saved before your last changes")
                 SheetRow(Glyph.TRASH, "Move to trash", { pick(DocAction.TRASH) }, note = "Kept for 30 days")
             }
         }

@@ -8,11 +8,12 @@ import com.fadysaeed.pdfx.engine.PdfSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /** What the screen needs drawn right now. */
-data class Want(val range: IntRange, val focus: Int, val widthPx: Int)
+data class Want(val range: IntRange, val focus: Int, val widthPx: Int, val seq: Int = 0)
 
 /** A sharp patch of a page for deep zoom: the part on screen, drawn at the column's full size. */
 data class TileReq(val page: Int, val columnPx: Int, val x: Int, val y: Int, val w: Int, val h: Int)
@@ -31,7 +32,10 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope) {
     val widths = mutableStateListOf<Float>()
     /** At most one sharp patch per page, for whatever is on screen when zoomed in deep. */
     val tiles = mutableStateMapOf<Int, Tile>()
-    private val wantedTiles = MutableStateFlow<List<TileReq>>(emptyList())
+    private val wantedTiles = MutableStateFlow<Pair<Int, List<TileReq>>>(0 to emptyList())
+    private var seq = 0
+    /** Counts redraws per page, so a change can wait for its page to be drawn again. */
+    private val drawn = MutableStateFlow<Map<Int, Int>>(emptyMap())
 
     private val renderedWidth = HashMap<Int, Int>()
     private val bytes = HashMap<Int, Long>()
@@ -58,7 +62,7 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope) {
             wanted.collectLatest { w -> if (w != null) renderFor(w) }
         }
         scope.launch {
-            wantedTiles.collectLatest { reqs ->
+            wantedTiles.collectLatest { (_, reqs) ->
                 for (r in reqs) {
                     if (session.closed) return@collectLatest
                     if (tiles[r.page]?.req == r) continue
@@ -75,8 +79,23 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope) {
     fun wantTiles(reqs: List<TileReq>) {
         val pages = reqs.associateBy { it.page }
         tiles.keys.toList().forEach { p -> if (pages[p]?.columnPx != tiles[p]?.req?.columnPx) tiles.remove(p) }
-        wantedTiles.value = reqs
+        wantedTiles.value = wantedTiles.value.first to reqs
     }
+
+    /** Draws pages again after their content changed (a new mark, an undo). Null means every page. */
+    fun invalidate(pages: Collection<Int>?) {
+        if (pages == null) { renderedWidth.clear(); tiles.clear() } else pages.forEach { renderedWidth.remove(it); tiles.remove(it) }
+        seq++
+        wanted.value = wanted.value?.copy(seq = seq)
+        wantedTiles.value = seq to wantedTiles.value.second
+    }
+
+    /** Waits (briefly) until [page] has been drawn again after [invalidate]. */
+    suspend fun awaitRedraw(page: Int, after: Int) {
+        kotlinx.coroutines.withTimeoutOrNull(2000) { drawn.first { (it[page] ?: 0) > after } }
+    }
+
+    fun drawCount(page: Int): Int = drawn.value[page] ?: 0
 
     private suspend fun renderFor(w: Want) {
         val order = w.range.sortedBy { abs(it - w.focus) }
@@ -87,6 +106,7 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope) {
             val bmp = runCatching { session.render(i, target) }.getOrNull() ?: continue
             images[i] = bmp.asImageBitmap()
             renderedWidth[i] = target
+            drawn.value = drawn.value + (i to ((drawn.value[i] ?: 0) + 1))
             bytes[i] = bmp.allocationByteCount.toLong()
             trim(w)
         }

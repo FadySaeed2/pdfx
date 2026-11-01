@@ -74,7 +74,7 @@ fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
     }
 }
 
-enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK, BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN }
+enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK, BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN, PEN, UNDO, REDO }
 
 /** Line glyphs drawn in code, so every icon shares one stroke weight and the app ships no icon font. */
 @Composable
@@ -180,6 +180,19 @@ fun GlyphIcon(glyph: Glyph, color: Color, size: Dp = 22.dp) {
                     close()
                 }
                 drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+            }
+            Glyph.PEN -> {
+                line(0.22f, 0.78f, 0.66f, 0.34f); line(0.66f, 0.34f, 0.78f, 0.22f)
+                line(0.58f, 0.26f, 0.74f, 0.42f); line(0.22f, 0.78f, 0.18f, 0.84f)
+                line(0.3f, 0.86f, 0.8f, 0.86f)
+            }
+            Glyph.UNDO, Glyph.REDO -> {
+                val flip = glyph == Glyph.REDO
+                fun fx(x: Float) = if (flip) 1f - x else x
+                drawArc(color, if (flip) 90f else 270f, 180f, false, Offset(s * (if (flip) 0.24f else 0.28f), s * 0.3f), Size(s * 0.48f, s * 0.42f), style = Stroke(width = w, cap = StrokeCap.Round))
+                line(fx(0.52f), 0.3f, fx(0.3f), 0.3f)
+                line(fx(0.3f), 0.3f, fx(0.4f), 0.2f); line(fx(0.3f), 0.3f, fx(0.4f), 0.4f)
+                line(fx(0.52f), 0.72f, fx(0.36f), 0.72f)
             }
             Glyph.UP -> { line(0.24f, 0.62f, 0.5f, 0.36f); line(0.5f, 0.36f, 0.76f, 0.62f) }
             Glyph.DOWN -> { line(0.24f, 0.38f, 0.5f, 0.64f); line(0.5f, 0.64f, 0.76f, 0.38f) }

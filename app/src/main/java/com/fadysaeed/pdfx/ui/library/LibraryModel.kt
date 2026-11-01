@@ -161,6 +161,10 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         library.saveCopy(d).fold({ say("Saved in ${library.folderLabel(it.folder)}.") }, { fail(it) })
     }
 
+    fun restoreVersion(d: Doc, v: com.fadysaeed.pdfx.data.Versions.Version) = launch {
+        pdfx.saver.restore(d, v).fold({ say("${display(d)} is back to how it was then.") }, { fail(it) })
+    }
+
     fun forget(d: Doc) = launch { library.forget(d); say("Removed from the list. The original is untouched.") }
 
     fun setTag(d: Doc, tag: Tag, on: Boolean) = launch { library.setTag(d.id, tag.id, on) }

@@ -41,6 +41,13 @@ import com.fadysaeed.pdfx.ui.viewer.DisplaySheet
 import com.fadysaeed.pdfx.engine.Box
 import com.fadysaeed.pdfx.engine.OutlineEntry
 import com.fadysaeed.pdfx.engine.Selection
+import com.fadysaeed.pdfx.engine.Mark
+import com.fadysaeed.pdfx.engine.MarkKind
+import com.fadysaeed.pdfx.ui.viewer.Draft
+import com.fadysaeed.pdfx.ui.viewer.MarkColors
+import com.fadysaeed.pdfx.ui.viewer.PenColors
+import com.fadysaeed.pdfx.ui.viewer.Tool
+import com.fadysaeed.pdfx.ui.viewer.ContentsSheetOnTab
 import com.fadysaeed.pdfx.ui.components.Hairline
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -209,6 +216,44 @@ class ScreensTest {
         r.paragraphs[1] = listOf("Combining lithium with an ACE inhibitor, an ARB or a thiazide raises levels; check within a week of starting any of them.")
     }
 
+    @Test fun markup() = viewerShot("16_markup.png") { r ->
+        r.showMarking(
+            Tool.PEN,
+            Draft.Ink(0, (0..60).map { t -> (70f + t * 6f) to (330f + 18f * kotlin.math.sin(t / 6f)) }, PenColors[1], 2f, 1f),
+        )
+        r.showSelectionlessDraftForTest()
+    }
+
+    @Test fun markSelected() = viewerShot("17_mark_selected.png") { r ->
+        r.chrome = false
+        r.showMarking(
+            Tool.HIGHLIGHT, Draft.Words(0, listOf(Box(57f, 201f, 290f, 211f)), MarkColors[0]),
+            selected = Mark(0, 0, MarkKind.HIGHLIGHT, Box(57f, 201f, 290f, 211f), MarkColors[0], "Check this against the 2026 update", "monitor lithium levels twelve hours after the last dose"),
+        )
+        r.stopMarkingKeepSelectionForTest()
+    }
+
+    @Test
+    fun marksList() {
+        compose.setContent {
+            PdfxTheme {
+                val scope = rememberCoroutineScope()
+                val reader = remember {
+                    Reader(null, 112, scope).also {
+                        it.setAllMarksForTest(listOf(
+                            Mark(18, 0, MarkKind.HIGHLIGHT, Box(57f, 201f, 290f, 211f), MarkColors[0], "", "Monitor lithium levels twelve hours after the last dose"),
+                            Mark(18, 1, MarkKind.NOTE, Box(300f, 190f, 320f, 210f), MarkColors[3], "Ask about the new renal guidance", ""),
+                            Mark(41, 0, MarkKind.UNDERLINE, Box(57f, 401f, 290f, 411f), MarkColors[2], "", "risk of toxicity rises with ACE inhibitors"),
+                            Mark(44, 0, MarkKind.INK, Box(60f, 300f, 400f, 360f), PenColors[1], "", ""),
+                        ))
+                    }
+                }
+                Column(Modifier.fillMaxSize().background(Ink.Field)) { ContentsSheetOnTab(reader, 2) }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/18_marks_list.png")
+    }
+
     @Test
     fun viewerSheets() {
         compose.setContent {
@@ -228,7 +273,7 @@ class ScreensTest {
                     }
                 }
                 Column(Modifier.fillMaxSize().background(Ink.Field)) {
-                    ContentsSheet(reader, 20) {}
+                    ContentsSheet(reader, 20) { _, _ -> }
                     Hairline(color = Ink.Edge)
                     DisplaySheet(reader)
                 }

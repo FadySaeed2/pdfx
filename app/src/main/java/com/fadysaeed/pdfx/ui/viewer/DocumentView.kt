@@ -45,7 +45,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -202,7 +207,7 @@ fun DocumentView(
                                 pinched = true
                                 transform(event.calculateZoom(), event.calculateCentroid(useCurrent = true), event.calculatePan())
                                 event.changes.forEach { it.consume() }
-                            } else if (!pinched && zoom > 1.01f) {
+                            } else if (!pinched && zoom > 1.01f && !reader.draws(down.type.isPen())) {
                                 val c = event.changes.firstOrNull { it.id == down.id }
                                 if (c != null && c.pressed && !c.isConsumed) {
                                     panX = clampX(panX - (c.position.x - c.previousPosition.x))
@@ -210,7 +215,7 @@ fun DocumentView(
                                 }
                             }
                         } while (event.changes.any { it.pressed })
-                        if (!pinched && zoom > 1.01f) {
+                        if (!pinched && zoom > 1.01f && !reader.draws(down.type.isPen())) {
                             val vx = tracker.calculateVelocity().x
                             if (abs(vx) > 250f) {
                                 fling[0] = scope.launch {
@@ -246,13 +251,41 @@ fun DocumentView(
             ) {
                 items(pageCount, key = { it }) { i ->
                     val aspect = aspects.getOrNull(i)?.takeIf { it > 0f } ?: 0.707f
-                    LaunchedEffect(i) { reader.loadLinks(i) }
+                    LaunchedEffect(i) { reader.loadLinks(i); reader.loadMarks(i) }
                     Box(
                         Modifier
                             .fillMaxWidth()
                             .aspectRatio(aspect)
                             .background(paper)
                             .semantics { contentDescription = "Page ${i + 1}" }
+                            .pointerInput(i, reader.marking) {
+                                if (!reader.marking) return@pointerInput
+                                // Marking: one finger (or the pen) draws; two fingers still zoom and scroll.
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                    val pen = down.type.isPen()
+                                    if (pen) reader.stylusSeen = true
+                                    if (!reader.draws(pen) || down.isConsumed) return@awaitEachGesture
+                                    val k = size.width / pageWidthPt(i)
+                                    down.consume()
+                                    reader.begin(i, down.position.x / k, down.position.y / k, eraser = down.type == PointerType.Eraser)
+                                    var done = false
+                                    while (!done) {
+                                        val e = awaitPointerEvent(PointerEventPass.Initial)
+                                        if (e.changes.count { it.pressed } >= 2) { reader.cancelGesture(); break }
+                                        val c = e.changes.firstOrNull { it.id == down.id } ?: run { reader.cancelGesture(); break }
+                                        if (c.pressed) {
+                                            val pts = c.historical.map { it.position.x / k to it.position.y / k } + (c.position.x / k to c.position.y / k)
+                                            reader.extend(pts)
+                                            c.consume()
+                                        } else {
+                                            c.consume()
+                                            reader.finish()
+                                            done = true
+                                        }
+                                    }
+                                }
+                            }
                             .pointerInput(i) {
                                 // Dragging a selection handle; claimed before the list can scroll.
                                 awaitEachGesture {
@@ -286,8 +319,11 @@ fun DocumentView(
                                     onTap = { p ->
                                         val k = size.width / pageWidthPt(i)
                                         val link = reader.linkAt(i, p.x / k, p.y / k)
+                                        val mark = reader.markAt(i, p.x / k, p.y / k)
                                         when {
                                             reader.selection != null -> reader.clearSelection()
+                                            reader.selectedMark != null -> reader.selectMark(null)
+                                            mark != null -> reader.selectMark(mark)
                                             link?.page != null -> reader.go(link.page)
                                             link?.uri != null -> openUri(link.uri)
                                             else -> reader.chrome = !reader.chrome
@@ -329,9 +365,48 @@ private fun PageMarks(reader: Reader, page: Int, pageWidthPt: Float) {
     val hits = reader.hits[page]
     val sel = reader.selection?.takeIf { it.page == page }
     val cur = reader.currentHit()?.takeIf { it.first == page }?.second
-    if (hits == null && sel == null) return
+    val draft = reader.draft?.takeIf { it.page == page }
+    val picked = reader.selectedMark?.takeIf { it.page == page }
+    if (hits == null && sel == null && draft == null && picked == null) return
     Canvas(Modifier.fillMaxSize()) {
         val k = size.width / pageWidthPt
+        when (draft) {
+            is Draft.Words -> draft.boxes.forEach { b -> mark(b, k, Color(draft.color).copy(alpha = 0.4f), null) }
+            is Draft.Ink -> if (draft.points.isNotEmpty()) {
+                val path = Path().apply {
+                    moveTo(draft.points[0].first * k, draft.points[0].second * k)
+                    draft.points.drop(1).forEach { lineTo(it.first * k, it.second * k) }
+                }
+                drawPath(path, Color(draft.color).copy(alpha = draft.opacity), style = Stroke(width = (draft.width * k).coerceAtLeast(1.5f), cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
+            is Draft.Shape -> {
+                val c = Color(draft.color)
+                val st = Stroke(width = (draft.width * k).coerceAtLeast(1.5f), cap = StrokeCap.Round)
+                val a = Offset(draft.x0 * k, draft.y0 * k)
+                val b = Offset(draft.x1 * k, draft.y1 * k)
+                val tl = Offset(minOf(a.x, b.x), minOf(a.y, b.y))
+                val sz = Size(abs(b.x - a.x), abs(b.y - a.y))
+                when (draft.kind) {
+                    ShapeKind.RECT -> drawRect(c, tl, sz, style = st)
+                    ShapeKind.ELLIPSE -> drawOval(c, tl, sz, style = st)
+                    ShapeKind.LINE -> drawLine(c, a, b, st.width, cap = StrokeCap.Round)
+                    ShapeKind.ARROW -> {
+                        drawLine(c, a, b, st.width, cap = StrokeCap.Round)
+                        val ang = kotlin.math.atan2(b.y - a.y, b.x - a.x)
+                        val len = 10.dp.toPx()
+                        for (d in listOf(0.45f, -0.45f)) {
+                            val tip = Offset(b.x - len * kotlin.math.cos(ang + d), b.y - len * kotlin.math.sin(ang + d))
+                            drawLine(c, b, tip, st.width, cap = StrokeCap.Round)
+                        }
+                    }
+                }
+            }
+            null -> Unit
+        }
+        if (picked != null) {
+            val b = picked.box
+            drawRect(Ink.Teal, Offset(b.x0 * k - 4f, b.y0 * k - 4f), Size(b.width * k + 8f, b.height * k + 8f), style = Stroke(width = 2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 7f))))
+        }
         hits?.forEachIndexed { h, boxes ->
             val now = h == cur
             boxes.forEach { b -> mark(b, k, Ink.Amber.copy(alpha = if (now) 0.55f else 0.28f), if (now) Ink.Amber else null) }
@@ -382,3 +457,6 @@ fun centreItem(state: LazyListState): Int {
     return items.firstOrNull { it.offset <= mid && it.offset + it.size >= mid }?.index
         ?: items.minByOrNull { abs(it.offset + it.size / 2 - mid) }!!.index
 }
+
+/** Pens and their erasers draw; fingers and mice do whatever the tool says. */
+fun PointerType.isPen(): Boolean = this == PointerType.Stylus || this == PointerType.Eraser
