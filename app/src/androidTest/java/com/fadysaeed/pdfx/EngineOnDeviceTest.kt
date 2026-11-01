@@ -178,7 +178,7 @@ class EngineOnDeviceTest {
     }
 
     @Test
-    fun tablesStayTables() = runBlocking<Unit> {
+    fun tablePagesKeepTheirWords() = runBlocking<Unit> {
         val s = PdfSession.open(ctx, Uri.fromFile(tablePdf()))
         try {
             val paras = s.paragraphs(0)
@@ -190,14 +190,10 @@ class EngineOnDeviceTest {
                     else -> "PARA ${p.text}"
                 }
             })
-            // Either a clean table or a picture of it: never cells run together as a paragraph.
-            assertTrue("table cells leaked into text: ${paras.map { it.text }}", paras.none { it.table == null && it.figure == null && it.text.contains("Valproate") })
+            // Table finding is off: every word of the page is still there, as text.
             assertTrue("the paragraphs around the table stay", paras.any { it.text.contains("monitored") } && paras.any { it.text.contains("after any change") })
-            assertTrue("a table or its picture is there", table != null || paras.any { it.figure != null })
-            if (table != null) {
-                assertEquals(4, table.table!!.size)
-                assertEquals(listOf("Lithium", "400 mg", "Level at 12 h"), table.table!![1])
-            }
+            assertTrue("the table's words are kept", paras.any { it.text.contains("Valproate") })
+            assertTrue("nothing is turned into a table", table == null)
         } finally {
             s.close()
         }

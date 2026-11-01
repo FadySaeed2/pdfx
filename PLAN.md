@@ -159,3 +159,6 @@ signatures, and a full pass on every screen for clarity.
   jboolean). Columns the engine cuts through words are joined back (the page's text decides the
   spaces); anything unclear, ragged or incomplete is shown as a picture of the page region. Every
   picture and table opens full screen to zoom.
+- 2026-11-01 — Fady on 0.3.38: table finding is a mess on his files (ordinary text taken for tables
+  and the other way round). Switched off at once (0.3.39 restores 0.3.32 reflow, keeps picture
+  zoom). Any return needs his real files as test cases and must be strictly conservative.
