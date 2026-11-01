@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -74,7 +76,7 @@ android {
 
 // A hung test must fail the build rather than hold the runner for its full time limit.
 tasks.withType<Test>().configureEach {
-    timeout.set(java.time.Duration.ofMinutes(12))
+    timeout.set(Duration.ofMinutes(12))
 }
 
 ksp {
