@@ -57,6 +57,12 @@ import com.fadysaeed.pdfx.ui.viewer.resizedBox
 import com.fadysaeed.pdfx.ui.viewer.isArabic
 import com.fadysaeed.pdfx.ui.viewer.highlighted
 import com.fadysaeed.pdfx.engine.Para
+import com.fadysaeed.pdfx.engine.Hit
+import com.fadysaeed.pdfx.engine.findAll
+import com.fadysaeed.pdfx.engine.snippet
+import com.fadysaeed.pdfx.ui.viewer.SelectionFloat
+import com.fadysaeed.pdfx.ui.viewer.ColorPickerBody
+import org.junit.Assert.assertTrue
 import com.fadysaeed.pdfx.ui.components.Hairline
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -261,6 +267,52 @@ class ScreensTest {
             }
         }
         compose.onRoot().captureRoboImage("screenshots/21_reflow_settings.png")
+    }
+
+    @Test fun searchResults() = viewerShot("22_search_results.png") { r ->
+        val words = mapOf(
+            0 to listOf(
+                Hit(listOf(Box(57f, 201f, 121f, 211f)), "", "Lithium", " remains the first-line long-term treatment for bipolar disorder, with the strongest…"),
+                Hit(listOf(Box(150f, 299f, 214f, 309f)), "…levels 12 hours after the last dose. Toxicity is more likely when ", "lithium", " is combined with diuretics…"),
+            ),
+            3 to listOf(Hit(listOf(Box(57f, 240f, 121f, 250f)), "…يُفضَّل قياس مستوى ", "الليثيوم", " بعد ١٢ ساعة من آخر جرعة…")),
+            17 to listOf(Hit(listOf(Box(57f, 240f, 121f, 250f)), "Stopping ", "lithium", " abruptly raises the risk of relapse; taper over at least four weeks.")),
+        )
+        r.showHits("lithium", words.mapValues { (_, v) -> v.map { it.boxes } }, at = 1, words = words, list = true)
+    }
+
+    @Test
+    fun selectionColours() {
+        compose.setContent {
+            PdfxTheme {
+                val scope = rememberCoroutineScope()
+                val reader = remember { Reader(null, 112, scope) }
+                Column(Modifier.fillMaxSize().background(Ink.Paper).padding(24.dp)) {
+                    SelectionFloat(reader, {}, {}, {}, startOpen = true)
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(16.dp))
+                    Column(Modifier.background(Ink.Field).padding(20.dp)) {
+                        ColorPickerBody(330f, 0.55f, 0.95f, listOf(0xFFB39DDB.toInt(), 0xFF80CBC4.toInt()), { _, _, _ -> }, {})
+                    }
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/23_selection_colours.png")
+    }
+
+    @Test
+    fun folding() {
+        assertEquals(1, findAll("علاج الإكتِئاب الحاد", "اكتئاب").size)
+        assertEquals(1, findAll("Café au lait", "cafe").size)
+        val h = snippet("one two three four five six seven eight nine ten eleven twelve", "seven", 30, emptyList(), reach = 12)
+        assertEquals("seven", h.match)
+        assertTrue(h.before.startsWith("…"))
+        assertTrue(h.after.endsWith("…"))
+        val marks = listOf(
+            Mark(2, 0, MarkKind.HIGHLIGHT, Box(0f, 0f, 1f, 1f), MarkColors[0], "Check this", "monitor levels"),
+            Mark(5, 0, MarkKind.NOTE, Box(0f, 0f, 1f, 1f), MarkColors[3], "Ask the team", ""),
+        )
+        val text = Reader(null, 10, kotlinx.coroutines.MainScope()).marksText("Guideline", marks)
+        assertTrue(text.contains("Page 3") && text.contains("“monitor levels”") && text.contains("Note: Check this") && text.contains("Page 6"))
     }
 
     @Test

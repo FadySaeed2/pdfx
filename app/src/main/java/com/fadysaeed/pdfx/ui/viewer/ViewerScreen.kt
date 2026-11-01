@@ -85,6 +85,23 @@ import com.fadysaeed.pdfx.ui.theme.PlexArabic
 import com.fadysaeed.pdfx.ui.theme.ReadingSerif
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -298,6 +315,8 @@ fun ViewerContent(
 
     BackHandler {
         when {
+            reader.colorPick != null -> reader.colorPick = null
+            reader.resultsOpen -> reader.resultsOpen = false
             reader.selection != null -> reader.clearSelection()
             reader.selectedMark != null -> reader.selectMark(null)
             reader.marking -> reader.stopMarking()
@@ -329,6 +348,7 @@ fun ViewerContent(
     }
 
     LaunchedEffect(flash) { if (flash != null) { delay(1600); flash = null } }
+    LaunchedEffect(reader.undoNotice) { if (reader.undoNotice != null) { delay(4500); reader.undoNotice = null } }
     LaunchedEffect(reader.problem) { reader.problem?.let { flash = it; reader.problem = null } }
 
     Box(Modifier.fillMaxSize().background(Ink.Black)) {
@@ -347,6 +367,18 @@ fun ViewerContent(
                 onTiles = onTiles,
                 onOpenUri = { uri -> runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uri))) } },
                 contentPadding = padding,
+                selectionBar = {
+                    val sel = reader.selection
+                    if (sel != null) SelectionFloat(
+                        reader,
+                        onCopy = { if (reader.copySelection(context)) flash = "Copied"; reader.clearSelection() },
+                        onFind = { val t = sel.text.trim(); reader.clearSelection(); reader.searchOpen = true; reader.search(t, current) },
+                        onShare = {
+                            val t = sel.text.trim()
+                            runCatching { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, t), null)) }
+                        },
+                    )
+                },
             )
         }
 
@@ -389,6 +421,16 @@ fun ViewerContent(
             }
         }
 
+        // Every search result, with the words around it, in a panel from the right.
+        AnimatedVisibility(
+            reader.searchOpen && reader.resultsOpen,
+            enter = fadeIn() + slideInHorizontally { it / 3 },
+            exit = fadeOut() + slideOutHorizontally { it / 3 },
+            modifier = Modifier.fillMaxSize().padding(top = top + 60.dp),
+        ) {
+            SearchResults(reader, onClose = { reader.resultsOpen = false })
+        }
+
         // Where you are in the document: a thin amber line along the bottom edge, always visible.
         val fraction = if (pageCount <= 1) 1f else current / (pageCount - 1f)
         Box(
@@ -416,22 +458,25 @@ fun ViewerContent(
                 Text(msg, style = Type.note.copy(color = Ink.Bone), modifier = Modifier.background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(horizontal = 14.dp, vertical = 9.dp))
                 Spacer(Modifier.height(10.dp))
             }
+            val undo = reader.undoNotice
+            if (undo != null) {
+                Row(
+                    Modifier.background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(start = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(undo, style = Type.note.copy(color = Ink.Bone))
+                    Spacer(Modifier.width(6.dp))
+                    BarAction("Undo") { reader.undoNotice = null; reader.undo() }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
             val picked = reader.selectedMark
             if (picked != null) {
                 MarkBar(picked, reader)
             } else if (reader.marking) {
                 MarkupBar(reader)
             } else if (sel != null) {
-                SelectionBar(
-                    words = sel.text.trim().split(Regex("\\s+")).count { it.isNotBlank() },
-                    onCopy = { if (reader.copySelection(context)) flash = "Copied"; reader.clearSelection() },
-                    onFind = { val t = sel.text.trim(); reader.clearSelection(); reader.searchOpen = true; reader.search(t, current) },
-                    onShare = {
-                        val t = sel.text.trim()
-                        runCatching { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, t), null)) }
-                    },
-                    onClose = reader::clearSelection,
-                )
+                Unit
             } else {
                 AnimatedVisibility(showBars, enter = fadeIn(), exit = fadeOut()) {
                     Box(
@@ -449,6 +494,7 @@ fun ViewerContent(
     }
 
     reader.textAsk?.let { ask -> WordsAsk(ask, onDismiss = { reader.textAsk = null }, onDone = reader::submitText) }
+    reader.colorPick?.let { pick -> ColorPickerDialog(pick.initial, reader.customColors, onDismiss = { reader.colorPick = null }) { c -> reader.applyPicked(pick, c) } }
     reader.textEdit?.let { m -> TextEdit(m, onDismiss = { reader.textEdit = null }) { t, sz, c -> reader.submitTextEdit(m, t, sz, c) } }
 
     if (askPage) {
@@ -479,7 +525,7 @@ fun ViewerContent(
         ) {
             Column(Modifier.windowInsetsPadding(WindowInsets.navigationBars).padding(bottom = 8.dp)) {
                 when (open) {
-                    ViewerSheet.CONTENTS -> ContentsSheet(reader, current) { p, y -> sheet = null; reader.go(p, y) }
+                    ViewerSheet.CONTENTS -> ContentsSheetOnTab(reader, null, current, name) { p, y -> sheet = null; reader.go(p, y) }
                     ViewerSheet.DISPLAY -> DisplaySheet(reader, onFlatten = { sheet = null; askFlatten = true }, onReflow = ::toggleReflow)
                 }
             }
@@ -498,7 +544,7 @@ private fun SearchBar(reader: Reader, current: Int) {
         reader.search(text, current)
     }
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(Glyph.CLOSE, "Close search", reader::closeSearch, color = Ink.Sand)
+        IconButton(Glyph.CLOSE, "Close search", reader::closeSearch, color = Ink.Sand, size = 44.dp)
         val style = Type.body.copy(fontSize = 16.sp)
         BasicTextField(
             value = text,
@@ -529,24 +575,11 @@ private fun SearchBar(reader: Reader, current: Int) {
         Text(count, style = Type.figure, maxLines = 1)
         IconButton(Glyph.UP, "Previous match", reader::previous, color = if (reader.order.isEmpty()) Ink.Slate else Ink.Bone, size = 44.dp)
         IconButton(Glyph.DOWN, "Next match", reader::next, color = if (reader.order.isEmpty()) Ink.Slate else Ink.Bone, size = 44.dp)
-    }
-}
-
-@Composable
-private fun SelectionBar(words: Int, onCopy: () -> Unit, onFind: () -> Unit, onShare: () -> Unit, onClose: () -> Unit) {
-    Row(
-        Modifier
-            .padding(horizontal = 20.dp)
-            .background(Ink.Field, Corner)
-            .border(1.dp, Ink.Edge, Corner)
-            .padding(start = 14.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(if (words == 1) "1 word" else "$words words", style = Type.small, modifier = Modifier.padding(end = 6.dp))
-        BarAction("Copy", onCopy)
-        BarAction("Find", onFind)
-        BarAction("Share", onShare)
-        IconButton(Glyph.CLOSE, "Clear selection", onClose, color = Ink.Dust, size = 44.dp)
+        IconButton(
+            Glyph.LIST, if (reader.resultsOpen) "Hide the list of results" else "Show every result",
+            { if (reader.order.isNotEmpty() || reader.resultsOpen) reader.resultsOpen = !reader.resultsOpen },
+            color = when { reader.resultsOpen -> Ink.Amber; reader.order.isEmpty() -> Ink.Slate; else -> Ink.Bone }, size = 44.dp,
+        )
     }
 }
 
@@ -629,11 +662,11 @@ private fun GoToPage(pageCount: Int, onDismiss: () -> Unit, onGo: (Int) -> Unit)
 }
 
 @Composable
-internal fun ContentsSheet(reader: Reader, current: Int, onPage: (Int, Float) -> Unit) = ContentsSheetOnTab(reader, null, current, onPage)
+internal fun ContentsSheet(reader: Reader, current: Int, onPage: (Int, Float) -> Unit) = ContentsSheetOnTab(reader, null, current, onPage = onPage)
 
 /** The contents sheet opened on a given tab (screenshot tests); null picks the sensible one. */
 @Composable
-internal fun ContentsSheetOnTab(reader: Reader, startTab: Int?, current: Int = 0, onPage: (Int, Float) -> Unit = { _, _ -> }) {
+internal fun ContentsSheetOnTab(reader: Reader, startTab: Int?, current: Int = 0, name: String = "", onPage: (Int, Float) -> Unit = { _, _ -> }) {
     var tab by remember { mutableStateOf(startTab ?: if (reader.outline.isNullOrEmpty() && reader.bookmarks.isNotEmpty()) 1 else 0) }
     LaunchedEffect(tab) { if (tab == 2) reader.loadAllMarks() }
     Row(Modifier.padding(horizontal = 20.dp).padding(top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -643,7 +676,7 @@ internal fun ContentsSheetOnTab(reader: Reader, startTab: Int?, current: Int = 0
     }
     if (tab == 2) {
         Hairline(color = Ink.Rule)
-        MarksList(reader.allMarks, onPage)
+        MarksList(reader, reader.allMarks, name, onPage)
         return
     }
     Hairline(color = Ink.Rule)
@@ -890,7 +923,12 @@ private fun MarkupBar(reader: Reader) {
                 Tool.ERASER -> Text(if (reader.stylusSeen) "Touch a mark with the pen to remove it. Undo brings it back." else "Tap or drag over a mark to remove it. Undo brings it back.", style = Type.small)
                 else -> {
                     val colors = if (reader.usesPenColors(t)) PenColors else MarkColors
-                    colors.forEach { c -> Swatch(c, reader.colorFor(t) == c) { reader.pickColor(c) } }
+                    (colors + reader.customColors.filter { it !in colors }).forEach { c -> Swatch(c, reader.colorFor(t) == c) { reader.pickColor(c) } }
+                    AddColor { reader.colorPick = ColorPick(reader.colorFor(t)) }
+                    if (t == Tool.HIGHLIGHT) {
+                        Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
+                        StrengthLabels.forEachIndexed { i, l -> Chip(l, { reader.pickStrength(i) }, selected = reader.strength == i) }
+                    }
                     if (t == Tool.PEN || t == Tool.SHAPE || t == Tool.MARKER || t == Tool.TEXT) {
                         Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
                         listOf(0, 1, 2).forEach { step ->
@@ -924,10 +962,10 @@ private fun MarkupBar(reader: Reader) {
 }
 
 @Composable
-private fun Swatch(color: Int, selected: Boolean, onClick: () -> Unit) {
+private fun Swatch(color: Int, selected: Boolean, size: Dp = 36.dp, onClick: () -> Unit) {
     Box(
         Modifier
-            .size(36.dp)
+            .size(size)
             .border(2.dp, if (selected) Ink.Bone else Ink.Black, RoundedCornerShape(50))
             .padding(5.dp)
             .background(Color(color), RoundedCornerShape(50))
@@ -935,7 +973,7 @@ private fun Swatch(color: Int, selected: Boolean, onClick: () -> Unit) {
     )
 }
 
-/** A mark someone tapped: change its colour, add or edit its note, or delete it. */
+/** A mark someone tapped: change its colour or strength, add or edit its note or text, or delete it. */
 @Composable
 private fun MarkBar(m: Mark, reader: Reader) {
     Column(
@@ -960,14 +998,238 @@ private fun MarkBar(m: Mark, reader: Reader) {
             }
             IconButton(Glyph.CLOSE, "Close", { reader.selectMark(null) }, color = Ink.Dust, size = 44.dp)
         }
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (m.kind != MarkKind.NOTE) {
-                val colors = if (m.kind in setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW, MarkKind.TEXT)) PenColors else MarkColors
-                colors.forEach { c -> Swatch(c, (m.color and 0xFFFFFF) == (c and 0xFFFFFF)) { reader.recolor(m, c) } }
+        if (m.kind != MarkKind.NOTE) {
+            val colors = if (m.kind in setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW, MarkKind.TEXT)) PenColors else MarkColors
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                (colors + reader.customColors.filter { it !in colors }).forEach { c -> Swatch(c, (m.color and 0xFFFFFF) == (c and 0xFFFFFF)) { reader.recolor(m, c) } }
+                AddColor { reader.colorPick = ColorPick(m.color, mark = m) }
             }
+        }
+        if (m.kind == MarkKind.HIGHLIGHT) {
+            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Strength", style = Type.small, modifier = Modifier.padding(end = 4.dp))
+                val step = strengthStep(m.opacity)
+                StrengthLabels.forEachIndexed { i, l -> Chip(l, { reader.restrength(m, i) }, selected = step == i) }
+            }
+        }
+        Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             if (m.kind == MarkKind.TEXT) BarAction("Edit text") { reader.editText(m) }
             else BarAction(if (m.note.isBlank()) "Add note" else "Edit note") { reader.editNote(m) }
             BarAction("Delete") { reader.delete(m) }
+        }
+    }
+}
+
+/** A swatch with a plus: opens the colour picker. */
+@Composable
+private fun AddColor(onClick: () -> Unit) {
+    Box(
+        Modifier.size(36.dp).clip(RoundedCornerShape(50)).border(1.dp, Ink.Edge, RoundedCornerShape(50)).clickable(onClick = onClick)
+            .semantics { contentDescription = "More colours" },
+        contentAlignment = Alignment.Center,
+    ) { GlyphIcon(Glyph.PLUS, Ink.Sand, size = 18.dp) }
+}
+
+/**
+ * The bar that floats over selected words: highlight (in the colour on the dot, which opens more
+ * colours and strengths), underline, strike through, then copy, find and share.
+ */
+@Composable
+internal fun SelectionFloat(reader: Reader, onCopy: () -> Unit, onFind: () -> Unit, onShare: () -> Unit, startOpen: Boolean = false) {
+    var colours by remember { mutableStateOf(startOpen) }
+    Column(
+        Modifier
+            .shadow(10.dp, Corner)
+            .background(Ink.Field, Corner)
+            .border(1.dp, Ink.Edge, Corner)
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            MarkWordButton("Highlight", { reader.markSelection(MarkKind.HIGHLIGHT) }) {
+                Text("A", style = Type.bodyStrong.copy(color = Ink.Black, fontSize = 15.sp), modifier = Modifier.background(Color(reader.markColor).copy(alpha = 0.35f + 0.65f * HighlightStrengths[reader.strength]), RoundedCornerShape(3.dp)).padding(horizontal = 6.dp))
+            }
+            Box(
+                Modifier.size(30.dp).clip(RoundedCornerShape(50)).clickable { colours = !colours }.semantics { contentDescription = "Highlight colour" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(Modifier.size(16.dp).background(Color(reader.markColor), RoundedCornerShape(50)).border(1.5.dp, if (colours) Ink.Bone else Ink.Edge, RoundedCornerShape(50)))
+            }
+            MarkWordButton("Underline", { reader.markSelection(MarkKind.UNDERLINE) }) {
+                Text("U", style = Type.bodyStrong.copy(color = Ink.Bone, fontSize = 16.sp, textDecoration = TextDecoration.Underline))
+            }
+            MarkWordButton("Strike through", { reader.markSelection(MarkKind.STRIKE) }) {
+                Text("S", style = Type.bodyStrong.copy(color = Ink.Bone, fontSize = 16.sp, textDecoration = TextDecoration.LineThrough))
+            }
+            Box(Modifier.padding(horizontal = 4.dp).width(1.dp).height(24.dp).background(Ink.Rule))
+            FloatAction("Copy", onCopy)
+            FloatAction("Find", onFind)
+            FloatAction("Share", onShare)
+        }
+        if (colours) {
+            Hairline(color = Ink.Rule)
+            Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                (MarkColors + reader.customColors.filter { it !in MarkColors }.take(2)).forEach { c ->
+                    Swatch(c, reader.markColor == c, size = 30.dp) { reader.pickWordsColor(c) }
+                }
+                AddColor { reader.colorPick = ColorPick(reader.markColor, forWords = true) }
+            }
+            Row(Modifier.padding(start = 6.dp, end = 6.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StrengthLabels.forEachIndexed { i, l -> Chip(l, { reader.pickStrength(i) }, selected = reader.strength == i) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkWordButton(description: String, onClick: () -> Unit, content: @Composable () -> Unit) {
+    Box(
+        Modifier.size(44.dp).clip(Corner).clickable(onClick = onClick).semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+@Composable
+private fun FloatAction(label: String, onClick: () -> Unit) {
+    Text(label, style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 14.sp), modifier = Modifier.clip(Corner).clickable(onClick = onClick).padding(horizontal = 9.dp, vertical = 12.dp))
+}
+
+/** Every search result, page by page, each with the words around it. Tap one to go there. */
+@Composable
+internal fun SearchResults(reader: Reader, onClose: () -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // Tapping beside the panel closes it.
+        Box(Modifier.fillMaxSize().background(Ink.Black.copy(alpha = 0.35f)).pointerInput(Unit) { detectTapGestures { onClose() } })
+        val width = minOf(maxWidth * 0.88f, 400.dp)
+        Column(
+            Modifier.align(Alignment.CenterEnd).width(width).fillMaxHeight().background(Ink.Field)
+                .border(1.dp, Ink.Edge).pointerInput(Unit) { detectTapGestures { } },
+        ) {
+            Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 4.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("RESULTS", style = Type.eyebrow)
+                    val n = reader.order.size
+                    val pages = reader.hits.size
+                    Text(
+                        (if (n == 1) "1 match" else "$n matches") + (if (pages > 0) " on " + (if (pages == 1) "1 page" else "$pages pages") else "") + if (reader.searching) " · still looking" else "",
+                        style = Type.small,
+                    )
+                }
+                IconButton(Glyph.CLOSE, "Hide results", onClose, color = Ink.Dust, size = 44.dp)
+            }
+            Hairline(color = Ink.Rule)
+            val rows = remember(reader.order) {
+                val out = ArrayList<Pair<Int, Int>>() // -1-page for a page heading, else index into order
+                var last = -1
+                reader.order.forEachIndexed { i, (p, _) ->
+                    if (p != last) { out += -1 - p to -1; last = p }
+                    out += p to i
+                }
+                out
+            }
+            val list = rememberLazyListState()
+            LaunchedEffect(Unit) {
+                val at = rows.indexOfFirst { it.second == reader.current }
+                if (at > 0) list.scrollToItem((at - 1).coerceAtLeast(0))
+            }
+            val mark = Ink.Amber.copy(alpha = 0.35f)
+            LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+                items(rows.size, key = { rows[it].first * 100_000L + rows[it].second }) { r ->
+                    val (p, i) = rows[r]
+                    if (i < 0) {
+                        Text("PAGE ${-p}", style = Type.eyebrow.copy(color = Ink.Sand), modifier = Modifier.padding(start = 18.dp, top = 16.dp, bottom = 4.dp))
+                    } else {
+                        val (page, h) = reader.order[i]
+                        val hit = reader.snippets[page]?.getOrNull(h)
+                        val now = i == reader.current
+                        Row(
+                            Modifier.fillMaxWidth().clickable { reader.showHit(i); onClose() }.background(if (now) Ink.Black else Color.Transparent),
+                        ) {
+                            Box(Modifier.width(3.dp).heightIn(min = 44.dp).background(if (now) Ink.Amber else Color.Transparent))
+                            val text = if (hit == null) AnnotatedString(reader.query) else buildAnnotatedString {
+                                append(hit.before)
+                                withStyle(SpanStyle(background = mark, color = Ink.Bone, fontWeight = FontWeight.SemiBold)) { append(hit.match) }
+                                append(hit.after)
+                            }
+                            Text(
+                                text,
+                                style = Type.note.copy(color = Ink.Sand, textDirection = TextDirection.Content, fontFamily = PlexArabic, lineHeight = 20.sp),
+                                maxLines = 3, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f).padding(start = 15.dp, end = 16.dp, top = 9.dp, bottom = 9.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Picking any colour: saturation and brightness in the square, hue on the strip below, recent colours under that. */
+@Composable
+internal fun ColorPickerDialog(initial: Int, recent: List<Int>, onDismiss: () -> Unit, onPick: (Int) -> Unit) {
+    val start = remember(initial) { FloatArray(3).also { android.graphics.Color.colorToHSV(initial, it) } }
+    var hue by remember(initial) { mutableFloatStateOf(start[0]) }
+    var sat by remember(initial) { mutableFloatStateOf(start[1]) }
+    var value by remember(initial) { mutableFloatStateOf(start[2]) }
+    val color = android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value))
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text("Colour", style = Type.title) },
+        text = {
+            ColorPickerBody(hue, sat, value, recent, onHsv = { h, s, v -> hue = h; sat = s; value = v }, onRecent = { c ->
+                val f = FloatArray(3); android.graphics.Color.colorToHSV(c, f); hue = f[0]; sat = f[1]; value = f[2]
+            })
+        },
+        confirmButton = { AmberButton("Use colour", { onPick(color) }) },
+        dismissButton = { GhostButton("Cancel", onDismiss, minHeight = 52.dp) },
+    )
+}
+
+@Composable
+internal fun ColorPickerBody(hue: Float, sat: Float, value: Float, recent: List<Int>, onHsv: (Float, Float, Float) -> Unit, onRecent: (Int) -> Unit) {
+    val pure = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, 1f, 1f)))
+    val now = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value)))
+    val h by rememberUpdatedState(hue)
+    val sv by rememberUpdatedState(sat to value)
+    Column {
+        Canvas(
+            Modifier.fillMaxWidth().height(170.dp).clip(Corner)
+                .pointerInput(Unit) {
+                    fun at(o: Offset) = onHsv(h, (o.x / size.width).coerceIn(0f, 1f), 1f - (o.y / size.height).coerceIn(0f, 1f))
+                    awaitEachGesture {
+                        val d = awaitFirstDown(); at(d.position); d.consume()
+                        do { val e = awaitPointerEvent(); e.changes.forEach { at(it.position); it.consume() } } while (e.changes.any { it.pressed })
+                    }
+                },
+        ) {
+            drawRect(Brush.horizontalGradient(listOf(Color.White, pure)))
+            drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
+            val c = Offset(sv.first * size.width, (1f - sv.second) * size.height)
+            drawCircle(Color.White, 9.dp.toPx(), c, style = Stroke(2.dp.toPx()))
+            drawCircle(Color.Black, 10.5.dp.toPx(), c, style = Stroke(1.dp.toPx()))
+        }
+        Spacer(Modifier.height(12.dp))
+        Canvas(
+            Modifier.fillMaxWidth().height(26.dp).clip(Corner)
+                .pointerInput(Unit) {
+                    fun at(o: Offset) = onHsv((o.x / size.width).coerceIn(0f, 1f) * 360f, sv.first, sv.second)
+                    awaitEachGesture {
+                        val d = awaitFirstDown(); at(d.position); d.consume()
+                        do { val e = awaitPointerEvent(); e.changes.forEach { at(it.position); it.consume() } } while (e.changes.any { it.pressed })
+                    }
+                },
+        ) {
+            drawRect(Brush.horizontalGradient((0..6).map { Color(android.graphics.Color.HSVToColor(floatArrayOf(it * 60f, 1f, 1f))) }))
+            val x = h / 360f * size.width
+            drawRect(Color.White, Offset(x - 2.dp.toPx(), 0f), Size(4.dp.toPx(), size.height))
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.size(40.dp).background(now, Corner).border(1.dp, Ink.Edge, Corner))
+            Text("#%06X".format(android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value)) and 0xFFFFFF), style = Type.figure, modifier = Modifier.padding(end = 8.dp))
+            recent.take(5).forEach { c -> Swatch(c, false, size = 32.dp) { onRecent(c) } }
         }
     }
 }
@@ -1061,26 +1323,63 @@ internal fun TextEditFields(text: String, size: Float, color: Int, onText: (Stri
     }
 }
 
-/** Every mark in the file, in page order, with the words it covers or holds. */
+/** Kinds of marks to filter the list by. */
+private enum class MarkFilter(val label: String, val kinds: Set<MarkKind>?) {
+    ALL("All", null),
+    WORDS("Highlights", setOf(MarkKind.HIGHLIGHT, MarkKind.UNDERLINE, MarkKind.STRIKE, MarkKind.SQUIGGLY)),
+    NOTES("Notes", setOf(MarkKind.NOTE)),
+    TEXT("Text boxes", setOf(MarkKind.TEXT)),
+    DRAWINGS("Drawings", setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW)),
+}
+
+/** Every mark in the file, in page order, with the words it covers or holds; filter by kind or colour, copy or share them. */
 @Composable
-private fun MarksList(marks: List<Mark>?, onPage: (Int, Float) -> Unit) {
+private fun MarksList(reader: Reader, marks: List<Mark>?, name: String, onPage: (Int, Float) -> Unit) {
+    val context = LocalContext.current
+    var filter by remember { mutableStateOf(MarkFilter.ALL) }
+    var colour by remember { mutableStateOf<Int?>(null) }
     when {
         marks == null -> Text("Reading the marks…", style = Type.note, modifier = Modifier.padding(20.dp))
-        marks.isEmpty() -> Text("No marks yet. Tap the pen at the top to highlight, draw or add notes.", style = Type.note, modifier = Modifier.padding(20.dp))
-        else -> LazyColumn(Modifier.heightIn(max = 520.dp)) {
-            items(marks) { m ->
-                Row(
-                    Modifier.fillMaxWidth().clickable { onPage(m.page, m.box.y0) }.padding(horizontal = 20.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    Box(Modifier.padding(top = 4.dp).size(12.dp).background(Color(m.color)))
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(m.kind.label, style = Type.bodyStrong.copy(fontSize = 14.sp))
-                        val words = listOf(m.quoted, m.note).filter { it.isNotBlank() }.joinToString("  ·  ")
-                        if (words.isNotBlank()) Text(words, style = Type.small.copy(color = MarkLabelColor), maxLines = 3, overflow = TextOverflow.Ellipsis)
+        marks.isEmpty() -> Text("No marks yet. Select words to highlight them, or tap the pencil at the top to draw, add text or notes.", style = Type.note, modifier = Modifier.padding(20.dp))
+        else -> {
+            val shown = marks.filter { m -> (filter.kinds == null || m.kind in filter.kinds) && (colour == null || (m.color and 0xFFFFFF) == (colour!! and 0xFFFFFF)) }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                MarkFilter.entries.filter { f -> f.kinds == null || marks.any { it.kind in f.kinds } }.forEach { f -> Chip(f.label, { filter = f }, selected = filter == f) }
+            }
+            val colours = marks.map { it.color and 0xFFFFFF or (0xFF shl 24) }.distinct()
+            if (colours.size > 1) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Colour", style = Type.small, modifier = Modifier.padding(end = 4.dp))
+                    colours.forEach { c -> Swatch(c, colour == c, size = 32.dp) { colour = if (colour == c) null else c } }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (shown.size == 1) "1 mark" else "${shown.size} marks", style = Type.small, modifier = Modifier.weight(1f))
+                BarAction("Copy all") {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("PDFx marks", reader.marksText(name, shown)))
+                    android.widget.Toast.makeText(context, "Marks copied", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                BarAction("Share") {
+                    runCatching { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "$name — marks").putExtra(Intent.EXTRA_TEXT, reader.marksText(name, shown)), null)) }
+                }
+            }
+            Hairline(color = Ink.Rule)
+            LazyColumn(Modifier.heightIn(max = 460.dp)) {
+                items(shown) { m ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onPage(m.page, m.box.y0) }.padding(horizontal = 20.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Box(Modifier.padding(top = 4.dp).size(12.dp).background(Color(m.color)))
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(m.kind.label, style = Type.bodyStrong.copy(fontSize = 14.sp))
+                            val words = listOf(m.quoted, m.note).filter { it.isNotBlank() }.joinToString("  ·  ")
+                            if (words.isNotBlank()) Text(words, style = Type.small.copy(color = MarkLabelColor, textDirection = TextDirection.Content), maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        }
+                        Text("p. ${m.page + 1}", style = Type.figure, modifier = Modifier.padding(start = 10.dp))
                     }
-                    Text("p. ${m.page + 1}", style = Type.figure, modifier = Modifier.padding(start = 10.dp))
                 }
             }
         }

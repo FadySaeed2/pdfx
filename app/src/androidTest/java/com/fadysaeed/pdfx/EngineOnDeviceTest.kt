@@ -163,6 +163,13 @@ class EngineOnDeviceTest {
             val hits = s.search(1, "lazy dog")
             assertEquals(34, hits.size)
             assertTrue(hits[0][0].y0 > 200f)
+            // Each hit comes with the words around it.
+            val words = s.searchHits(1, "lazy dog")
+            assertEquals(34, words.size)
+            assertTrue(words[0].before.contains("brown fox"))
+            assertTrue(words[0].match.equals("lazy dog", ignoreCase = true))
+            // Arabic: hamza and short vowels don't stop a match.
+            assertTrue("Arabic search should ignore the hamza", s.searchHits(0, "للتاكد").isNotEmpty())
 
             val region = s.renderRegion(0, 3000, 200, 200, 600, 400)
             assertEquals(600, region.width)
@@ -194,7 +201,13 @@ class EngineOnDeviceTest {
         try {
             assertTrue(s.editable)
             val words = s.select(0, 57f, 82f, 299f, 82f)!!
-            assertTrue(s.addTextMark(0, MarkKind.HIGHLIGHT, words.boxes, 0xFFFFD54A.toInt()))
+            assertTrue(s.addTextMark(0, MarkKind.HIGHLIGHT, words.boxes, 0xFFFFD54A.toInt(), 0.35f))
+            val hl = s.marks(0).first { it.kind == MarkKind.HIGHLIGHT }
+            assertEquals(0.35f, hl.opacity, 0.02f)
+            assertTrue(s.setMarkOpacity(0, hl.index, 0.6f))
+            assertTrue(s.setMarkColor(0, hl.index, 0xFFFF7FAE.toInt()))
+            assertEquals(0.6f, s.marks(0).first { it.kind == MarkKind.HIGHLIGHT }.opacity, 0.02f)
+            assertEquals(0xFFFF7FAE.toInt(), s.marks(0).first { it.kind == MarkKind.HIGHLIGHT }.color)
             assertTrue(s.addInk(0, listOf(listOf(100f to 400f, 200f to 420f, 300f to 400f)), 0xFFE5484D.toInt(), 2f))
             assertTrue(s.addShape(1, MarkKind.ARROW, 100f, 100f, 300f, 200f, 0xFF2F6FED.toInt(), 2f))
             assertTrue(s.addTextBox(1, 80f, 600f, "Check with the team\nملاحظة بالعربي", 0xFF1A1A1A.toInt(), 15f))

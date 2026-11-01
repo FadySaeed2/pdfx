@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ColorMatrix
 import com.fadysaeed.pdfx.data.Bookmarks
 import com.fadysaeed.pdfx.engine.Box
+import com.fadysaeed.pdfx.engine.Hit
 import com.fadysaeed.pdfx.engine.Mark
 import com.fadysaeed.pdfx.engine.MarkKind
 import com.fadysaeed.pdfx.engine.OutlineEntry
@@ -51,6 +52,11 @@ enum class ShapeKind(val label: String, val kind: MarkKind) {
 /** Colours that read well on paper and print well: soft ones for marking text, firm ones for pens. */
 val MarkColors = listOf(0xFFFFD54A, 0xFF7ED36F, 0xFF6FB4FF, 0xFFFF7FAE, 0xFFFFA94D).map { it.toInt() }
 val PenColors = listOf(0xFF1A1A1A, 0xFFE5484D, 0xFF2F6FED, 0xFF2E9E5B, 0xFFE0A43B).map { it.toInt() }
+/** How strong a highlight looks: light, medium or strong. */
+val HighlightStrengths = listOf(0.35f, 0.6f, 1f)
+val StrengthLabels = listOf("Light", "Medium", "Strong")
+/** The strength step closest to a mark's opacity. */
+fun strengthStep(opacity: Float): Int = HighlightStrengths.indices.minByOrNull { kotlin.math.abs(HighlightStrengths[it] - opacity) } ?: 2
 /** Pen widths in PDF points, and text sizes for text boxes. */
 val PenWidths = listOf(1.0f, 2.0f, 3.6f)
 val TextSizes = listOf(11f, 15f, 20f)
@@ -65,6 +71,9 @@ sealed interface Draft {
 
 /** Asking for words: a new text box or note at a point, or the note of an existing mark. */
 data class TextAsk(val page: Int, val x: Float, val y: Float, val note: Boolean, val mark: Mark? = null)
+
+/** The colour picker is open: for the tool in hand, for selected words, or to recolour [mark]. */
+data class ColorPick(val initial: Int, val mark: Mark? = null, val forWords: Boolean = false)
 
 /** Scroll the document so a point on a page sits a third of the way down the screen. */
 data class Jump(val page: Int, val y: Float = 0f, val x: Float? = null, val id: Long = System.nanoTime())
@@ -110,6 +119,10 @@ class Reader(
         private set
     /** Hits per page; each hit is the boxes it covers. */
     val hits = mutableStateMapOf<Int, List<List<Box>>>()
+    /** The same hits with the words around each, for the list of results. */
+    val snippets = mutableStateMapOf<Int, List<Hit>>()
+    /** Whether the list of every result is open beside the page. */
+    var resultsOpen by mutableStateOf(false)
     /** Every hit in page order, as (page, index on that page). */
     var order by mutableStateOf<List<Pair<Int, Int>>>(emptyList())
         private set
@@ -166,17 +179,18 @@ class Reader(
         val q = text.trim()
         searchJob?.cancel()
         query = text
-        hits.clear(); order = emptyList(); current = -1; searchedPages = 0
+        hits.clear(); snippets.clear(); order = emptyList(); current = -1; searchedPages = 0
         if (q.isEmpty() || session == null) { searching = false; return }
         searching = true
         searchJob = scope.launch {
             val start = fromPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
             for (k in 0 until pageCount) {
                 val p = (start + k) % pageCount
-                val found = runCatching { session.search(p, q) }.getOrDefault(emptyList())
+                val found = runCatching { session.searchHits(p, q) }.getOrDefault(emptyList())
                 searchedPages = k + 1
                 if (found.isNotEmpty()) {
-                    hits[p] = found
+                    snippets[p] = found
+                    hits[p] = found.map { it.boxes }
                     order = hits.keys.sorted().flatMap { pg -> hits[pg]!!.indices.map { pg to it } }
                     if (current < 0) select(order.indexOfFirst { it.first == p })
                     else current = order.indexOf(lastShown ?: (p to 0)).coerceAtLeast(0)
@@ -191,6 +205,9 @@ class Reader(
     fun next() { if (order.isNotEmpty()) select((current + 1) % order.size) }
     fun previous() { if (order.isNotEmpty()) select((current - 1 + order.size) % order.size) }
 
+    /** Jumps to hit number [i] in page order (from the list of results). */
+    fun showHit(i: Int) = select(i)
+
     private fun select(i: Int) {
         if (i !in order.indices) return
         current = i
@@ -203,8 +220,9 @@ class Reader(
     fun closeSearch() {
         searchJob?.cancel()
         searchOpen = false
+        resultsOpen = false
         query = ""
-        hits.clear(); order = emptyList(); current = -1; searching = false
+        hits.clear(); snippets.clear(); order = emptyList(); current = -1; searching = false
     }
 
     /** The hit the arrows are on, as (page, index on that page). */
@@ -288,6 +306,16 @@ class Reader(
         private set
     var widthStep by mutableIntStateOf(prefs?.getInt("width_step", 1) ?: 1)
         private set
+    /** Strength of new highlights, a step in [HighlightStrengths]. */
+    var strength by mutableIntStateOf(prefs?.getInt("strength", 1) ?: 1)
+        private set
+    /** Colours picked with the colour picker, newest first. */
+    val customColors = mutableStateListOf<Int>().also { list ->
+        prefs?.getString("custom_colors", null)?.split(',')?.mapNotNull { it.toLongOrNull()?.toInt() }?.let { list.addAll(it) }
+    }
+    var colorPick by mutableStateOf<ColorPick?>(null)
+    /** A change that can be taken back from a short notice, such as marking selected words. */
+    var undoNotice by mutableStateOf<String?>(null)
     /** Once a stylus has touched the page, fingers scroll and zoom while the pen draws. */
     var stylusSeen by mutableStateOf(false)
     val marks = mutableStateMapOf<Int, List<Mark>>()
@@ -329,6 +357,29 @@ class Reader(
         if (usesPenColors(tool)) { penColor = c; prefs?.edit()?.putInt("pen_color", c)?.apply() }
         else { markColor = c; prefs?.edit()?.putInt("mark_color", c)?.apply() }
     }
+    /** Colour for highlighting selected words, whichever tool was last in hand. */
+    fun pickWordsColor(c: Int) { markColor = c; prefs?.edit()?.putInt("mark_color", c)?.apply() }
+
+    /** A colour chosen in the picker goes where the picker was opened from, and joins the recent ones. */
+    fun applyPicked(p: ColorPick, c: Int) {
+        colorPick = null
+        rememberColor(c)
+        when {
+            p.mark != null -> recolor(p.mark, c)
+            p.forWords -> pickWordsColor(c)
+            else -> pickColor(c)
+        }
+    }
+
+    fun pickStrength(step: Int) { strength = step.coerceIn(0, 2); prefs?.edit()?.putInt("strength", strength)?.apply() }
+
+    /** Keeps a colour from the picker among the recent ones (up to six). */
+    fun rememberColor(c: Int) {
+        customColors.remove(c); customColors.add(0, c)
+        while (customColors.size > 6) customColors.removeAt(customColors.size - 1)
+        prefs?.edit()?.putString("custom_colors", customColors.joinToString(",") { (it.toLong() and 0xFFFFFFFFL).toString() })?.apply()
+    }
+
     fun pickWidth(step: Int) { widthStep = step.coerceIn(0, 2); prefs?.edit()?.putInt("width_step", widthStep)?.apply() }
     fun colorFor(t: Tool) = if (usesPenColors(t)) penColor else markColor
     fun usesPenColors(t: Tool) = t == Tool.PEN || t == Tool.SHAPE || t == Tool.TEXT
@@ -410,7 +461,7 @@ class Reader(
                         ?: s?.selectWord(page, a.first, a.second)?.boxes
                     if (boxes.isNullOrEmpty()) { draft = null; return@change false }
                     draft = Draft.Words(page, boxes, color)
-                    s?.addTextMark(page, kind, boxes, color) ?: false
+                    s?.addTextMark(page, kind, boxes, color, if (kind == MarkKind.HIGHLIGHT) HighlightStrengths[strength] else 1f) ?: false
                 }
             }
             Tool.PEN, Tool.MARKER -> {
@@ -459,7 +510,41 @@ class Reader(
         }
     }
 
-    fun recolor(m: Mark, color: Int) { selectedMark = null; change(m.page) { session?.setMarkColor(m.page, m.index, color) ?: false } }
+    /** Marks the selected words, from the bar over a selection. The notice that follows can undo it. */
+    fun markSelection(kind: MarkKind) {
+        val sel = selection ?: return
+        val color = markColor
+        val opacity = if (kind == MarkKind.HIGHLIGHT) HighlightStrengths[strength] else 1f
+        clearSelection()
+        draft = Draft.Words(sel.page, sel.boxes, color)
+        undoNotice = when (kind) { MarkKind.UNDERLINE -> "Underlined"; MarkKind.STRIKE -> "Struck through"; else -> "Highlighted" }
+        change(sel.page) { session?.addTextMark(sel.page, kind, sel.boxes, color, opacity) ?: false }
+    }
+
+    /** New colour for a mark; it stays selected so the colour can be tried again. */
+    fun recolor(m: Mark, color: Int) { selectedMark = m.copy(color = color); change(m.page) { session?.setMarkColor(m.page, m.index, color) ?: false } }
+
+    /** New strength for a highlight. */
+    fun restrength(m: Mark, step: Int) {
+        val o = HighlightStrengths[step.coerceIn(0, 2)]
+        selectedMark = m.copy(opacity = o)
+        change(m.page) { session?.setMarkOpacity(m.page, m.index, o) ?: false }
+    }
+
+    /** Every mark in [list] as plain text, page by page, to copy or share. */
+    fun marksText(name: String, list: List<Mark>): String = buildString {
+        append(name).append(" — marks\n")
+        list.groupBy { it.page }.toSortedMap().forEach { (page, ms) ->
+            append("\nPage ").append(page + 1).append('\n')
+            ms.forEach { m ->
+                val words = m.quoted.ifBlank { if (m.kind == MarkKind.TEXT) m.note else "" }
+                append("• ").append(m.kind.label)
+                if (words.isNotBlank()) append(": “").append(words.trim()).append('”')
+                append('\n')
+                if (m.note.isNotBlank() && m.kind != MarkKind.TEXT) append("  Note: ").append(m.note.trim()).append('\n')
+            }
+        }
+    }
     fun delete(m: Mark) { selectedMark = null; change(m.page) { session?.deleteMark(m.page, m.index) ?: false } }
     fun editNote(m: Mark) { selectedMark = null; textAsk = TextAsk(m.page, m.box.x0, m.box.y0, note = true, mark = m) }
 
@@ -547,9 +632,10 @@ class Reader(
     fun stopMarkingKeepSelectionForTest() { marking = false }
 
     /** For screenshot tests. */
-    fun showHits(q: String, found: Map<Int, List<List<Box>>>, at: Int) {
-        query = q; searchOpen = true
+    fun showHits(q: String, found: Map<Int, List<List<Box>>>, at: Int, words: Map<Int, List<Hit>> = emptyMap(), list: Boolean = false) {
+        query = q; searchOpen = true; resultsOpen = list
         hits.clear(); hits.putAll(found)
+        snippets.clear(); snippets.putAll(words)
         order = hits.keys.sorted().flatMap { pg -> hits[pg]!!.indices.map { pg to it } }
         current = at; searching = false; searchedPages = pageCount
     }

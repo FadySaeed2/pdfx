@@ -49,7 +49,7 @@ enum class MarkKind(val label: String) {
  * A mark on a page: where it is, what it is, its colour, and its words (a note, a text box's text,
  * or the text under a highlight). [size] is the text size of a text box, 0 for anything else.
  */
-data class Mark(val page: Int, val index: Int, val kind: MarkKind, val box: Box, val color: Int, val note: String, val quoted: String, val size: Float = 0f) {
+data class Mark(val page: Int, val index: Int, val kind: MarkKind, val box: Box, val color: Int, val note: String, val quoted: String, val size: Float = 0f, val opacity: Float = 1f) {
     /** Marks that sit on the page by themselves can be moved; marks over words stay with the words. */
     val movable: Boolean get() = kind != MarkKind.OTHER && kind !in TEXT_MARKS
     /** Notes are a fixed-size icon; everything else movable can also be resized. */
@@ -161,9 +161,43 @@ class PdfSession private constructor(
         bmp
     }
 
-    /** Every place [needle] appears on a page; each hit is one or more boxes (it may wrap a line). */
+    /**
+     * Every place [needle] appears on a page; each hit is one or more boxes (it may wrap a line).
+     * Case, accents and Arabic marks are ignored, so «اكتئاب» also finds «إكتِئاب».
+     */
     suspend fun search(index: Int, needle: String): List<List<Box>> = onDoc {
-        page(index).search(needle)?.map { hit -> hit.map { it.box() } } ?: emptyList()
+        stext(index).search(needle, SEARCH_FLAGS)?.map { hit -> hit.map { it.box() } } ?: emptyList()
+    }
+
+    /** Like [search], with the words around each hit for the list of results. */
+    suspend fun searchHits(index: Int, needle: String): List<Hit> = onDoc {
+        val st = stext(index)
+        val quads = st.search(needle, SEARCH_FLAGS) ?: return@onDoc emptyList()
+        if (quads.isEmpty()) return@onDoc emptyList()
+        // The page's lines, in reading order, with their outlines.
+        val lines = ArrayList<Pair<Rect, String>>()
+        runCatching { st.blocks }.getOrNull()?.forEach { b ->
+            b.lines?.forEach { l ->
+                val t = buildString { l.chars?.forEach { appendCodePoint(it.c) } }.trim()
+                if (t.isNotEmpty() && l.bbox != null) lines += l.bbox to t
+            }
+        }
+        quads.map { hit ->
+            val boxes = hit.map { it.box() }
+            val first = boxes.first()
+            val cx = (first.x0 + first.x1) / 2
+            val cy = (first.y0 + first.y1) / 2
+            val li = lines.indexOfFirst { (r, _) -> cx in r.x0..r.x1 && cy in r.y0..r.y1 }
+                .takeIf { it >= 0 } ?: lines.indices.minByOrNull { kotlin.math.abs((lines[it].first.y0 + lines[it].first.y1) / 2 - cy) }
+            if (li == null) return@map Hit(boxes, "", needle, "")
+            val prev = lines.getOrNull(li - 1)?.second.orEmpty()
+            val (r, line) = lines[li]
+            val next = lines.getOrNull(li + 1)?.second.orEmpty()
+            val start = if (prev.isEmpty()) 0 else prev.length + 1
+            val context = listOf(prev, line, next).filter { it.isNotEmpty() }.joinToString(" ")
+            val along = if (r.x1 > r.x0) ((first.x0 - r.x0) / (r.x1 - r.x0)).coerceIn(0f, 1f) else 0f
+            snippet(context, needle, start + (along * line.length).toInt(), boxes)
+        }
     }
 
     suspend fun links(index: Int): List<PageLink> = onDoc {
@@ -311,7 +345,8 @@ class PdfSession private constructor(
             }.getOrDefault("") else ""
             val da = if (kind == MarkKind.TEXT) runCatching { a.defaultAppearance }.getOrNull() else null
             val color = if (da?.color != null) argb(da.color) else argb(c)
-            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), color, runCatching { a.contents ?: "" }.getOrDefault(""), quoted, da?.size ?: 0f)
+            val opacity = runCatching { a.opacity }.getOrDefault(1f)
+            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), color, runCatching { a.contents ?: "" }.getOrDefault(""), quoted, da?.size ?: 0f, opacity)
         }
         return out
     }
@@ -322,7 +357,7 @@ class PdfSession private constructor(
     suspend fun allMarks(): List<Mark> = onDoc { (0 until pageCount).flatMap { runCatching { marksNow(it) }.getOrDefault(emptyList()) } }
 
     /** Highlight, underline, strike or squiggle over text, given the boxes of the selected words. */
-    suspend fun addTextMark(index: Int, kind: MarkKind, boxes: List<Box>, color: Int) = edit("Mark text", index) {
+    suspend fun addTextMark(index: Int, kind: MarkKind, boxes: List<Box>, color: Int, opacity: Float = 1f) = edit("Mark text", index) {
         val t = when (kind) {
             MarkKind.UNDERLINE -> PDFAnnotation.TYPE_UNDERLINE
             MarkKind.STRIKE -> PDFAnnotation.TYPE_STRIKE_OUT
@@ -332,6 +367,7 @@ class PdfSession private constructor(
         val a = pdfPage(index).createAnnotation(t)
         a.setQuadPoints(boxes.map { Quad(Rect(it.x0, it.y0, it.x1, it.y1)) }.toTypedArray())
         a.color = rgb(color)
+        if (opacity < 1f) a.opacity = opacity.coerceIn(0.1f, 1f)
         a.update()
     }
 
@@ -404,6 +440,13 @@ class PdfSession private constructor(
         } else {
             a.color = rgb(color)
         }
+        a.update()
+    }
+
+    /** How strong a mark looks: 1 is solid, lower lets more of the page show through. */
+    suspend fun setMarkOpacity(index: Int, markIndex: Int, opacity: Float) = edit("Strength", index) {
+        val a = pdfPage(index).annotations?.getOrNull(markIndex) ?: return@edit
+        a.opacity = opacity.coerceIn(0.1f, 1f)
         a.update()
     }
 
@@ -627,6 +670,8 @@ private fun Quad.box(): Box {
     val r = toRect()
     return Box(r.x0, r.y0, r.x1, r.y1)
 }
+
+private const val SEARCH_FLAGS = StructuredText.SEARCH_IGNORE_CASE or StructuredText.SEARCH_IGNORE_DIACRITICS
 
 private val TEXT_MARKS = setOf(MarkKind.HIGHLIGHT, MarkKind.UNDERLINE, MarkKind.STRIKE, MarkKind.SQUIGGLY)
 

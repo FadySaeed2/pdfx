@@ -61,6 +61,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.input.pointer.isPrimaryPressed
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.fadysaeed.pdfx.engine.Box as PageBox
@@ -104,6 +108,7 @@ fun DocumentView(
     onOpenUri: (String) -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
+    selectionBar: @Composable () -> Unit = {},
 ) {
     val pageCount = reader.pageCount
     BoxWithConstraints(modifier.fillMaxSize().background(Ink.Black).clipToBounds()) {
@@ -318,7 +323,9 @@ fun DocumentView(
                                     if (!reader.draws(pen) || down.isConsumed) return@awaitEachGesture
                                     val k = size.width / pageWidthPt(i)
                                     down.consume()
-                                    reader.begin(i, down.position.x / k, down.position.y / k, eraser = down.type == PointerType.Eraser)
+                                    // The S Pen's side button held down turns the pen into an eraser.
+                                    val button = currentEvent.buttons.let { it.isPrimaryPressed || it.isSecondaryPressed }
+                                    reader.begin(i, down.position.x / k, down.position.y / k, eraser = down.type == PointerType.Eraser || (pen && button))
                                     var done = false
                                     while (!done) {
                                         val e = awaitPointerEvent(PointerEventPass.Initial)
@@ -408,6 +415,14 @@ fun DocumentView(
                             )
                         }
                         PageMarks(reader, i, pageWidthPt(i), img)
+                        val sel = reader.selection
+                        if (sel != null && sel.page == i && !reader.marking && sel.boxes.isNotEmpty()) {
+                            val k = viewportPx * zoom / pageWidthPt(i)
+                            val top = sel.boxes.minOf { it.y0 } * k
+                            val bottom = sel.boxes.maxOf { it.y1 } * k
+                            val centre = (sel.boxes.minOf { it.x0 } + sel.boxes.maxOf { it.x1 }) / 2f * k
+                            FloatOver(top, bottom, centre, panX, panX + viewportPx, selectionBar)
+                        }
                     }
                 }
             }
@@ -510,6 +525,26 @@ private fun DrawScope.mark(b: PageBox, k: Float, fill: Color, edge: Color?) {
 private fun DrawScope.handle(at: Offset, lineHeight: Float) {
     drawLine(Ink.Teal, Offset(at.x, at.y - lineHeight), at, strokeWidth = 2.dp.toPx())
     drawCircle(Ink.Teal, radius = 7.dp.toPx(), center = Offset(at.x, at.y + 6.dp.toPx()))
+}
+
+/**
+ * Places [content] just above a span of a page (or below it when there is no room above), centred
+ * on [centre] but kept between [minX] and [maxX], the part of the page on screen.
+ */
+@Composable
+private fun FloatOver(top: Float, bottom: Float, centre: Float, minX: Float, maxX: Float, content: @Composable () -> Unit) {
+    Layout(content, Modifier.fillMaxSize()) { ms, c ->
+        val p = ms.firstOrNull()?.measure(Constraints(maxWidth = (maxX - minX).roundToInt().coerceAtLeast(1))) ?: return@Layout layout(c.maxWidth, c.maxHeight) {}
+        layout(c.maxWidth, c.maxHeight) {
+            val gap = 12.dp.toPx()
+            val margin = 8.dp.toPx()
+            val x = (centre - p.width / 2f).coerceIn(minX + margin, (maxX - p.width - margin).coerceAtLeast(minX + margin))
+            val above = top - gap - p.height
+            // Below, leave room for the selection's handles.
+            val y = if (above >= 0f) above else bottom + 30.dp.toPx()
+            p.place(x.roundToInt(), y.roundToInt())
+        }
+    }
 }
 
 /** Which corner of [b] (0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right) is within [reach] of [p]. */
