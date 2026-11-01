@@ -49,11 +49,48 @@ enum class MarkKind(val label: String) {
  * A mark on a page: where it is, what it is, its colour, and its words (a note, a text box's text,
  * or the text under a highlight). [size] is the text size of a text box, 0 for anything else.
  */
-data class Mark(val page: Int, val index: Int, val kind: MarkKind, val box: Box, val color: Int, val note: String, val quoted: String, val size: Float = 0f, val opacity: Float = 1f) {
+data class Mark(
+    val page: Int, val index: Int, val kind: MarkKind, val box: Box, val color: Int, val note: String, val quoted: String,
+    val size: Float = 0f, val opacity: Float = 1f,
+    /** Stroke width of a drawing, line or shape. */
+    val width: Float = 0f,
+    /** The boxes a highlight covers, one per line, for telling which mark a finger is on. */
+    val parts: List<Box> = emptyList(),
+    /** The strokes of a drawing, or the two ends of a line, for the same. */
+    val path: List<List<Pair<Float, Float>>> = emptyList(),
+) {
+    /** How far a point is from the mark itself (0 when it is on it), in PDF points. */
+    fun distanceTo(x: Float, y: Float): Float = when {
+        path.isNotEmpty() -> {
+            var best = Float.MAX_VALUE
+            for (st in path) {
+                if (st.size == 1) best = minOf(best, kotlin.math.hypot(x - st[0].first, y - st[0].second))
+                for (k in 1 until st.size) best = minOf(best, segmentDistance(x, y, st[k - 1], st[k]))
+            }
+            (best - width / 2f).coerceAtLeast(0f)
+        }
+        parts.isNotEmpty() -> parts.minOf { boxDistance(it, x, y) }
+        else -> boxDistance(box, x, y)
+    }
+
     /** Marks that sit on the page by themselves can be moved; marks over words stay with the words. */
     val movable: Boolean get() = kind != MarkKind.OTHER && kind !in TEXT_MARKS
     /** Notes are a fixed-size icon; everything else movable can also be resized. */
     val resizable: Boolean get() = movable && kind != MarkKind.NOTE
+}
+
+internal fun boxDistance(b: Box, x: Float, y: Float): Float {
+    val dx = maxOf(b.x0 - x, 0f, x - b.x1)
+    val dy = maxOf(b.y0 - y, 0f, y - b.y1)
+    return kotlin.math.hypot(dx, dy)
+}
+
+internal fun segmentDistance(x: Float, y: Float, a: Pair<Float, Float>, b: Pair<Float, Float>): Float {
+    val vx = b.first - a.first
+    val vy = b.second - a.second
+    val len = vx * vx + vy * vy
+    val t = if (len <= 0f) 0f else (((x - a.first) * vx + (y - a.second) * vy) / len).coerceIn(0f, 1f)
+    return kotlin.math.hypot(x - (a.first + t * vx), y - (a.second + t * vy))
 }
 
 /** A paragraph of reflowed text. [level] is 0 for body text, 1 for a heading, 2 for a smaller heading. */
@@ -269,6 +306,15 @@ class PdfSession private constructor(
         selectionNow(index, stext(index), ax, ay, bx, by)
     }
 
+    /** Like [select], with both ends moved out to whole words, so a selection never stops mid-word. */
+    suspend fun selectWords(index: Int, ax: Float, ay: Float, bx: Float, by: Float): Selection? = onDoc {
+        val st = stext(index)
+        val a = Point(ax, ay)
+        val b = Point(bx, by)
+        runCatching { st.snapSelection(a, b, StructuredText.SELECT_WORDS) }
+        selectionNow(index, st, a.x, a.y, b.x, b.y) ?: selectionNow(index, st, ax, ay, bx, by)
+    }
+
     private fun selectionNow(index: Int, st: StructuredText, ax: Float, ay: Float, bx: Float, by: Float): Selection? {
         val a = Point(ax, ay)
         val b = Point(bx, by)
@@ -371,7 +417,14 @@ class PdfSession private constructor(
             val da = if (kind == MarkKind.TEXT) runCatching { a.defaultAppearance }.getOrNull() else null
             val color = if (da?.color != null) argb(da.color) else argb(c)
             val opacity = runCatching { a.opacity }.getOrDefault(1f)
-            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), color, runCatching { a.contents ?: "" }.getOrDefault(""), quoted, da?.size ?: 0f, opacity)
+            val parts = if (kind in TEXT_MARKS) runCatching { (0 until a.quadPointCount).map { a.getQuadPoint(it).box() } }.getOrDefault(emptyList()) else emptyList()
+            val path = when (t) {
+                PDFAnnotation.TYPE_INK -> runCatching { a.inkList?.map { st -> st.map { it.x to it.y } } ?: emptyList() }.getOrDefault(emptyList())
+                PDFAnnotation.TYPE_LINE -> runCatching { a.line?.takeIf { it.size >= 2 }?.let { listOf(listOf(it[0].x to it[0].y, it[1].x to it[1].y)) } ?: emptyList() }.getOrDefault(emptyList())
+                else -> emptyList()
+            }
+            val width = if (kind in setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW)) runCatching { a.borderWidth }.getOrDefault(1f) else 0f
+            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), color, runCatching { a.contents ?: "" }.getOrDefault(""), quoted, da?.size ?: 0f, opacity, width, parts, path)
         }
         return out
     }
@@ -456,8 +509,27 @@ class PdfSession private constructor(
         a.update()
     }
 
-    suspend fun setMarkColor(index: Int, markIndex: Int, color: Int) = edit("Colour", index) {
-        val a = pdfPage(index).annotations?.getOrNull(markIndex) ?: return@edit
+    suspend fun setMarkColor(index: Int, markIndex: Int, color: Int) = setMarksColor(index, listOf(markIndex), color)
+
+    /** One colour for several marks on a page, as one step to undo. */
+    suspend fun setMarksColor(index: Int, markIndexes: List<Int>, color: Int) = edit("Colour", index) {
+        val annots = pdfPage(index).annotations ?: return@edit
+        markIndexes.forEach { mi -> annots.getOrNull(mi)?.let { colorNow(it, color) } }
+    }
+
+    /** One stroke width for several drawings, lines or shapes, as one step to undo. */
+    suspend fun setMarksWidth(index: Int, markIndexes: List<Int>, width: Float) = edit("Width", index) {
+        val annots = pdfPage(index).annotations ?: return@edit
+        markIndexes.forEach { mi ->
+            val a = annots.getOrNull(mi) ?: return@forEach
+            if (a.type in setOf(PDFAnnotation.TYPE_INK, PDFAnnotation.TYPE_SQUARE, PDFAnnotation.TYPE_CIRCLE, PDFAnnotation.TYPE_LINE)) {
+                a.borderWidth = width
+                a.update()
+            }
+        }
+    }
+
+    private fun colorNow(a: PDFAnnotation, color: Int) {
         if (a.type == PDFAnnotation.TYPE_FREE_TEXT) {
             // A text box's words take their colour from its default appearance.
             val da = runCatching { a.defaultAppearance }.getOrNull()
@@ -492,8 +564,15 @@ class PdfSession private constructor(
      * Moves or resizes a mark so that its outline becomes [to]. Everything inside is mapped from the
      * old outline to the new one: the points of a drawing, the ends of a line, a box's corners.
      */
-    suspend fun reshapeMark(index: Int, markIndex: Int, to: Box) = edit("Move", index) {
-        val a = pdfPage(index).annotations?.getOrNull(markIndex) ?: return@edit
+    suspend fun reshapeMark(index: Int, markIndex: Int, to: Box) = reshapeMarks(index, listOf(markIndex to to))
+
+    /** Moves or resizes several marks on a page as one step to undo. */
+    suspend fun reshapeMarks(index: Int, moves: List<Pair<Int, Box>>) = edit("Move", index) {
+        val annots = pdfPage(index).annotations ?: return@edit
+        moves.forEach { (mi, to) -> annots.getOrNull(mi)?.let { reshapeNow(it, to) } }
+    }
+
+    private fun reshapeNow(a: PDFAnnotation, to: Box) {
         val b = a.bounds
         val fw = (b.x1 - b.x0).coerceAtLeast(0.01f)
         val fh = (b.y1 - b.y0).coerceAtLeast(0.01f)
@@ -513,14 +592,14 @@ class PdfSession private constructor(
         }
         when (a.type) {
             PDFAnnotation.TYPE_INK -> {
-                val ink = a.inkList ?: return@edit
+                val ink = a.inkList ?: return
                 val all = ink.flatMap { it.toList() }
-                if (all.isEmpty()) return@edit
+                if (all.isEmpty()) return
                 val m = mapper(all)
                 a.setInkList(ink.map { st -> st.map(m).toTypedArray() }.toTypedArray())
             }
             PDFAnnotation.TYPE_LINE -> {
-                val l = a.line ?: return@edit
+                val l = a.line ?: return
                 if (l.size >= 2) { val m = mapper(l.toList()); a.setLine(m(l[0]), m(l[1])) }
             }
             PDFAnnotation.TYPE_TEXT -> {
@@ -531,7 +610,7 @@ class PdfSession private constructor(
                 a.rect = Rect(r.x0 + dx, r.y0 + dy, r.x1 + dx, r.y1 + dy)
             }
             else -> {
-                if (!a.hasRect()) return@edit
+                if (!a.hasRect()) return
                 val r = a.rect
                 a.rect = Rect(mx(r.x0), my(r.y0), mx(r.x1), my(r.y1))
             }
@@ -546,10 +625,13 @@ class PdfSession private constructor(
         return lines * size * 1.3f + size * 0.6f
     }
 
-    suspend fun deleteMark(index: Int, markIndex: Int) = edit("Delete", index) {
+    suspend fun deleteMark(index: Int, markIndex: Int) = deleteMarks(index, listOf(markIndex))
+
+    /** Removes several marks on a page as one step to undo. */
+    suspend fun deleteMarks(index: Int, markIndexes: List<Int>) = edit("Delete", index) {
         val p = pdfPage(index)
-        val a = p.annotations?.getOrNull(markIndex) ?: return@edit
-        p.deleteAnnotation(a)
+        val annots = p.annotations ?: return@edit
+        markIndexes.distinct().mapNotNull { annots.getOrNull(it) }.forEach { p.deleteAnnotation(it) }
     }
 
     /** Undo or redo one change. Pages are reloaded afterwards, since a step can touch any of them. */

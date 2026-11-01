@@ -8,6 +8,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
@@ -25,7 +26,8 @@ import android.content.Intent
 fun PdfxRoot(incoming: Uri?, onIncomingHandled: () -> Unit) {
     val context = LocalContext.current
     val vm: LibraryModel = viewModel()
-    var open by remember { mutableStateOf<OpenRequest?>(null) }
+    // Kept across the app being recreated, so an open file stays open.
+    var open by rememberSaveable(stateSaver = OpenRequest.Saver) { mutableStateOf<OpenRequest?>(null) }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
 

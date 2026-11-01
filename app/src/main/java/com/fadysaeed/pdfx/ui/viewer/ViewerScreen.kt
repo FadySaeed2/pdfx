@@ -146,7 +146,19 @@ private sealed interface Load {
  * A document to open, the page to start on when it should not be the last one read, and words to
  * find and highlight straight away (when opened from a search in the library).
  */
-data class OpenRequest(val uri: Uri, val page: Int? = null, val query: String? = null, val id: Long = System.nanoTime())
+data class OpenRequest(val uri: Uri, val page: Int? = null, val query: String? = null, val id: Long = System.nanoTime()) {
+    companion object {
+        /** Saves the request as plain values; reopening starts at the last page read. */
+        val Saver: androidx.compose.runtime.saveable.Saver<OpenRequest?, Any> = androidx.compose.runtime.saveable.Saver(
+            save = { r -> r?.let { arrayListOf(it.uri.toString(), it.id.toString()) } ?: arrayListOf<String>() },
+            restore = { v ->
+                @Suppress("UNCHECKED_CAST")
+                val l = v as List<String>
+                if (l.size < 2) null else OpenRequest(Uri.parse(l[0]), null, null, l[1].toLongOrNull() ?: System.nanoTime())
+            },
+        )
+    }
+}
 
 /**
  * Opens a document, asks for a password when needed, and shows it. Changes are saved when the
@@ -920,7 +932,11 @@ private fun MarkupBar(reader: Reader) {
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             when (t) {
-                Tool.ERASER -> Text(if (reader.stylusSeen) "Touch a mark with the pen to remove it. Undo brings it back." else "Tap or drag over a mark to remove it. Undo brings it back.", style = Type.small)
+                Tool.ERASER -> Text(if (reader.stylusSeen) "Touch a mark with the pen to remove it, or hold the pen's button while drawing. Undo brings it back." else "Tap or drag over a mark to remove it. Undo brings it back.", style = Type.small)
+                Tool.SELECT -> {
+                    Text("A tap on handwriting picks", style = Type.small)
+                    InkScope.entries.forEach { sc -> Chip(sc.label, { reader.pickInkScope(sc) }, selected = reader.inkScope == sc) }
+                }
                 else -> {
                     val colors = if (reader.usesPenColors(t)) PenColors else MarkColors
                     (colors + reader.customColors.filter { it !in colors }).forEach { c -> Swatch(c, reader.colorFor(t) == c) { reader.pickColor(c) } }
@@ -954,6 +970,7 @@ private fun MarkupBar(reader: Reader) {
             Tool.PEN, Tool.MARKER -> if (reader.stylusSeen) "Draw with the pen. Fingers scroll and zoom." else "Draw with one finger. Two fingers scroll and zoom."
             Tool.SHAPE -> "Drag from one corner to the other."
             Tool.TEXT -> "Tap where the text should start."
+            Tool.SELECT -> "Draw a loop round marks to pick them all, or tap one."
             Tool.NOTE -> "Tap where the note should sit."
             Tool.ERASER -> null
         }
@@ -984,19 +1001,47 @@ private fun MarkBar(m: Mark, reader: Reader) {
             .border(1.dp, Ink.Edge, Corner)
             .padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
     ) {
+        val all = reader.members.ifEmpty { listOf(m) }
+        val many = all.size > 1
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(m.kind.label, style = Type.bodyStrong)
-                val words = m.note.ifBlank { m.quoted }
+                val title = when {
+                    !many -> m.kind.label
+                    all.all { it.kind == MarkKind.INK } && m.kind == MarkKind.INK && reader.inkScope != InkScope.STROKE ->
+                        "${reader.inkScope.label} · ${all.size} strokes"
+                    else -> "${all.size} marks"
+                }
+                Text(title, style = Type.bodyStrong)
+                val words = if (many) "" else m.note.ifBlank { m.quoted }
                 if (words.isNotBlank()) Text(words, style = Type.small, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 val how = when {
-                    m.resizable -> "Drag it to move it; drag a corner to resize it."
-                    m.movable -> "Drag it to move it."
+                    reader.membersResizable -> if (many) "Drag to move them together; drag a corner to resize." else "Drag it to move it; drag a corner to resize it."
+                    reader.membersMovable -> "Drag it to move it."
                     else -> null
                 }
                 if (how != null) Text(how, style = Type.small.copy(color = Ink.Teal))
             }
             IconButton(Glyph.CLOSE, "Close", { reader.selectMark(null) }, color = Ink.Dust, size = 44.dp)
+        }
+        if (m.kind == MarkKind.INK) {
+            Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Pick", style = Type.small, modifier = Modifier.padding(end = 4.dp))
+                InkScope.entries.forEach { sc -> Chip(sc.label, { reader.pickInkScope(sc) }, selected = reader.inkScope == sc) }
+            }
+        }
+        val widthKinds = setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW)
+        if (all.all { it.kind in widthKinds } && m.opacity >= 0.99f) {
+            Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Line", style = Type.small, modifier = Modifier.padding(end = 4.dp))
+                val near = PenWidths.indices.minByOrNull { kotlin.math.abs(PenWidths[it] - m.width) } ?: 1
+                PenWidths.forEachIndexed { i, w ->
+                    Box(
+                        Modifier.size(36.dp).border(1.dp, if (i == near) Ink.Bone else Ink.Rule, Corner).clickable { reader.rewidth(w) }
+                            .semantics { contentDescription = listOf("Thin", "Medium", "Thick")[i] },
+                        contentAlignment = Alignment.Center,
+                    ) { Box(Modifier.size(listOf(4, 7, 11)[i].dp).background(if (i == near) Ink.Bone else Ink.Dust, RoundedCornerShape(50))) }
+                }
+            }
         }
         if (m.kind != MarkKind.NOTE) {
             val colors = if (m.kind in setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW, MarkKind.TEXT)) PenColors else MarkColors
@@ -1005,7 +1050,7 @@ private fun MarkBar(m: Mark, reader: Reader) {
                 AddColor { reader.colorPick = ColorPick(m.color, mark = m) }
             }
         }
-        if (m.kind == MarkKind.HIGHLIGHT) {
+        if (m.kind == MarkKind.HIGHLIGHT && !many) {
             Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Strength", style = Type.small, modifier = Modifier.padding(end = 4.dp))
                 val step = strengthStep(m.opacity)
@@ -1013,9 +1058,11 @@ private fun MarkBar(m: Mark, reader: Reader) {
             }
         }
         Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (m.kind == MarkKind.TEXT) BarAction("Edit text") { reader.editText(m) }
-            else BarAction(if (m.note.isBlank()) "Add note" else "Edit note") { reader.editNote(m) }
-            BarAction("Delete") { reader.delete(m) }
+            if (!many) {
+                if (m.kind == MarkKind.TEXT) BarAction("Edit text") { reader.editText(m) }
+                else BarAction(if (m.note.isBlank()) "Add note" else "Edit note") { reader.editNote(m) }
+            }
+            BarAction(if (many) "Delete all ${all.size}" else "Delete") { reader.delete(m) }
         }
     }
 }

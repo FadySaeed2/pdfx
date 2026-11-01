@@ -315,6 +315,41 @@ class ScreensTest {
         assertTrue(text.contains("Page 3") && text.contains("“monitor levels”") && text.contains("Note: Check this") && text.contains("Page 6"))
     }
 
+    /** Handwriting on page 1: "cat" (3 strokes close together), then "sat" further along, then a second line. */
+    private val ink = listOf(
+        Box(60f, 300f, 72f, 320f), Box(74f, 302f, 86f, 320f), Box(88f, 296f, 98f, 320f),
+        Box(118f, 300f, 130f, 320f), Box(132f, 302f, 144f, 320f),
+        Box(60f, 350f, 90f, 370f),
+    ).mapIndexed { i, b -> Mark(0, i, MarkKind.INK, b, PenColors[2], "", "", width = 2f, path = listOf(listOf(b.x0 to b.y1, (b.x0 + b.x1) / 2 to b.y0, b.x1 to b.y1))) }
+
+    @Test
+    fun inkGroups() {
+        val r = Reader(null, 3, kotlinx.coroutines.MainScope())
+        r.setMarksForTest(0, ink)
+        r.pickInkScope(com.fadysaeed.pdfx.ui.viewer.InkScope.WORD)
+        r.selectMark(ink[1])
+        assertEquals(setOf(0, 1, 2), r.members.map { it.index }.toSet())
+        r.pickInkScope(com.fadysaeed.pdfx.ui.viewer.InkScope.LINE)
+        assertEquals(setOf(0, 1, 2, 3, 4), r.members.map { it.index }.toSet())
+        r.pickInkScope(com.fadysaeed.pdfx.ui.viewer.InkScope.STROKE)
+        assertEquals(listOf(1), r.members.map { it.index })
+        // Nearest mark to a tap, measured to the stroke.
+        assertEquals(3, r.markAt(0, 124f, 310f, 12f)?.index)
+        assertEquals(null, r.markAt(0, 300f, 600f, 12f))
+        // The lasso picks what is inside the loop.
+        r.showMarking(Tool.SELECT, null)
+        r.begin(0, 110f, 290f, eraser = false, reach = 12f)
+        r.extend(listOf(150f to 290f, 150f to 330f, 110f to 330f, 110f to 291f))
+        r.finish()
+        assertEquals(setOf(3, 4), r.members.map { it.index }.toSet())
+    }
+
+    @Test fun inkWordSelected() = viewerShot("24_ink_word.png") { r ->
+        r.chrome = false
+        r.setMarksForTest(0, ink)
+        r.showSelectedForTest(ink[0], with = ink.subList(1, 3))
+    }
+
     @Test
     fun boxesAndText() {
         assertEquals(Box(20f, 30f, 120f, 80f), movedBox(Box(10f, 10f, 110f, 60f), 10f, 20f, 595f, 842f))

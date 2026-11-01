@@ -41,7 +41,7 @@ val ReflowMargins = listOf(14, 24, 40)
 
 /** The marking tools. */
 enum class Tool(val label: String) {
-    HIGHLIGHT("Highlight"), UNDERLINE("Underline"), STRIKE("Strike"), PEN("Pen"), MARKER("Marker"),
+    SELECT("Select"), HIGHLIGHT("Highlight"), UNDERLINE("Underline"), STRIKE("Strike"), PEN("Pen"), MARKER("Marker"),
     SHAPE("Shapes"), TEXT("Text"), NOTE("Note"), ERASER("Eraser"),
 }
 
@@ -52,6 +52,9 @@ enum class ShapeKind(val label: String, val kind: MarkKind) {
 /** Colours that read well on paper and print well: soft ones for marking text, firm ones for pens. */
 val MarkColors = listOf(0xFFFFD54A, 0xFF7ED36F, 0xFF6FB4FF, 0xFFFF7FAE, 0xFFFFA94D).map { it.toInt() }
 val PenColors = listOf(0xFF1A1A1A, 0xFFE5484D, 0xFF2F6FED, 0xFF2E9E5B, 0xFFE0A43B).map { it.toInt() }
+/** How much handwriting a tap picks up: the stroke touched, the word it is part of, or the whole line. */
+enum class InkScope(val label: String) { STROKE("Stroke"), WORD("Word"), LINE("Line") }
+
 /** How strong a highlight looks: light, medium or strong. */
 val HighlightStrengths = listOf(0.35f, 0.6f, 1f)
 val StrengthLabels = listOf("Light", "Medium", "Strong")
@@ -67,6 +70,8 @@ sealed interface Draft {
     data class Words(override val page: Int, val boxes: List<Box>, val color: Int) : Draft
     data class Ink(override val page: Int, val points: List<Pair<Float, Float>>, val color: Int, val width: Float, val opacity: Float) : Draft
     data class Shape(override val page: Int, val kind: ShapeKind, val x0: Float, val y0: Float, val x1: Float, val y1: Float, val color: Int, val width: Float) : Draft
+    /** A loop drawn round marks to pick them. */
+    data class Lasso(override val page: Int, val points: List<Pair<Float, Float>>) : Draft
 }
 
 /** Asking for words: a new text box or note at a point, or the note of an existing mark. */
@@ -240,7 +245,7 @@ class Reader(
         val sel = selection ?: return
         val s = session ?: return
         scope.launch {
-            val next = if (start) s.select(sel.page, x, y, sel.bx, sel.by) else s.select(sel.page, sel.ax, sel.ay, x, y)
+            val next = if (start) s.selectWords(sel.page, x, y, sel.bx, sel.by) else s.selectWords(sel.page, sel.ax, sel.ay, x, y)
             if (next != null) selection = next
         }
     }
@@ -325,6 +330,10 @@ class Reader(
         private set
     var selectedMark by mutableStateOf<Mark?>(null)
         private set
+    /** Marks picked together with [selectedMark], which comes first; see [members]. */
+    private var group by mutableStateOf<List<Mark>>(emptyList())
+    var inkScope by mutableStateOf(prefs?.getString("ink_scope", null)?.let { runCatching { InkScope.valueOf(it) }.getOrNull() } ?: InkScope.WORD)
+        private set
     var textAsk by mutableStateOf<TextAsk?>(null)
     /** The text box whose words are being edited. */
     var textEdit by mutableStateOf<Mark?>(null)
@@ -399,15 +408,88 @@ class Reader(
         scope.launch { allMarks = runCatching { s.allMarks() }.getOrDefault(emptyList()) }
     }
 
-    /** The mark under a point, the smallest one if several overlap. */
-    fun markAt(page: Int, x: Float, y: Float): Mark? = marks[page]
-        ?.filter { m -> x in (m.box.x0 - 6)..(m.box.x1 + 6) && y in (m.box.y0 - 6)..(m.box.y1 + 6) }
-        ?.minByOrNull { it.box.width * it.box.height }
+    /**
+     * The mark nearest a point, within [reach] points: measured to the stroke itself for drawings and
+     * lines, to the words for highlights, and to the outline for the rest. Ties go to the smaller.
+     */
+    fun markAt(page: Int, x: Float, y: Float, reach: Float = 6f): Mark? = marks[page]
+        ?.map { it to it.distanceTo(x, y) }
+        ?.filter { it.second <= reach }
+        ?.minWithOrNull(compareBy<Pair<Mark, Float>>({ it.second }, { it.first.box.width * it.first.box.height }))
+        ?.first
 
-    fun selectMark(m: Mark?) { selectedMark = m; if (m != null) clearSelection() }
+    /** Picks a mark; handwriting brings along the rest of its word or line, as [inkScope] says. */
+    fun selectMark(m: Mark?) {
+        selectedMark = m
+        group = if (m != null) expandInk(m) else emptyList()
+        if (m != null) clearSelection()
+    }
+
+    /** Picks several marks at once (from the lasso); the first leads. */
+    fun selectMarks(list: List<Mark>) {
+        selectedMark = list.firstOrNull()
+        group = list
+        if (list.isNotEmpty()) clearSelection()
+    }
+
+    /** Every mark that is picked: the chosen one and, for handwriting or the lasso, the rest of its group. */
+    val members: List<Mark>
+        get() {
+            val m = selectedMark ?: return emptyList()
+            val g = group
+            return if (g.firstOrNull()?.let { it.page == m.page && it.index == m.index } == true) listOf(m) + g.drop(1) else listOf(m)
+        }
+
+    /** The outline round everything picked. */
+    val membersBox: Box?
+        get() = members.takeIf { it.isNotEmpty() }?.map { it.box }?.reduce { a, b -> Box(minOf(a.x0, b.x0), minOf(a.y0, b.y0), maxOf(a.x1, b.x1), maxOf(a.y1, b.y1)) }
+
+    val membersMovable: Boolean get() = members.isNotEmpty() && members.all { it.movable }
+    val membersResizable: Boolean get() = membersMovable && (members.size > 1 || members[0].resizable)
+
+    fun pickInkScope(sc: InkScope) {
+        inkScope = sc
+        prefs?.edit()?.putString("ink_scope", sc.name)?.apply()
+        selectedMark?.let { group = expandInk(it) }
+    }
+
+    /**
+     * The handwriting that goes with [a]: just it, its word (strokes close together on the same
+     * line), or its line (strokes on the same line with no big break). Distances follow the size of
+     * the writing on the page, so small and large handwriting group the same way.
+     */
+    private fun expandInk(a: Mark): List<Mark> {
+        if (a.kind != MarkKind.INK || inkScope == InkScope.STROKE) return listOf(a)
+        val inks = marks[a.page]?.filter { it.kind == MarkKind.INK } ?: return listOf(a)
+        val heights = inks.map { it.box.height }.filter { it > 3f }.sorted()
+        val h = (heights.getOrNull(heights.size / 2) ?: a.box.height).coerceAtLeast(6f)
+        val gap = if (inkScope == InkScope.WORD) 0.45f * h else 3f * h
+        val picked = mutableListOf(inks.firstOrNull { it.index == a.index } ?: a)
+        var u = a.box
+        var grew = true
+        while (grew) {
+            grew = false
+            for (m in inks) {
+                if (picked.any { it.index == m.index }) continue
+                val cy = (m.box.y0 + m.box.y1) / 2
+                val overlap = minOf(m.box.y1, u.y1) - maxOf(m.box.y0, u.y0)
+                val sameRow = (cy >= u.y0 - 0.3f * h && cy <= u.y1 + 0.3f * h) || overlap >= 0.5f * minOf(m.box.height, u.height)
+                val hGap = maxOf(0f, m.box.x0 - u.x1, u.x0 - m.box.x1)
+                if (sameRow && hGap <= gap) {
+                    picked += m
+                    u = Box(minOf(u.x0, m.box.x0), minOf(u.y0, m.box.y0), maxOf(u.x1, m.box.x1), maxOf(u.y1, m.box.y1))
+                    grew = true
+                }
+            }
+        }
+        return picked
+    }
 
     // A gesture on a page in marking mode: begin, extend with points, finish.
-    fun begin(page: Int, x: Float, y: Float, eraser: Boolean) {
+    private var gestureReach = 6f
+
+    fun begin(page: Int, x: Float, y: Float, eraser: Boolean, reach: Float = 6f) {
+        gestureReach = reach
         gesturePage = page
         gestureTool = if (eraser) Tool.ERASER else tool
         anchor = x to y
@@ -418,6 +500,7 @@ class Reader(
             Tool.PEN -> draft = Draft.Ink(page, listOf(x to y), penColor, PenWidths[widthStep], 1f)
             Tool.MARKER -> draft = Draft.Ink(page, listOf(x to y), markColor, PenWidths[widthStep] * 4 + 6, 0.35f)
             Tool.ERASER -> eraseAt(page, x, y)
+            Tool.SELECT -> draft = Draft.Lasso(page, listOf(x to y))
             else -> draft = null
         }
     }
@@ -439,6 +522,7 @@ class Reader(
                 }
             }
             Tool.ERASER -> points.forEach { eraseAt(page, it.first, it.second) }
+            Tool.SELECT -> (draft as? Draft.Lasso)?.let { draft = it.copy(points = it.points + points) }
             else -> Unit
         }
     }
@@ -450,7 +534,31 @@ class Reader(
         val a = anchor ?: return
         val s = session
         anchor = null
+        // A tap (no drag) on a mark that is already there picks it, whatever the tool.
+        if (!moved && gestureTool != Tool.ERASER) {
+            val r = gestureReach
+            val there = when (gestureTool) {
+                // Pens dot i's and full stops, so only a tap right on a stroke picks it.
+                Tool.PEN, Tool.MARKER -> markAt(page, a.first, a.second, 0f)
+                Tool.TEXT, Tool.NOTE -> markAt(page, a.first, a.second, r)?.takeIf { it.kind == MarkKind.TEXT || it.kind == MarkKind.NOTE }
+                Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKE -> markAt(page, a.first, a.second, r)?.takeIf { it.parts.isNotEmpty() }
+                else -> markAt(page, a.first, a.second, r)
+            }
+            if (there != null) {
+                draft = null
+                selectMark(there)
+                return
+            }
+        }
         when (gestureTool) {
+            Tool.SELECT -> {
+                val loop = (draft as? Draft.Lasso)?.points
+                draft = null
+                if (loop != null && loop.size >= 3) {
+                    val inside = marks[page].orEmpty().filter { it.movable && lassoed(it, loop) }
+                    if (inside.isNotEmpty()) selectMarks(inside)
+                }
+            }
             Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKE -> {
                 val kind = when (gestureTool) { Tool.UNDERLINE -> MarkKind.UNDERLINE; Tool.STRIKE -> MarkKind.STRIKE; else -> MarkKind.HIGHLIGHT }
                 val color = markColor
@@ -471,19 +579,10 @@ class Reader(
             }
             Tool.SHAPE -> {
                 val d = draft as? Draft.Shape
-                if (!moved || d == null) {
-                    draft = null
-                    markAt(page, a.first, a.second)?.takeIf { it.movable }?.let { selectedMark = it }
-                    return
-                }
+                if (!moved || d == null) { draft = null; return }
                 change(page) { s?.addShape(page, d.kind.kind, d.x0, d.y0, d.x1, d.y1, d.color, d.width) ?: false }
             }
-            Tool.TEXT, Tool.NOTE -> if (!moved) {
-                // Tapping a mark that is already there picks it up instead of starting a new one.
-                val there = markAt(page, a.first, a.second)?.takeIf { it.movable }
-                if (there != null) selectedMark = there
-                else textAsk = TextAsk(page, a.first, a.second, note = gestureTool == Tool.NOTE)
-            }
+            Tool.TEXT, Tool.NOTE -> if (!moved) textAsk = TextAsk(page, a.first, a.second, note = gestureTool == Tool.NOTE)
             Tool.ERASER -> {
                 val gone = erased.toList().sortedDescending()
                 erased.clear()
@@ -493,7 +592,26 @@ class Reader(
     }
 
     private fun eraseAt(page: Int, x: Float, y: Float) {
-        markAt(page, x, y)?.let { erased += it.index }
+        markAt(page, x, y, gestureReach * 0.6f)?.let { erased += it.index }
+    }
+
+    /** Whether a mark sits inside a loop: most of a drawing's points, or the middle of anything else. */
+    private fun lassoed(m: Mark, loop: List<Pair<Float, Float>>): Boolean {
+        val pts = m.path.flatten()
+        return if (pts.isNotEmpty()) pts.count { inside(it.first, it.second, loop) } * 10 >= pts.size * 6
+        else inside((m.box.x0 + m.box.x1) / 2, (m.box.y0 + m.box.y1) / 2, loop)
+    }
+
+    private fun inside(x: Float, y: Float, poly: List<Pair<Float, Float>>): Boolean {
+        var c = false
+        var j = poly.size - 1
+        for (i in poly.indices) {
+            val (xi, yi) = poly[i]
+            val (xj, yj) = poly[j]
+            if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c
+            j = i
+        }
+        return c
     }
 
     /** Writes the words the user typed: a new text box or note, or a mark's note. */
@@ -521,8 +639,22 @@ class Reader(
         change(sel.page) { session?.addTextMark(sel.page, kind, sel.boxes, color, opacity) ?: false }
     }
 
-    /** New colour for a mark; it stays selected so the colour can be tried again. */
-    fun recolor(m: Mark, color: Int) { selectedMark = m.copy(color = color); change(m.page) { session?.setMarkColor(m.page, m.index, color) ?: false } }
+    /** New colour for the picked marks; they stay picked so the colour can be tried again. */
+    fun recolor(m: Mark, color: Int) {
+        val all = if (selectedMark?.index == m.index && selectedMark?.page == m.page) members else listOf(m)
+        selectedMark = m.copy(color = color)
+        group = all.map { it.copy(color = color) }
+        change(m.page) { session?.setMarksColor(m.page, all.map { it.index }, color) ?: false }
+    }
+
+    /** New stroke width for the picked drawings, lines and shapes. */
+    fun rewidth(width: Float) {
+        val all = members.takeIf { it.isNotEmpty() } ?: return
+        val page = all[0].page
+        selectedMark = all[0].copy(width = width)
+        group = all.map { it.copy(width = width) }
+        change(page) { session?.setMarksWidth(page, all.map { it.index }, width) ?: false }
+    }
 
     /** New strength for a highlight. */
     fun restrength(m: Mark, step: Int) {
@@ -545,7 +677,12 @@ class Reader(
             }
         }
     }
-    fun delete(m: Mark) { selectedMark = null; change(m.page) { session?.deleteMark(m.page, m.index) ?: false } }
+    fun delete(m: Mark) {
+        val all = if (selectedMark?.index == m.index && selectedMark?.page == m.page) members else listOf(m)
+        selectedMark = null
+        group = emptyList()
+        change(m.page) { session?.deleteMarks(m.page, all.map { it.index }) ?: false }
+    }
     fun editNote(m: Mark) { selectedMark = null; textAsk = TextAsk(m.page, m.box.x0, m.box.y0, note = true, mark = m) }
 
     /** Opens the editor for a text box's words. */
@@ -572,9 +709,19 @@ class Reader(
 
     /** Moves or resizes a mark to [to]; it stays selected so it can be adjusted again. */
     fun reshape(m: Mark, to: Box) {
-        if (!m.movable) { moving = null; return }
-        selectedMark = m.copy(box = to)
-        change(m.page) { session?.reshapeMark(m.page, m.index, to) ?: false }
+        val all = members.takeIf { it.isNotEmpty() && selectedMark?.index == m.index } ?: listOf(m)
+        if (!all.all { it.movable }) { moving = null; return }
+        val from = membersBox ?: m.box
+        val sx = to.width / from.width.coerceAtLeast(0.01f)
+        val sy = to.height / from.height.coerceAtLeast(0.01f)
+        fun map(b: Box) = if (all.size == 1) to else Box(
+            to.x0 + (b.x0 - from.x0) * sx, to.y0 + (b.y0 - from.y0) * sy,
+            to.x0 + (b.x1 - from.x0) * sx, to.y0 + (b.y1 - from.y0) * sy,
+        )
+        val moves = all.map { it.index to map(it.box) }
+        selectedMark = all[0].copy(box = moves[0].second)
+        group = all.mapIndexed { k, it -> it.copy(box = moves[k].second) }
+        change(m.page) { session?.reshapeMarks(m.page, moves) ?: false }
     }
 
     fun undo() { selectedMark = null; change(null) { session?.undo() ?: false } }
@@ -599,7 +746,10 @@ class Reader(
                 // Keep the chosen mark chosen, with its new outline, size and colour.
                 val keep = selectedMark
                 if (s != null && page != null && keep != null && keep.page == page) {
-                    selectedMark = runCatching { s.marks(page) }.getOrNull()?.getOrNull(keep.index)?.takeIf { it.kind == keep.kind }
+                    val was = members.map { it.index }
+                    val fresh = runCatching { s.marks(page) }.getOrNull()
+                    selectedMark = fresh?.getOrNull(keep.index)?.takeIf { it.kind == keep.kind }
+                    group = if (selectedMark == null || fresh == null) emptyList() else was.mapNotNull { fresh.getOrNull(it) }
                 }
                 if (page != null) loadMarks(page) else marks.keys.toList().forEach { loadMarks(it) }
                 if (allMarks != null) loadAllMarks()
@@ -625,7 +775,8 @@ class Reader(
 
     /** For screenshot tests. */
     fun showMarking(t: Tool, d: Draft?, selected: Mark? = null) { marking = true; tool = t; draft = d; selectedMark = selected }
-    fun showSelectedForTest(m: Mark?, movingTo: Box? = null) { selectedMark = m; moving = movingTo }
+    fun showSelectedForTest(m: Mark?, movingTo: Box? = null, with: List<Mark> = emptyList()) { selectedMark = m; group = listOfNotNull(m) + with; moving = movingTo }
+    fun setMarksForTest(page: Int, list: List<Mark>) { marks[page] = list }
     fun showReflowForTest(on: Boolean, paras: Map<Int, List<Para>>) { reflow = on; paragraphs.clear(); paragraphs.putAll(paras) }
     fun setAllMarksForTest(list: List<Mark>) { allMarks = list }
     fun showSelectionlessDraftForTest() { selection = null }

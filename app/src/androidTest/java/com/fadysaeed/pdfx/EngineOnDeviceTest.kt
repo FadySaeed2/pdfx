@@ -156,6 +156,9 @@ class EngineOnDeviceTest {
             // "engine" sits in the title, drawn at x=56..300, baseline y=90 (26pt bold).
             val sel = s.selectWord(0, 150f, 82f)
             assertTrue("a word should be selected", sel != null && sel.text.isNotBlank())
+            // Word selection never stops mid-word.
+            val words2 = s.selectWords(0, 125f, 82f, 170f, 82f)!!.text.trim()
+            assertTrue("whole words: '$words2'", words2.isNotEmpty() && words2.split(Regex("\\s+")).all { it in setOf("PDFx", "engine", "check") })
             val wider = s.select(0, 57f, 82f, 299f, 82f)!!
             assertTrue(wider.text.contains("engine check"))
             assertTrue(wider.boxes.isNotEmpty())
@@ -245,6 +248,20 @@ class EngineOnDeviceTest {
             val note = s.marks(2).first { it.kind == MarkKind.NOTE }
             assertTrue(s.reshapeMark(2, note.index, Box(100f, 500f, 100f + note.box.width, 500f + note.box.height)))
             assertEquals(100f, s.marks(2).first { it.kind == MarkKind.NOTE }.box.x0, 2f)
+            // Several strokes at once: width, move and delete as single steps.
+            assertTrue(s.addInk(2, listOf(listOf(100f to 700f, 120f to 720f)), 0xFF1A1A1A.toInt(), 2f))
+            assertTrue(s.addInk(2, listOf(listOf(130f to 700f, 150f to 720f)), 0xFF1A1A1A.toInt(), 2f))
+            val two = s.marks(2).filter { it.kind == MarkKind.INK }
+            assertEquals(2, two.size)
+            assertTrue(two.all { it.path.isNotEmpty() })
+            assertTrue("a tap on the stroke finds it", two[0].distanceTo(110f, 710f) < 0.5f)
+            assertTrue("a tap away from it does not", two[0].distanceTo(110f, 740f) > 10f)
+            assertTrue(s.setMarksWidth(2, two.map { it.index }, 3.6f))
+            assertTrue(s.marks(2).filter { it.kind == MarkKind.INK }.all { kotlin.math.abs(it.width - 3.6f) < 0.1f })
+            assertTrue(s.reshapeMarks(2, two.map { it.index to Box(it.box.x0 + 50f, it.box.y0, it.box.x1 + 50f, it.box.y1) }))
+            assertEquals(two[0].box.x0 + 50f, s.marks(2).filter { it.kind == MarkKind.INK }[0].box.x0, 2f)
+            assertTrue(s.deleteMarks(2, two.map { it.index }))
+            assertTrue(s.marks(2).none { it.kind == MarkKind.INK })
             assertEquals(5, s.allMarks().size)
             save(s.render(1, 1080), "marks_moved_page2.png")
             assertTrue(s.undo())
