@@ -505,10 +505,11 @@ class PdfSession private constructor(
     private fun applyText(a: PDFAnnotation, text: String, style: BoxStyle) {
         a.contents = text
         a.setDefaultAppearance(style.font.da, style.size, rgb(style.color))
-        runCatching { a.quadding = style.quadding(text) }
-        runCatching { a.setRichDefaults(style.css(text)) }
-        runCatching { a.setRichContents(text, style.rich(text)) }
-        runCatching { a.interiorColor = style.fill?.let { rgb(it) } ?: FloatArray(0) }
+        styleErrors.clear()
+        runCatching { a.quadding = style.quadding(text) }.onFailure { styleErrors += "Q: $it" }
+        runCatching { a.setRichDefaults(style.css(text)) }.onFailure { styleErrors += "DS: $it" }
+        runCatching { a.setRichContents(text, style.rich(text)) }.onFailure { styleErrors += "RC: $it" }
+        runCatching { a.interiorColor = style.fill?.let { rgb(it) } ?: FloatArray(0) }.onFailure { styleErrors += "IC: $it" }
         if (style.border) {
             a.borderWidth = 0.8f
             a.color = rgb(style.color)
@@ -517,13 +518,29 @@ class PdfSession private constructor(
         }
     }
 
+    private val styleErrors = ArrayList<String>()
+
+    /** What the file holds for a text box's style, for checking it in tests. */
+    suspend fun textBoxRaw(index: Int, markIndex: Int): String = onDoc {
+        val a = pdfPage(index).annotations?.getOrNull(markIndex) ?: return@onDoc "no mark"
+        val da = runCatching { a.defaultAppearance }.getOrNull()
+        "DA=${da?.font}/${da?.size} hasDS=${runCatching { a.hasRichDefaults() }.getOrNull()} DS=${runCatching { a.richDefaults }.getOrNull()} " +
+            "hasRC=${runCatching { a.hasRichContents() }.getOrNull()} RC=${runCatching { a.richContents }.getOrNull()?.take(200)} errors=$styleErrors"
+    }
+
     private fun styleOf(a: PDFAnnotation, text: String, size: Float, color: Int): BoxStyle {
         val ds = runCatching { if (a.hasRichDefaults()) a.richDefaults else null }.getOrNull()
         val rc = runCatching { if (a.hasRichContents()) a.richContents else null }.getOrNull()
         val fill = runCatching { a.interiorColor?.takeIf { it.isNotEmpty() }?.let { argb(it) } }.getOrNull()
         val border = runCatching { a.borderWidth > 0.05f }.getOrDefault(false)
         val rtl = rc?.let { r -> if (r.contains("dir=\"rtl\"")) true else if (r.contains("dir=\"ltr\"")) false else null }
-        return BoxStyle.parse(ds, text, size, color, fill, border, rtl)
+        val parsed = BoxStyle.parse(ds, text, size, color, fill, border, rtl)
+        // Without a stored style, the font still shows in the plain appearance string.
+        if (ds.isNullOrBlank()) {
+            val f = runCatching { a.defaultAppearance?.font }.getOrNull()
+            return parsed.copy(font = BoxFont.entries.firstOrNull { it.da == f } ?: BoxFont.SANS)
+        }
+        return parsed
     }
 
     /** A sticky note: an icon on the page that opens to show its words. */

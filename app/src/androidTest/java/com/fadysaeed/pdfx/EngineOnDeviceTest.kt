@@ -242,10 +242,12 @@ class EngineOnDeviceTest {
             assertEquals(0xFF2F6FED.toInt(), edited.color)
             // The whole box's style: font, weight, alignment, background and border.
             assertTrue(s.editTextBox(1, edited.index, edited.note, BoxStyle(font = BoxFont.SERIF, size = 20f, bold = true, italic = true, align = BoxAlign.CENTER, color = 0xFF2F6FED.toInt(), fill = 0xFFFFF4C2.toInt(), border = true)))
-            val styled = s.marks(1).first { it.kind == MarkKind.TEXT }.style!!
-            assertEquals(BoxFont.SERIF, styled.font)
-            assertTrue(styled.bold && styled.italic && styled.border && styled.fill != null)
-            assertEquals(BoxAlign.CENTER, styled.align)
+            val styledMark = s.marks(1).first { it.kind == MarkKind.TEXT }
+            val styled = styledMark.style!!
+            val raw = s.textBoxRaw(1, styledMark.index)
+            assertEquals("stored: $raw", BoxFont.SERIF, styled.font)
+            assertTrue("stored: $raw", styled.bold && styled.italic && styled.border && styled.fill != null)
+            assertEquals("stored: $raw", BoxAlign.CENTER, styled.align)
             assertEquals(20f, styled.size, 0.5f)
             assertTrue(s.reshapeMark(1, edited.index, Box(300f, 300f, 300f + edited.box.width, 300f + edited.box.height)))
             val moved = s.marks(1).first { it.kind == MarkKind.TEXT }

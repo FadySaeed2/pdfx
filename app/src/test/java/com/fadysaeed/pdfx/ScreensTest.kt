@@ -363,8 +363,8 @@ class ScreensTest {
 
     @Test
     fun reflowRules() {
-        fun line(t: String, size: Float = 10f, y: Float = 300f, b: Boolean = false, it: Boolean = false) =
-            com.fadysaeed.pdfx.engine.RawLine(t, BooleanArray(t.length) { b }, BooleanArray(t.length) { it }, size, y, y + size)
+        fun line(t: String, size: Float = 10f, y: Float = 300f, b: Boolean = false, ital: Boolean = false) =
+            com.fadysaeed.pdfx.engine.RawLine(t, BooleanArray(t.length) { b }, BooleanArray(t.length) { ital }, size, y, y + size)
         fun block(y0: Float, vararg l: com.fadysaeed.pdfx.engine.RawLine) = com.fadysaeed.pdfx.engine.RawBlock(Box(50f, y0, 500f, y0 + 12f * l.size), l.toList(), false)
         val blocks = listOf(
             block(30f, line("Clinical Guideline 2026", y = 30f)),
