@@ -1,13 +1,25 @@
 package com.fadysaeed.pdfx.ui.viewer
 
 import androidx.compose.foundation.Image
+import androidx.compose.animation.core.AnimationState
+import androidx.compose.animation.core.animateDecay
+import androidx.compose.animation.rememberSplineBasedDecay
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.unit.IntOffset
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,15 +31,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -64,30 +73,45 @@ fun DocumentView(
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
-    BoxWithConstraints(modifier.fillMaxSize().background(Ink.Black)) {
+    BoxWithConstraints(modifier.fillMaxSize().background(Ink.Black).clipToBounds()) {
         val density = LocalDensity.current
-        val viewportPx = constraints.maxWidth
+        val viewportPx = constraints.maxWidth.toFloat()
         var zoom by remember { mutableFloatStateOf(1f) }
         var settledZoom by remember { mutableFloatStateOf(1f) }
-        var targetX by remember { mutableIntStateOf(0) }
-        val hScroll = rememberScrollState()
+        // How far the widened column is slid left, in pixels. Owned here, not by a scroll
+        // container, so a pinch can move it in the same frame the column grows.
+        var panX by remember { mutableFloatStateOf(0f) }
         val tap by rememberUpdatedState(onTap)
         val want by rememberUpdatedState(onWant)
+        val scope = rememberCoroutineScope()
+        val decay = rememberSplineBasedDecay<Float>()
+        val fling = remember { arrayOfNulls<Job>(1) }
 
-        fun zoomBy(factor: Float, focus: Offset) {
+        fun clampX(x: Float) = x.coerceIn(0f, (viewportPx * (zoom - 1f)).coerceAtLeast(0f))
+
+        /**
+         * Scales about [focus] and moves by [pan], keeping the exact point of the page under the
+         * fingers where it was. Horizontally that is our own offset; vertically the page under the
+         * fingers is re-anchored so the same line stays under them.
+         */
+        fun transform(factor: Float, focus: Offset, pan: Offset) {
             val next = (zoom * factor).coerceIn(MIN_ZOOM, MAX_ZOOM)
             val k = next / zoom
-            if (k == 1f) return
+            if (k == 1f && pan == Offset.Zero) return
+            val info = listState.layoutInfo
+            val vso = info.viewportStartOffset
+            val items = info.visibleItemsInfo
+            val anchor = items.firstOrNull { it.offset - vso <= focus.y && it.offset - vso + it.size >= focus.y }
+                ?: items.minByOrNull { kotlin.math.abs(it.offset - vso + it.size / 2 - focus.y) }
             zoom = next
-            targetX = ((hScroll.value + focus.x) * k - focus.x).roundToInt().coerceAtLeast(0)
-            listState.dispatchRawDelta((listState.firstVisibleItemScrollOffset + focus.y) * (k - 1f))
+            panX = clampX((panX + focus.x) * k - focus.x - pan.x)
+            if (anchor != null) {
+                val top = (anchor.offset - vso).toFloat()
+                val newTop = focus.y - (focus.y - top) * k + pan.y
+                listState.requestScrollToItem(anchor.index, (-(newTop + vso)).roundToInt())
+            }
         }
 
-        // Horizontal position can only be applied once the wider column has been laid out.
-        LaunchedEffect(zoom) {
-            withFrameNanos { }
-            hScroll.scrollTo(targetX.coerceAtMost(hScroll.maxValue))
-        }
         // Re-render at the new size only once the pinch has come to rest.
         LaunchedEffect(zoom) {
             delay(220)
@@ -106,33 +130,60 @@ fun DocumentView(
             Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    // Two fingers: zoom. Claimed before the list sees it, so pinching never scrolls.
+                    // Seen before the list: two fingers zoom and pan; one finger, when zoomed in,
+                    // also slides sideways while the list keeps handling the up-and-down part.
                     awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        fling[0]?.cancel()
+                        val tracker = VelocityTracker()
+                        tracker.addPosition(down.uptimeMillis, down.position)
+                        var pinched = false
                         do {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
                             if (event.changes.count { it.pressed } >= 2) {
-                                val factor = event.calculateZoom()
-                                if (factor != 1f) zoomBy(factor, event.calculateCentroid(useCurrent = true))
+                                pinched = true
+                                transform(event.calculateZoom(), event.calculateCentroid(useCurrent = true), event.calculatePan())
                                 event.changes.forEach { it.consume() }
+                            } else if (!pinched && zoom > 1.01f) {
+                                val c = event.changes.firstOrNull { it.id == down.id }
+                                if (c != null && c.pressed) {
+                                    panX = clampX(panX - (c.position.x - c.previousPosition.x))
+                                    tracker.addPosition(c.uptimeMillis, c.position)
+                                }
                             }
                         } while (event.changes.any { it.pressed })
+                        if (!pinched && zoom > 1.01f) {
+                            val vx = tracker.calculateVelocity().x
+                            if (kotlin.math.abs(vx) > 250f) {
+                                fling[0] = scope.launch {
+                                    AnimationState(initialValue = panX, initialVelocity = -vx)
+                                        .animateDecay(decay) {
+                                            val c = clampX(value)
+                                            panX = c
+                                            if (c != value) cancelAnimation()
+                                        }
+                                }
+                            }
+                        }
                     }
                 }
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onTap = { tap() },
-                        onDoubleTap = { p -> zoomBy(if (zoom > 1.05f) 1f / zoom else 2.5f / zoom, p) },
+                        onDoubleTap = { p -> transform(if (zoom > 1.05f) 1f / zoom else 2.5f / zoom, p, Offset.Zero) },
                     )
-                }
-                .horizontalScroll(hScroll, enabled = zoom > 1.01f),
+                },
         ) {
             val columnWidth = with(density) { (viewportPx * zoom).toDp() }
             LazyColumn(
                 state = listState,
                 contentPadding = contentPadding,
                 verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.width(columnWidth).fillMaxHeight(),
+                modifier = Modifier
+                    .wrapContentWidth(Alignment.Start, unbounded = true)
+                    .width(columnWidth)
+                    .fillMaxHeight()
+                    .offset { IntOffset(-panX.roundToInt(), 0) },
             ) {
                 items(pageCount, key = { it }) { i ->
                     val aspect = aspects.getOrNull(i)?.takeIf { it > 0f } ?: 0.707f
