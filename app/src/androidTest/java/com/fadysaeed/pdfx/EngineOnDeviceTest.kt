@@ -8,10 +8,7 @@ import android.net.Uri
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.artifex.mupdf.fitz.Document
@@ -127,7 +124,9 @@ class EngineOnDeviceTest {
         }
         compose.waitUntil(20_000) { (pages?.images?.size ?: 0) >= 2 }
         compose.waitForIdle()
-        save(compose.onRoot().captureToImage().asAndroidBitmap(), "viewer_real_pages.png")
+        Thread.sleep(400)
+        // A system screenshot: drawing the Compose view from the test thread races the UI thread.
+        save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "viewer_real_pages.png")
         session.close()
     }
 
