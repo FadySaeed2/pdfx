@@ -202,3 +202,13 @@ signatures, and a full pass on every screen for clarity.
   right above it in its column, with its labels and a title in the figure's own type, becomes one
   picture, and the caption and notes read as text under it. The handbook's five figures and the
   Cochrane paper's two, none elsewhere; a signature stamp over a figure is not part of it.
+- 2026-11-02 — Phase 5a: the pages screen (grid button in the viewer's top bar). Hold and drag to
+  move a page, tap to pick; turn, copy, take out, or save picked pages as a new file; add a blank
+  page, pages of another PDF, or photos (turned upright from the camera's own turn, PNG on white).
+  Nothing changes until Save, which rewrites the file the same safe way (old one kept as a version).
+  The engine (Arranger) rearranges with MuPDF and puts back what that drops (form, metadata,
+  attachments; fields only where their page stays); a page used twice and pages of other files are
+  copied whole, marks included (fields carry their own names; a signature keeps its look, not its
+  proof). Signed files offer to save the new order as a new file. Found: the bindings' addObject
+  returns the dictionary, not its reference, so copied marks use createObject + writeObject.
+  Shipped as 0.3.73. Next, 5b: merge files, split by ranges or size, crop margins.
