@@ -74,7 +74,7 @@ fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
     }
 }
 
-enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK, BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN, PEN, UNDO, REDO, REFLOW }
+enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK, BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN, PEN, UNDO, REDO, REFLOW, GRID, TURN_LEFT, TURN_RIGHT, EXTRACT }
 
 /** Line glyphs drawn in code, so every icon shares one stroke weight and the app ships no icon font. */
 @Composable
@@ -221,6 +221,26 @@ fun GlyphIcon(glyph: Glyph, color: Color, size: Dp = 22.dp) {
                 line(fx(0.52f), 0.3f, fx(0.3f), 0.3f)
                 line(fx(0.3f), 0.3f, fx(0.4f), 0.2f); line(fx(0.3f), 0.3f, fx(0.4f), 0.4f)
                 line(fx(0.52f), 0.72f, fx(0.36f), 0.72f)
+            }
+            Glyph.GRID -> {
+                // Four pages in two rows: the pages of a file side by side.
+                listOf(0.16f to 0.14f, 0.54f to 0.14f, 0.16f to 0.54f, 0.54f to 0.54f).forEach { (x, y) ->
+                    drawRoundRect(color, Offset(s * x, s * y), Size(s * 0.3f, s * 0.32f), androidx.compose.ui.geometry.CornerRadius(s * 0.04f), style = Stroke(width = w))
+                }
+            }
+            Glyph.TURN_LEFT, Glyph.TURN_RIGHT -> {
+                // A page with a curved arrow over its top corner, turning the way it points.
+                val right = glyph == Glyph.TURN_RIGHT
+                fun fx(x: Float) = if (right) 1f - x else x
+                drawRoundRect(color, Offset(s * (if (right) 0.18f else 0.42f), s * 0.42f), Size(s * 0.4f, s * 0.44f), androidx.compose.ui.geometry.CornerRadius(s * 0.04f), style = Stroke(width = w))
+                drawArc(color, if (right) 180f else 270f, 90f, false, Offset(s * (if (right) 0.36f else 0.2f), s * 0.16f), Size(s * 0.44f, s * 0.44f), style = Stroke(width = w, cap = StrokeCap.Round))
+                line(fx(0.2f), 0.38f, fx(0.14f), 0.3f); line(fx(0.2f), 0.38f, fx(0.28f), 0.32f)
+            }
+            Glyph.EXTRACT -> {
+                // A page with an arrow leaving it: these pages as a file of their own.
+                val p = Path().apply { moveTo(s * 0.56f, s * 0.24f); lineTo(s * 0.2f, s * 0.24f); lineTo(s * 0.2f, s * 0.86f); lineTo(s * 0.66f, s * 0.86f); lineTo(s * 0.66f, s * 0.62f) }
+                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+                line(0.44f, 0.5f, 0.84f, 0.14f); line(0.84f, 0.14f, 0.64f, 0.14f); line(0.84f, 0.14f, 0.84f, 0.32f)
             }
             Glyph.UP -> { line(0.24f, 0.62f, 0.5f, 0.36f); line(0.5f, 0.36f, 0.76f, 0.62f) }
             Glyph.DOWN -> { line(0.24f, 0.38f, 0.5f, 0.64f); line(0.5f, 0.64f, 0.76f, 0.38f) }

@@ -552,6 +552,8 @@ class Reader(
     var signaturesOpen by mutableStateOf(false)
     /** Set by the screen: saves the file, opens it again from the saved copy, then shows the message. */
     var saveNow: ((String) -> Unit)? = null
+    /** Opens the pages screen, to put the file's pages in order. Set by the viewer. */
+    var openPages: (() -> Unit)? = null
 
     val cert: com.fadysaeed.pdfx.data.SavedCert? get() = certs.firstOrNull { it.id == certId } ?: certs.firstOrNull()
 

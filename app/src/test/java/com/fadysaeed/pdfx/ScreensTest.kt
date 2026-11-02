@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import com.fadysaeed.pdfx.data.Doc
@@ -545,6 +546,80 @@ class ScreensTest {
     @Test fun tableWideGrid() = tableShot("38_table_wide_grid.png", "gpm", 65, PaperMode.NIGHT)
 
     @Test fun tableRuledGrid() = tableShot("39_table_ruled_grid.png", "grid", 1)
+
+    /** The pages screen with six pages: two picked, one moved, one turned, a blank page added. */
+    private fun pagesShot(file: String, setup: (com.fadysaeed.pdfx.ui.viewer.Organizer) -> Unit) {
+        compose.setContent {
+            PdfxTheme {
+                val scope = rememberCoroutineScope()
+                val o = remember {
+                    com.fadysaeed.pdfx.ui.viewer.Organizer(6, scope, null).also { o ->
+                        o.items.forEachIndexed { i, p -> o.thumbs[o.key(p)] = fakePage(i, 300) }
+                        setup(o)
+                        o.items.forEachIndexed { i, p -> if (o.key(p) !in o.thumbs) o.thumbs[o.key(p)] = fakePage(p.page, 300).let { b -> if (p.turn != 0) rotated(b, p.turn) else b } }
+                    }
+                }
+                com.fadysaeed.pdfx.ui.viewer.PagesScreen(o, "Clinical practice guideline", false, {}, {}, {}, {}, {}, {})
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/$file")
+    }
+
+    private fun rotated(b: ImageBitmap, deg: Int): ImageBitmap {
+        val src = b.asAndroidBitmap()
+        val m = android.graphics.Matrix().apply { postRotate(deg.toFloat()) }
+        return Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true).asImageBitmap()
+    }
+
+    @Test fun pagesGrid() = pagesShot("41_pages.png") { o -> o.record(); o.move(4, 1) }
+
+    @Test fun pagesPicked() = pagesShot("42_pages_picked.png") { o ->
+        o.toggle(o.items[2].id); o.toggle(o.items[3].id)
+        o.turn(90)
+        o.insert(listOf(com.fadysaeed.pdfx.engine.PageItem(com.fadysaeed.pdfx.engine.PageSource.BLANK)))
+        o.toggle(o.items[2].id); o.toggle(o.items[3].id)
+    }
+
+    @Test
+    fun pagesRules() {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
+        val o = com.fadysaeed.pdfx.ui.viewer.Organizer(5, scope, null)
+        assertTrue(!o.changed)
+        o.record(); o.move(0, 4)
+        assertEquals(listOf(1, 2, 3, 4, 0), o.items.map { it.page })
+        assertTrue(o.changed)
+        o.undo()
+        assertEquals(listOf(0, 1, 2, 3, 4), o.items.map { it.page })
+        assertTrue(!o.changed)
+        o.redo()
+        assertEquals(0, o.items.last().page)
+        o.undo()
+        // Copy page 2: the copy stands right after it, and is picked instead.
+        o.toggle(o.items[1].id)
+        o.duplicate()
+        assertEquals(listOf(0, 1, 1, 2, 3, 4), o.items.map { it.page })
+        assertEquals(listOf(o.items[2].id), o.picked.toList())
+        assertTrue(o.items[1].id != o.items[2].id)
+        // Turn the copy, then take it out.
+        o.turn(90)
+        assertEquals(90, o.items[2].turn)
+        o.turn(-180)
+        assertEquals(270, o.items[2].turn)
+        assertTrue(o.delete())
+        assertEquals(listOf(0, 1, 2, 3, 4), o.items.map { it.page })
+        // The last page always stays.
+        o.pickAll()
+        assertTrue(!o.delete())
+        assertEquals(5, o.items.size)
+        o.pickNone()
+        // New pages go after the last picked one, or at the end.
+        o.toggle(o.items[0].id)
+        o.insert(listOf(com.fadysaeed.pdfx.engine.PageItem(com.fadysaeed.pdfx.engine.PageSource.BLANK)))
+        assertEquals(com.fadysaeed.pdfx.engine.PageSource.BLANK, o.items[1].source)
+        o.pickNone()
+        o.insert(listOf(com.fadysaeed.pdfx.engine.PageItem(com.fadysaeed.pdfx.engine.PageSource.BLANK)))
+        assertEquals(com.fadysaeed.pdfx.engine.PageSource.BLANK, o.items.last().source)
+    }
 
     @Test fun figureWithCaption() = viewerShot("40_figure_caption.png") { r ->
         r.changeReflowFont(ReflowFont.SERIF)

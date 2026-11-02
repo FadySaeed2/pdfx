@@ -90,6 +90,67 @@ class Saver(private val library: Library) {
         }
     }
 
+    /**
+     * Puts a new file in place of the document, the same safe way as [save]: [make] writes the new
+     * file to the path it is given and returns how many pages it has. Used when the pages
+     * themselves change (order, turns, pages added or taken out), which rewrites the whole file.
+     */
+    suspend fun replace(doc: Doc?, uri: Uri, make: (File) -> Int): Result<Saved> = withContext(Dispatchers.IO) {
+        runCatching {
+            val f = doc?.path?.let(::File)
+            if (doc != null && f != null && f.isFile && f.canWrite() && !doc.inTrash) {
+                val tmp = File(f.parentFile, ".${f.name}.pdfx-saving")
+                tmp.delete()
+                try {
+                    check(tmp, make(tmp))
+                    library.versions.keep(doc.id, f)
+                    if (!tmp.renameTo(f)) {
+                        tmp.copyTo(f, overwrite = true)
+                        tmp.delete()
+                    }
+                } finally {
+                    if (tmp.exists()) tmp.delete()
+                }
+                MediaScannerConnection.scanFile(library.context, arrayOf(f.absolutePath), null, null)
+                Saved.InPlace(library.afterSave(doc, f))
+            } else {
+                library.homeDir.mkdirs()
+                val base = (doc?.name ?: library.describe(uri).first).let { if (it.endsWith(".pdf", true)) it else "$it.pdf" }
+                val out = Library.uniqueTarget(library.homeDir, base)
+                val tmp = File(library.homeDir, ".${out.name}.pdfx-saving")
+                try {
+                    check(tmp, make(tmp))
+                    if (!tmp.renameTo(out)) throw IOException("The copy could not be finished.")
+                } finally {
+                    if (tmp.exists()) tmp.delete()
+                }
+                MediaScannerConnection.scanFile(library.context, arrayOf(out.absolutePath), null, null)
+                Saved.AsCopy(library.adoptCopy(out, doc))
+            }
+        }
+    }
+
+    /**
+     * Writes a new file named [name] beside the document (or in Documents/PDFx when its folder
+     * cannot take it) and adds it to the library. [make] writes it and returns its page count.
+     */
+    suspend fun create(doc: Doc?, name: String, make: (File) -> Int): Result<Doc> = withContext(Dispatchers.IO) {
+        runCatching {
+            val here = doc?.path?.let(::File)?.parentFile?.takeIf { it.isDirectory && it.canWrite() && doc.inTrash.not() }
+            val dir = here ?: library.homeDir.also { it.mkdirs() }
+            val out = Library.uniqueTarget(dir, if (name.endsWith(".pdf", true)) name else "$name.pdf")
+            val tmp = File(dir, ".${out.name}.pdfx-saving")
+            try {
+                check(tmp, make(tmp))
+                if (!tmp.renameTo(out)) throw IOException("The new file could not be finished.")
+            } finally {
+                if (tmp.exists()) tmp.delete()
+            }
+            MediaScannerConnection.scanFile(library.context, arrayOf(out.absolutePath), null, null)
+            library.adoptCopy(out, null)
+        }
+    }
+
     /** Puts an earlier version back. The file as it is now becomes a version itself, so this can be undone too. */
     suspend fun restore(doc: Doc, version: Versions.Version): Result<Doc> = withContext(Dispatchers.IO) {
         runCatching {

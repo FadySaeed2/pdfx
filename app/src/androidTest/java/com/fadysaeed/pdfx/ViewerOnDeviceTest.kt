@@ -6,6 +6,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -69,5 +70,43 @@ class ViewerOnDeviceTest {
         compose.waitUntil(10_000) { centre!!() == before }
         compose.waitForIdle()
         assertEquals(null, reader!!.backTo)
+    }
+
+    @Test
+    fun pagesScreenTakesAPageOutAndSaves() {
+        val f = File(ctx.cacheDir, "Chapters-${System.nanoTime()}.pdf")
+        InstrumentationRegistry.getInstrumentation().context.assets.open("organise.pdf").use { i -> f.outputStream().use { i.copyTo(it) } }
+        var reader: Reader? = null
+        compose.setContent {
+            PdfxTheme { ViewerScreen(OpenRequest(Uri.fromFile(f), page = 0), onReader = { r, _ -> reader = r }) {} }
+        }
+        compose.waitUntil(15_000) { reader?.pages?.aspects?.size == 6 }
+        compose.waitForIdle()
+        val first = reader!!
+        compose.onNode(SemanticsMatcher("opens the pages") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull()?.startsWith("Pages:") == true }).performClick()
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("hold and drag to move", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodes(SemanticsMatcher("page 2 drawn") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull() == "Small picture of page 2" }).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(SemanticsMatcher("page 2") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull() == "Small picture of page 2" }).performClick()
+        compose.onNodeWithText("1 of 6 picked").assertExists()
+        compose.onNodeWithText("Take out").performClick()
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(20_000) { reader !== first && reader?.pages?.aspects?.size == 5 }
+        compose.waitForIdle()
+        save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "pages_saved.png")
+        val d = com.artifex.mupdf.fitz.Document.openDocument(f.absolutePath)
+        try {
+            assertEquals(5, d.countPages())
+            val p = d.loadPage(1)
+            val t = p.toStructuredText().asText()
+            p.destroy()
+            assertTrue("page 2 is now chapter 3: $t", t.contains("marker-3"))
+        } finally {
+            d.destroy()
+        }
+    }
+
+    private fun save(b: android.graphics.Bitmap, name: String) {
+        val dir = File(ctx.filesDir, "shots").apply { mkdirs() }
+        File(dir, name).outputStream().use { b.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }
 }

@@ -202,6 +202,12 @@ fun ViewerScreen(
     /** Carried across a save and reopen: the pages on screen, and the place being read (page, pixels into it). */
     val carry = remember(request) { arrayOfNulls<PageImages>(1) }
     var spot by remember(request) { mutableStateOf<Pair<Int, Int>?>(null) }
+    /** The pages screen: open, and asked for while the file was being saved first. */
+    var organizer by remember(request) { mutableStateOf<Organizer?>(null) }
+    var wantPages by remember(request) { mutableStateOf(false) }
+    var organizing by remember(request) { mutableStateOf(false) }
+    var leavePages by remember(request) { mutableStateOf(false) }
+    var signedPages by remember(request) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val fallbackName = remember(request) { library.describe(request.uri).first.removeSuffix(".pdf") }
     val name = doc?.let { LibraryModel.display(it) } ?: fallbackName
@@ -279,30 +285,110 @@ fun ViewerScreen(
                 }
             }
             /** Saves, then carries on from the saved file; [message] shows once it is open again. */
-            fun saveAndReopen(message: String?) {
-                save { saved ->
-                    doc = saved.doc
-                    scope.launch {
-                        val uri = if (saved is Saver.Saved.AsCopy) Uri.fromFile(java.io.File(saved.doc.path!!)) else request.uri
-                        val fresh = runCatching { PdfSession.open(context, uri) }.getOrNull() ?: return@launch
-                        if (fresh.needsPassword) password?.let { fresh.unlock(it) }
-                        if (fresh.needsPassword) { fresh.close(); return@launch }
-                        notice = when {
-                            message == null -> null
-                            saved is Saver.Saved.AsCopy -> "$message This file belongs to another app, so the signed copy is in Documents/PDFx."
-                            else -> message
-                        }
+            /** Carries on from a saved file; [keepPlace] when its pages are the same ones as before. */
+            fun reopen(saved: Saver.Saved, message: String?, copyNote: String, keepPlace: Boolean) {
+                doc = saved.doc
+                scope.launch {
+                    val uri = if (saved is Saver.Saved.AsCopy) Uri.fromFile(java.io.File(saved.doc.path!!)) else request.uri
+                    val fresh = runCatching { PdfSession.open(context, uri) }.getOrNull() ?: return@launch
+                    if (fresh.needsPassword) password?.let { fresh.unlock(it) }
+                    if (fresh.needsPassword) { fresh.close(); return@launch }
+                    notice = when {
+                        message == null -> null
+                        saved is Saver.Saved.AsCopy -> "$message $copyNote"
+                        else -> message
+                    }
+                    if (keepPlace) {
                         // Keep the place: the new copy starts with these pages and goes back to this spot.
                         carry[0] = pages
                         spot = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
-                        val old = session
-                        load = Load.Ready(fresh)
-                        old.close()
                     }
+                    val old = session
+                    load = Load.Ready(fresh)
+                    old.close()
+                }
+            }
+            fun saveAndReopen(message: String?) {
+                save { saved -> reopen(saved, message, "This file belongs to another app, so the signed copy is in Documents/PDFx.", keepPlace = true) }
+            }
+
+            // ---------------------------------------------------------------- pages screen
+            /** The file as a path to read its pages from: itself, or a copy when it lives inside another app. */
+            suspend fun basePath(): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                doc?.path?.takeIf { java.io.File(it).canRead() } ?: run {
+                    val f = java.io.File(context.cacheDir, "organise/base-${System.nanoTime()}.pdf")
+                    f.parentFile?.mkdirs()
+                    context.contentResolver.openInputStream(request.uri)?.use { i -> f.outputStream().use { i.copyTo(it) } } ?: error("The file could not be read.")
+                    f.absolutePath
+                }
+            }
+            fun openPages() {
+                // Changes not yet saved go into the file first, so the pages show them and keep them.
+                if (session.dirty) { wantPages = true; saveAndReopen(null); return }
+                organizer = Organizer(session.pageCount, scope, session)
+            }
+            fun closePages() {
+                organizer?.close(); organizer = null
+                leavePages = false
+                runCatching { java.io.File(context.cacheDir, "organise").deleteRecursively() }
+            }
+            /** "pages 3–5, 8": the picked pages where they now stand. */
+            fun pageList(o: Organizer): String {
+                val at = o.items.withIndex().filter { it.value.id in o.picked }.map { it.index + 1 }
+                val runs = ArrayList<String>()
+                var i = 0
+                while (i < at.size) {
+                    var j = i
+                    while (j + 1 < at.size && at[j + 1] == at[j] + 1) j++
+                    runs += if (j > i) "${at[i]}–${at[j]}" else "${at[i]}"
+                    i = j + 1
+                }
+                return (if (at.size == 1) "page " else "pages ") + runs.joinToString(", ")
+            }
+            fun savePages(asNewFile: Boolean) {
+                val o = organizer ?: return
+                if (organizing) return
+                val items = o.items.toList()
+                organizing = true
+                scope.launch {
+                    val base = runCatching { basePath() }.getOrElse { organizing = false; o.note = it.message ?: "The file could not be read."; return@launch }
+                    val make: (java.io.File) -> Int = { out -> com.fadysaeed.pdfx.engine.Arranger.write(base, items, out.absolutePath, password).pages }
+                    if (asNewFile) {
+                        val r = app.saver.create(doc, "$name (pages)", make)
+                        organizing = false
+                        r.fold({ made ->
+                            closePages()
+                            reader.problem = "Saved the new arrangement as ${made.name.removeSuffix(".pdf")}. The signed original is unchanged."
+                        }) { o.note = it.message ?: "The pages could not be saved." }
+                    } else {
+                        val r = app.saver.replace(doc, request.uri, make)
+                        organizing = false
+                        r.fold({ saved ->
+                            closePages()
+                            reopen(saved, "Pages saved.", "This file belongs to another app, so the new arrangement is in Documents/PDFx.", keepPlace = false)
+                        }) { o.note = it.message ?: "The pages could not be saved." }
+                    }
+                }
+            }
+            fun extractPages() {
+                val o = organizer ?: return
+                val items = o.pickedItems
+                if (items.isEmpty() || organizing) return
+                val label = pageList(o)
+                organizing = true
+                scope.launch {
+                    val base = runCatching { basePath() }.getOrElse { organizing = false; o.note = it.message ?: "The file could not be read."; return@launch }
+                    val r = app.saver.create(doc, "$name ($label)") { out -> com.fadysaeed.pdfx.engine.Arranger.write(base, items, out.absolutePath, password).pages }
+                    organizing = false
+                    r.fold({ made ->
+                        val where = made.path?.let { java.io.File(it).parentFile?.name } ?: "your files"
+                        o.note = "Saved ${label} as ${made.name.removeSuffix(".pdf")} in $where"
+                    }) { o.note = it.message ?: "The new file could not be made." }
                 }
             }
             SideEffect {
                 reader.saveNow = { msg -> saveAndReopen(msg) }
+                reader.openPages = ::openPages
                 onReader?.invoke(reader) { centreItem(listState) }
             }
             LaunchedEffect(reader) {
@@ -312,6 +398,7 @@ fun ViewerScreen(
                 if (listState.firstVisibleItemIndex != i || listState.firstVisibleItemScrollOffset != o) listState.scrollToItem(i, o)
             }
             LaunchedEffect(reader) { notice?.let { reader.problem = it; notice = null } }
+            LaunchedEffect(reader) { if (wantPages) { wantPages = false; openPages() } }
             // Going to the background: save, then carry on from the saved file when back.
             LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
                 if (session.dirty) saveAndReopen(null)
@@ -329,6 +416,62 @@ fun ViewerScreen(
                 onTiles = pages::wantTiles,
                 onBack = ::leave,
             )
+            organizer?.let { o ->
+                val pickPdf = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+                    if (uri == null) return@rememberLauncherForActivityResult
+                    scope.launch {
+                        val f = java.io.File(context.cacheDir, "organise/other-${System.nanoTime()}.pdf")
+                        val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            runCatching { f.parentFile?.mkdirs(); context.contentResolver.openInputStream(uri)?.use { i -> f.outputStream().use { i.copyTo(it) } } != null }.getOrDefault(false)
+                        }
+                        val n = if (ok) o.openOther(f.absolutePath) else null
+                        if (n == null || n <= 0) { o.note = "That file could not be opened: it may be locked with a password, or not a PDF."; return@launch }
+                        o.insert(List(n) { com.fadysaeed.pdfx.engine.PageItem(com.fadysaeed.pdfx.engine.PageSource.OTHER, it, f.absolutePath) })
+                        o.note = if (n == 1) "1 page added" else "$n pages added"
+                    }
+                }
+                val pickPhotos = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia(30)) { uris ->
+                    if (uris.isEmpty()) return@rememberLauncherForActivityResult
+                    scope.launch {
+                        val paths = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            uris.mapNotNull { u -> com.fadysaeed.pdfx.data.Pictures.prepare(context, u, java.io.File(context.cacheDir, "organise/photo-${System.nanoTime()}.jpg"))?.absolutePath }
+                        }
+                        if (paths.isEmpty()) { o.note = "Those photos could not be read."; return@launch }
+                        o.insert(paths.map { com.fadysaeed.pdfx.engine.PageItem(com.fadysaeed.pdfx.engine.PageSource.PICTURE, path = it) })
+                        o.note = if (paths.size == 1) "1 photo added" else "${paths.size} photos added"
+                    }
+                }
+                BackHandler { if (o.changed) leavePages = true else closePages() }
+                Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { } }) {
+                    PagesScreen(
+                        o, name, organizing,
+                        onClose = { if (o.changed) leavePages = true else closePages() },
+                        onSave = { if (reader.docSignatures.isNotEmpty()) signedPages = true else savePages(asNewFile = false) },
+                        onExtract = ::extractPages,
+                        onAddBlank = { scope.launch { val (w, h) = o.blankSize(); o.insert(listOf(com.fadysaeed.pdfx.engine.PageItem(com.fadysaeed.pdfx.engine.PageSource.BLANK, width = w, height = h))) } },
+                        onAddPdf = { pickPdf.launch(arrayOf("application/pdf")) },
+                        onAddPictures = { pickPhotos.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    )
+                }
+                if (leavePages) AlertDialog(
+                    onDismissRequest = { leavePages = false },
+                    containerColor = Ink.Field,
+                    shape = RectangleShape,
+                    title = { Text("Leave without saving?", style = Type.title) },
+                    text = { Text("The pages go back to how they are in the file.", style = Type.note) },
+                    confirmButton = { AmberButton("Keep working", { leavePages = false }) },
+                    dismissButton = { GhostButton("Leave", { closePages() }, minHeight = 52.dp) },
+                )
+                if (signedPages) AlertDialog(
+                    onDismissRequest = { signedPages = false },
+                    containerColor = Ink.Field,
+                    shape = RectangleShape,
+                    title = { Text("This file is signed", style = Type.title) },
+                    text = { Text("Changing its pages breaks its digital signatures: they would no longer check out. You can save the new arrangement as a new file and keep the signed one as it is.", style = Type.note) },
+                    confirmButton = { AmberButton("Save as a new file", { signedPages = false; savePages(asNewFile = true) }) },
+                    dismissButton = { GhostButton("Change it anyway", { signedPages = false; savePages(asNewFile = false) }, minHeight = 52.dp) },
+                )
+            }
             if (saving) {
                 Box(Modifier.fillMaxSize().background(Ink.Black.copy(alpha = 0.55f)).pointerInput(Unit) { detectTapGestures { } }, contentAlignment = Alignment.Center) {
                     Text("Saving…", style = Type.title, modifier = Modifier.background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(horizontal = 20.dp, vertical = 14.dp))
@@ -484,6 +627,7 @@ fun ViewerContent(
                         IconButton(Glyph.SEARCH, "Find in document", { reader.searchOpen = true }, color = Ink.Sand, size = 42.dp)
                         IconButton(Glyph.REFLOW, if (reader.reflow) "Show the pages" else "Reflow text for reading", ::toggleReflow, color = if (reader.reflow) Ink.Amber else Ink.Sand, size = 42.dp)
                         if (reader.canMark && !reader.reflow) IconButton(Glyph.PEN, "Mark up", reader::startMarking, color = Ink.Sand, size = 42.dp)
+                        if (reader.canMark && !reader.reflow) IconButton(Glyph.GRID, "Pages: put them in order, turn, add or take out", { reader.openPages?.invoke() }, color = Ink.Sand, size = 42.dp)
                         val marked = current in reader.bookmarks
                         IconButton(
                             if (marked) Glyph.BOOKMARK_FILLED else Glyph.BOOKMARK,
