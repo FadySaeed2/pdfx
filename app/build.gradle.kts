@@ -71,6 +71,8 @@ android {
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // BouncyCastle jars each carry the same OSGi manifest for Java 9+; Android needs none of them.
+        resources.excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
     }
 }
 
