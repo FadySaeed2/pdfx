@@ -58,3 +58,14 @@ i = b.find(b"/Producer")
 j = b.find(b"(", i) + 1
 b[j] = ord('X') if b[j] != ord('X') else ord('Y')
 open("tampered.pdf", "wb").write(b)
+
+# 4. A long file (12 pages) with an unsigned signature field on its last page.
+import pymupdf
+doc = pymupdf.open()
+for i in range(12):
+    p = doc.new_page(width=595, height=842)
+    p.insert_text((60, 90), f"Discharge summary, page {i+1} of 12", fontsize=18)
+    for k in range(30): p.insert_text((60, 130 + k*20), f"Line {k+1}: progress on the ward, observations and medication review.", fontsize=11)
+w = pymupdf.Widget(); w.field_type = pymupdf.PDF_WIDGET_TYPE_SIGNATURE; w.field_name = "consultant_signature"; w.rect = pymupdf.Rect(320, 760, 540, 820)
+doc[11].add_widget(w)
+doc.save("long-letter.pdf")

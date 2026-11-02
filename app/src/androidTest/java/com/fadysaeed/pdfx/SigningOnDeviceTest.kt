@@ -294,6 +294,38 @@ class SigningOnDeviceTest {
         }
     }
 
+    /**
+     * A long file, every page already drawn, signed in a new place on its first page: this is what
+     * crashed on the phone (the page being signed was freed while the others were read). The other
+     * signature field must stay open for its own signer.
+     */
+    @Test
+    fun signsALongFileWithEveryPageDrawn() = runBlocking<Unit> {
+        val store = Certificates(File(ctx.cacheDir, "certs-${System.nanoTime()}"))
+        val mine = store.create("Long Test", "", "", "secret9".toCharArray(), remember = false)
+        val f = asset("long-letter.pdf")
+        val s = PdfSession.open(ctx, android.net.Uri.fromFile(f))
+        assertEquals(12, s.pageCount)
+        for (p in 0 until s.pageCount) { s.render(p, 300); s.fields(p) }
+        s.render(0, 300)
+        assertTrue(s.signDigitally(0, Box(320f, 700f, 540f, 770f), null, P12Signer.open(store.open(mine.id).first, "secret9".toCharArray()), null, "Discharge", ""))
+        for (p in 0 until s.pageCount) s.render(p, 300)
+        val out = saveCopy(s, f, "signed-long.pdf")
+        s.close()
+        val again = PdfSession.openFile(out.absolutePath)
+        try {
+            val sig = again.signatures().single()
+            assertTrue("intact: ${sig.check.problem}", sig.check.intact)
+            assertEquals(0, sig.page)
+            val raw = out.readText(Charsets.ISO_8859_1)
+            assertTrue("the other signature field stays open", raw.contains("/Exclude") && raw.contains("consultant_signature"))
+            val open = again.fields(11).single { it.kind == FieldKind.SIGNATURE }
+            assertFalse("still signable", open.readOnly)
+        } finally {
+            again.close()
+        }
+    }
+
     private fun inked(b: Bitmap): Int {
         var n = 0
         for (y in 0 until b.height) for (x in 0 until b.width) {

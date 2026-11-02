@@ -574,6 +574,9 @@ class PdfSession private constructor(
      */
     suspend fun signDigitally(index: Int, box: Box?, fieldIndex: Int?, signer: P12Signer, imagePath: String?, reason: String?, location: String?): Boolean = onDoc {
         val d = pdf ?: return@onDoc false
+        // Read from the form itself, not page by page: loading every page here pushed the page
+        // being signed out of the cache and freed it, and MuPDF then crashed signing it.
+        val others = if (fieldIndex == null) runCatching { unsignedSignatureNames(d) }.getOrDefault(emptyList()) else emptyList()
         val page = pdfPage(index)
         val w = if (fieldIndex != null) {
             widgets(index).getOrNull(fieldIndex)?.takeIf { it.fieldType == PDFWidget.TYPE_SIGNATURE } ?: error("That signature field is gone.")
@@ -581,19 +584,20 @@ class PdfSession private constructor(
             val b = box ?: error("Choose where the signature goes.")
             page.createSignature().also { it.rect = Rect(b.x0, b.y0, b.x1, b.y1) }
         }
-        if (fieldIndex == null) {
+        if (fieldIndex == null && others.isNotEmpty()) {
             // A new signature locks the form, except other signature fields still to be signed.
-            val others = (0 until pageCount).flatMap { p -> widgets(p).toList() }
-                .filter { o -> runCatching { o.fieldType == PDFWidget.TYPE_SIGNATURE && !o.isSigned && o.name != w.name }.getOrDefault(false) }
-                .mapNotNull { runCatching { it.name }.getOrNull() }
-            if (others.isNotEmpty()) runCatching {
-                val lock = d.newDictionary()
-                lock.put("Action", d.newName("Exclude"))
-                val names = d.newArray()
-                others.forEach { names.push(d.newString(it)) }
-                lock.put("Fields", names)
-                w.getObject().put("Lock", lock)
-            }
+            runCatching {
+                d.beginOperation("Signature lock")
+                try {
+                    val lock = d.newDictionary()
+                    lock.put("Action", d.newName("Exclude"))
+                    val names = d.newArray()
+                    others.forEach { names.push(d.newString(it)) }
+                    lock.put("Fields", names)
+                    w.getObject().put("Lock", lock)
+                    d.endOperation()
+                } catch (t: Throwable) { runCatching { d.abandonOperation() }; throw t }
+            }.onFailure { android.util.Log.w("PdfxSigning", "lock left as MuPDF set it", it) }
         }
         if (fieldIndex != null) runCatching { mergeIntoField(d, w) }.onFailure { android.util.Log.w("PdfxSigning", "field left as it was", it) }
         val img = imagePath?.let { runCatching { com.artifex.mupdf.fitz.Image(it) }.getOrNull() }
@@ -615,6 +619,23 @@ class PdfSession private constructor(
         refreshFlags()
         dirty = true
         true
+    }
+
+    /** Full names of the signature fields not signed yet, read from the form's own tree. */
+    private fun unsignedSignatureNames(d: PDFDocument): List<String> {
+        val out = mutableListOf<String>()
+        fun walk(o: PDFObject, prefix: String, depth: Int) {
+            if (depth > 12 || o.isNull) return
+            val t = o.get("T").takeIf { !it.isNull }?.asString()
+            val name = listOfNotNull(prefix.ifEmpty { null }, t).joinToString(".")
+            val kids = o.get("Kids")
+            val fieldKids = !kids.isNull && (0 until kids.size()).any { !kids.get(it).get("T").isNull }
+            if (fieldKids) for (i in 0 until kids.size()) walk(kids.get(i), name, depth + 1)
+            else if (inherited(o, "FT")?.asName() == "Sig" && inherited(o, "V") == null && name.isNotEmpty()) out += name
+        }
+        val fields = d.trailer.get("Root").get("AcroForm").get("Fields")
+        if (!fields.isNull) for (i in 0 until fields.size()) walk(fields.get(i), "", 0)
+        return out
     }
 
     /**
