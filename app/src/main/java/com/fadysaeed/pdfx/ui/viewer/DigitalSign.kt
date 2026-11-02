@@ -91,8 +91,10 @@ internal fun DigitalSignHost(reader: Reader) {
     val app = context.applicationContext as? PdfxApp ?: return
     val scope = rememberCoroutineScope()
     LaunchedEffect(reader) {
-        val saved = withContext(Dispatchers.IO) { runCatching { app.certificates.list() }.getOrDefault(emptyList()) }
-        reader.certs.clear(); reader.certs.addAll(saved)
+        if (reader.certs.isEmpty()) {
+            val saved = withContext(Dispatchers.IO) { runCatching { app.certificates.list() }.getOrDefault(emptyList()) }
+            reader.certs.addAll(saved)
+        }
     }
     if (reader.certSheet) {
         var busy by remember { mutableStateOf(false) }
@@ -359,16 +361,16 @@ internal fun SignaturesBanner(signatures: List<DocSignature>, onOpen: () -> Unit
     val text = when {
         signatures.size > 1 -> when (worst) {
             SignState.VALID -> "${signatures.size} signatures · all valid"
-            SignState.UNVERIFIED -> "${signatures.size} signatures · unchanged, not all signers verified"
-            SignState.BROKEN -> "${signatures.size} signatures · one no longer holds"
+            SignState.UNVERIFIED -> "${signatures.size} signatures · not all signers verified"
+            SignState.BROKEN -> "${signatures.size} signatures · one was altered"
         }
         else -> {
             val s = signatures[0]
             val who = s.check.signer.name.ifBlank { "Signed" }
             when (worst) {
                 SignState.VALID -> "Signed by $who · valid"
-                SignState.UNVERIFIED -> "Signed by $who · unchanged, signer not verified"
-                SignState.BROKEN -> "Signed by $who · changed, no longer valid"
+                SignState.UNVERIFIED -> "Signed by $who · not verified"
+                SignState.BROKEN -> "Signed by $who · altered since"
             }
         }
     }

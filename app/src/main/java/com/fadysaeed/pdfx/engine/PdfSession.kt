@@ -605,6 +605,17 @@ class PdfSession private constructor(
         }
         // A field drawn by a separate widget keeps its value on the field itself, where other
         // readers look; MuPDF puts it on the widget, so the field gets it too.
+        // MuPDF shows the reason and place on the page only; readers also look for them in the signature.
+        runCatching {
+            val v = inherited(w.getObject(), "V") ?: return@runCatching
+            if (reason.isNullOrBlank() && location.isNullOrBlank()) return@runCatching
+            d.beginOperation("Signature details")
+            try {
+                if (!reason.isNullOrBlank()) v.put("Reason", d.newString(reason))
+                if (!location.isNullOrBlank()) v.put("Location", d.newString(location))
+                d.endOperation()
+            } catch (t: Throwable) { runCatching { d.abandonOperation() }; throw t }
+        }.onFailure { android.util.Log.w("PdfxSigning", "reason and place not written", it) }
         runCatching {
             val o = w.getObject()
             val parent = o.get("Parent")

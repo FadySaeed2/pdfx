@@ -143,6 +143,8 @@ class SigningOnDeviceTest {
         assertEquals("Dr Elsewhere", sigs[0].check.signer.name)
         assertTrue("first signature unchanged: ${sigs[0].check.problem}", sigs[0].check.intact)
         assertFalse(sigs[0].check.changedAfter)
+        assertEquals("Referral approved", sigs[0].reason)
+        assertEquals("Perth", sigs[0].location)
         assertTrue(s.hasSignatures())
         // Other readers look for the value on the field itself, not on the widget that draws it.
         val raw = first.readText(Charsets.ISO_8859_1)
