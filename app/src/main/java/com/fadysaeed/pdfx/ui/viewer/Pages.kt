@@ -169,8 +169,9 @@ class Organizer(val count: Int, private val scope: CoroutineScope, private val s
     suspend fun blankSize(): Pair<Float, Float> {
         val after = items.indexOfLast { it.id in picked }.let { if (it < 0) items.lastIndex else it }
         val near = items.getOrNull(after) ?: return 595f to 842f
-        if (near.source == PageSource.ORIGINAL && session != null) {
-            val s = runCatching { session.pageSize(near.page) }.getOrNull() ?: return 595f to 842f
+        val doc = session
+        if (near.source == PageSource.ORIGINAL && doc != null) {
+            val s = runCatching { doc.pageSize(near.page) }.getOrNull() ?: return 595f to 842f
             return s.width to s.height
         }
         return near.width to near.height
