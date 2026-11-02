@@ -183,3 +183,17 @@ signatures, and a full pass on every screen for clarity.
   ByteRange from the file. Split signature fields are merged with their widget before signing, and
   nothing is edited after signing. pyHanko validates the app's signed files (intact, whole file).
   Shipped as 0.3.59.
+- 2026-11-02 — Signing fixes (0.3.62, 0.3.65): a crash when signing a long file (the list of other
+  signature fields loaded every page and dropped the one being signed), and the jump to the top
+  after signing (the reopened file now keeps its place). Tapping the file's name glides to the
+  start, with "Back to page N" for six seconds.
+- 2026-11-02 — Reflow tables, second try, from Fady's real files (the GPM handbook, a BJPsych
+  Cochrane analysis). Our own finder (engine/Tables.kt, a faithful port of tools/tables.py) reads
+  the page's characters and drawn shapes and takes a table only when the page says so plainly: a
+  "Table N" caption with rules or bands, a row of short column labels between rules with a closing
+  rule, or a full ruled grid. Columns from white gutters and header labels, rows from spacing,
+  anchor columns and hanging indents; superscripts kept (^…^), Symbol-font arrows cut from the
+  page as pictures. Shown as cards (long cells), a grid with the first column held (short cells)
+  or a list, with caption, notes and "See this table as on the page". Anything that does not add
+  up is a picture of the table, never guessed text. Golden tables for both files (24 + 5, checked
+  by eye) pass on the JVM and on the emulator, with no table found on any other page.
