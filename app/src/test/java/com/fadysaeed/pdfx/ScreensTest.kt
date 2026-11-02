@@ -449,6 +449,86 @@ class ScreensTest {
         r.showMarking(Tool.SIGN, null)
     }
 
+    private val myCert = com.fadysaeed.pdfx.data.SavedCert("c1", "Dr Fady Saeed", "fady@example.org", "PDFx Clinic", "Dr Fady Saeed", 1_900_000_000_000L, selfSigned = true, remembered = true)
+    private val hospitalCert = com.fadysaeed.pdfx.data.SavedCert("c2", "Dr Fady Saeed", "", "East Metro Health", "Health Sector CA", 1_850_000_000_000L, selfSigned = false, remembered = false)
+    private fun sig(name: String, intact: Boolean, trusted: Boolean, self: Boolean, after: Boolean = false) = com.fadysaeed.pdfx.engine.DocSignature(
+        page = 0, box = com.fadysaeed.pdfx.engine.Box(60f, 380f, 280f, 450f), field = "doctor_signature", reason = "Referral approved", location = "Perth",
+        check = com.fadysaeed.pdfx.engine.SignatureCheck(
+            signer = com.fadysaeed.pdfx.engine.Person(name, "", "Elsewhere Clinic"), issuer = com.fadysaeed.pdfx.engine.Person(if (self) name else "Health Sector CA"),
+            time = 1_793_000_000_000L, intact = intact, trusted = trusted, selfSigned = self, changedAfter = after,
+            validFrom = 1_760_000_000_000L, validTo = 1_850_000_000_000L,
+        ),
+    )
+
+    @Test fun signDigitalTools() = viewerShot("29_sign_digital.png") { r ->
+        r.certs.addAll(listOf(myCert, hospitalCert))
+        r.pickDigital(true)
+        r.showMarking(Tool.SIGN, null)
+    }
+
+    @Test fun signaturesBanner() = viewerShot("30_signatures_banner.png") { r ->
+        r.docSignatures.addAll(listOf(sig("Dr Elsewhere", intact = true, trusted = false, self = false)))
+    }
+
+    @Test
+    fun certSheet() {
+        compose.setContent {
+            PdfxTheme {
+                androidx.compose.foundation.layout.Box(Modifier.background(Ink.Field).padding(24.dp)) {
+                    com.fadysaeed.pdfx.ui.viewer.CertSheetBody(
+                        making = true, onMaking = {}, picked = false, error = null, onChooseFile = {},
+                        password = "secret", onPassword = {}, again = "secre", onAgain = {}, remember = true, onRemember = {},
+                        name = "Dr Fady Saeed", onName = {}, email = "fady@example.org", onEmail = {}, org = "", onOrg = {},
+                    )
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/31_cert_sheet.png")
+    }
+
+    @Test
+    fun digitalSignDialog() {
+        compose.setContent {
+            PdfxTheme {
+                androidx.compose.foundation.layout.Box(Modifier.background(Ink.Field).padding(24.dp)) {
+                    com.fadysaeed.pdfx.ui.viewer.DigitalSignBody(
+                        cert = hospitalCert, hasPicture = true, error = "That password doesn't open Dr Fady Saeed's certificate.",
+                        password = "abc", onPassword = {}, remember = false, onRemember = {}, picture = true, onPicture = {},
+                        reason = "I approve this referral", onReason = {}, location = "", onLocation = {},
+                    )
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/32_digital_sign.png")
+    }
+
+    @Test
+    fun signaturesList() {
+        compose.setContent {
+            PdfxTheme {
+                androidx.compose.foundation.layout.Column(Modifier.background(Ink.Field).padding(24.dp)) {
+                    com.fadysaeed.pdfx.ui.viewer.SignaturesList(listOf(
+                        sig("Dr Hospital", intact = true, trusted = true, self = false, after = true),
+                        sig("Fady Test", intact = true, trusted = false, self = true),
+                        sig("Dr Altered", intact = false, trusted = false, self = false),
+                    ))
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/33_signatures_list.png")
+    }
+
+    @Test
+    fun signingRules() {
+        val t = com.fadysaeed.pdfx.engine.pdfDate("D:20261102103000+02'00'")
+        assertEquals(java.time.Instant.parse("2026-11-02T08:30:00Z").toEpochMilli(), t)
+        assertEquals(java.time.Instant.parse("2026-11-02T00:00:00Z").toEpochMilli(), com.fadysaeed.pdfx.engine.pdfDate("D:20261102"))
+        assertEquals(null, com.fadysaeed.pdfx.engine.pdfDate("rubbish"))
+        assertEquals(com.fadysaeed.pdfx.engine.SignState.VALID, sig("a", true, true, false).check.state)
+        assertEquals(com.fadysaeed.pdfx.engine.SignState.UNVERIFIED, sig("a", true, false, true).check.state)
+        assertEquals(com.fadysaeed.pdfx.engine.SignState.BROKEN, sig("a", false, true, false).check.state)
+    }
+
     @Test fun stampTools() = viewerShot("27_stamp_tools.png") { r -> r.showMarking(Tool.STAMP, null) }
 
     @Test

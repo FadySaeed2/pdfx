@@ -73,7 +73,12 @@ class Saver(private val library: Library) {
                 val out = Library.uniqueTarget(library.homeDir, base)
                 val tmp = File(library.homeDir, ".${out.name}.pdfx-saving")
                 try {
-                    session.writeTo(tmp.absolutePath, incremental = false)
+                    // Start from the original's own bytes and append the changes when possible, so a
+                    // signed file keeps its signatures valid; otherwise write the whole file afresh.
+                    val appended = session.canSaveIncrementally && runCatching {
+                        library.context.contentResolver.openInputStream(uri)?.use { i -> tmp.outputStream().use { i.copyTo(it) } } != null
+                    }.getOrDefault(false)
+                    session.writeTo(tmp.absolutePath, incremental = appended)
                     check(tmp, session.pageCount)
                     if (!tmp.renameTo(out)) throw IOException("The copy could not be finished.")
                 } finally {

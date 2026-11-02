@@ -9,6 +9,9 @@ import com.artifex.mupdf.fitz.Link
 import com.artifex.mupdf.fitz.Outline
 import com.artifex.mupdf.fitz.PDFAnnotation
 import com.artifex.mupdf.fitz.PDFDocument
+import com.artifex.mupdf.fitz.PDFObject
+import com.artifex.mupdf.fitz.PKCS7Signer
+import com.artifex.mupdf.fitz.PKCS7Verifier
 import com.artifex.mupdf.fitz.PDFPage
 import com.artifex.mupdf.fitz.PDFWidget
 import com.artifex.mupdf.fitz.Page
@@ -490,6 +493,119 @@ class PdfSession private constructor(
         }
         a.update()
     }
+
+    // ------------------------------------------------------------------ digital signatures
+
+    /** Signers in use for signatures not yet written; MuPDF calls them when the file is saved. */
+    private val pendingSigners = mutableListOf<PKCS7Signer>()
+
+    private fun inherited(o: PDFObject?, key: String): PDFObject? {
+        var cur = o
+        repeat(12) {
+            val c = cur ?: return null
+            if (c.isNull) return null
+            val v = c.get(key)
+            if (v != null && !v.isNull) return v
+            cur = c.get("Parent")
+        }
+        return null
+    }
+
+    /** Every signed signature in the file, checked: unchanged, who signed, and whether the phone trusts them. */
+    suspend fun signatures(): List<DocSignature> = onDoc {
+        val d = pdf ?: return@onDoc emptyList()
+        val any = runCatching { d.trailer.get("Root").get("AcroForm").get("Fields").size() > 0 }.getOrDefault(false)
+        if (!any) return@onDoc emptyList()
+        val verifier = CmsVerifier()
+        try {
+            (0 until pageCount).flatMap { p ->
+                widgets(p).filter { w -> runCatching { w.fieldType == PDFWidget.TYPE_SIGNATURE && w.isSigned }.getOrDefault(false) }
+                    .map { w -> describeSignature(p, w, verifier) }
+            }
+        } finally {
+            runCatching { verifier.destroy() }
+        }
+    }
+
+    private fun describeSignature(page: Int, w: PDFWidget, verifier: CmsVerifier): DocSignature {
+        val v = inherited(w.getObject(), "V")
+        val contents = runCatching { v?.get("Contents")?.asByteString() }.getOrNull() ?: ByteArray(0)
+        val (cert, time, chain) = readSignature(contents)
+        val digest = runCatching { w.checkDigest(verifier) }.getOrDefault(PKCS7Verifier.PKCS7VerifierUnknown)
+        val trust = runCatching { w.checkCertificate(verifier) }.getOrDefault(PKCS7Verifier.PKCS7VerifierUnknown)
+        val changed = runCatching { w.incrementalChangeSinceSigning() }.getOrDefault(false)
+        val locked = runCatching { w.validateSignature() != 0 }.getOrDefault(false)
+        val signer = cert?.let { personOf(it) } ?: Person(runCatching { v?.get("Name")?.asString() }.getOrNull() ?: "")
+        val issuer = cert?.let { runCatching { personOf(org.bouncycastle.cert.X509CertificateHolder(it.encoded).issuer) }.getOrNull() } ?: Person("")
+        val check = SignatureCheck(
+            signer = signer, issuer = issuer,
+            time = time ?: pdfDate(runCatching { v?.get("M")?.asString() }.getOrNull()),
+            intact = digest == PKCS7Verifier.PKCS7VerifierOK,
+            trusted = trust == PKCS7Verifier.PKCS7VerifierOK,
+            selfSigned = trust == PKCS7Verifier.PKCS7VerifierSelfSigned || (cert != null && isSelfSigned(cert)),
+            changedAfter = changed,
+            validFrom = cert?.notBefore?.time ?: 0, validTo = cert?.notAfter?.time ?: 0,
+            lockedChanged = locked,
+        )
+        val r = w.bounds
+        return DocSignature(
+            page = page, box = Box(r.x0, r.y0, r.x1, r.y1),
+            field = runCatching { w.name ?: "" }.getOrDefault(""),
+            reason = runCatching { v?.get("Reason")?.asString() }.getOrNull() ?: "",
+            location = runCatching { v?.get("Location")?.asString() }.getOrNull() ?: "",
+            check = check,
+        )
+    }
+
+    /**
+     * Signs the file digitally: in the empty signature field [fieldIndex] on the page, or in a new
+     * one at [box]. The signature shows [imagePath] (a signature picture) or the signer's name, with
+     * the date. It is completed when the file is saved, so save straight after.
+     */
+    suspend fun signDigitally(index: Int, box: Box?, fieldIndex: Int?, signer: PKCS7Signer, imagePath: String?, reason: String?, location: String?): Boolean = onDoc {
+        val d = pdf ?: return@onDoc false
+        val page = pdfPage(index)
+        val w = if (fieldIndex != null) {
+            widgets(index).getOrNull(fieldIndex)?.takeIf { it.fieldType == PDFWidget.TYPE_SIGNATURE } ?: error("That signature field is gone.")
+        } else {
+            val b = box ?: error("Choose where the signature goes.")
+            page.createSignature().also { it.rect = Rect(b.x0, b.y0, b.x1, b.y1) }
+        }
+        if (fieldIndex == null) {
+            // A new signature locks the form, except other signature fields still to be signed.
+            val others = (0 until pageCount).flatMap { p -> widgets(p).toList() }
+                .filter { o -> runCatching { o.fieldType == PDFWidget.TYPE_SIGNATURE && !o.isSigned && o.name != w.name }.getOrDefault(false) }
+                .mapNotNull { runCatching { it.name }.getOrNull() }
+            if (others.isNotEmpty()) runCatching {
+                val lock = d.newDictionary()
+                lock.put("Action", d.newName("Exclude"))
+                val names = d.newArray()
+                others.forEach { names.push(d.newString(it)) }
+                lock.put("Fields", names)
+                w.getObject().put("Lock", lock)
+            }
+        }
+        val img = imagePath?.let { runCatching { com.artifex.mupdf.fitz.Image(it) }.getOrNull() }
+        try {
+            var flags = PDFWidget.SIGNATURE_SHOW_LABELS or PDFWidget.SIGNATURE_SHOW_TEXT_NAME or PDFWidget.SIGNATURE_SHOW_DATE
+            if (img == null) flags = flags or PDFWidget.SIGNATURE_SHOW_GRAPHIC_NAME
+            w.sign(signer, flags, img, reason?.ifBlank { null }, location?.ifBlank { null })
+        } finally {
+            runCatching { img?.destroy() }
+        }
+        pendingSigners += signer
+        runCatching { page.update() }
+        textCache.remove(index)?.let { runCatching { it.destroy() } }
+        charsCache.remove(index)
+        rawCache.clear()
+        bandCache.remove(index)
+        refreshFlags()
+        dirty = true
+        true
+    }
+
+    /** True when the file holds digital signatures: changes must then be appended, never rewritten. */
+    suspend fun hasSignatures(): Boolean = onDoc { runCatching { (pdf?.countSignatures() ?: 0) > 0 }.getOrDefault(false) }
 
     // ------------------------------------------------------------------ marks (annotations)
 

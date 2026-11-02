@@ -52,6 +52,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -191,6 +192,8 @@ fun ViewerScreen(request: OpenRequest, onClose: (message: String?) -> Unit) {
     var password by remember(request) { mutableStateOf<String?>(null) }
     var saving by remember(request) { mutableStateOf(false) }
     var saveError by remember(request) { mutableStateOf<String?>(null) }
+    /** A message to show once the file is open again after saving. */
+    var notice by remember(request) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val fallbackName = remember(request) { library.describe(request.uri).first.removeSuffix(".pdf") }
     val name = doc?.let { LibraryModel.display(it) } ?: fallbackName
@@ -267,20 +270,31 @@ fun ViewerScreen(request: OpenRequest, onClose: (message: String?) -> Unit) {
                     onClose(if (saved is Saver.Saved.AsCopy) "${saved.doc.name.removeSuffix(".pdf")} belongs to another app, so your changes are saved as a copy in Documents/PDFx." else null)
                 }
             }
-            // Going to the background: save, then carry on from the saved file when back.
-            LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
-                if (session.dirty) save { saved ->
+            /** Saves, then carries on from the saved file; [message] shows once it is open again. */
+            fun saveAndReopen(message: String?) {
+                save { saved ->
                     doc = saved.doc
                     scope.launch {
                         val uri = if (saved is Saver.Saved.AsCopy) Uri.fromFile(java.io.File(saved.doc.path!!)) else request.uri
                         val fresh = runCatching { PdfSession.open(context, uri) }.getOrNull() ?: return@launch
                         if (fresh.needsPassword) password?.let { fresh.unlock(it) }
                         if (fresh.needsPassword) { fresh.close(); return@launch }
+                        notice = when {
+                            message == null -> null
+                            saved is Saver.Saved.AsCopy -> "$message This file belongs to another app, so the signed copy is in Documents/PDFx."
+                            else -> message
+                        }
                         val old = session
                         load = Load.Ready(fresh)
                         old.close()
                     }
                 }
+            }
+            SideEffect { reader.saveNow = { msg -> saveAndReopen(msg) } }
+            LaunchedEffect(reader) { notice?.let { reader.problem = it; notice = null } }
+            // Going to the background: save, then carry on from the saved file when back.
+            LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+                if (session.dirty) saveAndReopen(null)
             }
 
             ViewerContent(
@@ -378,7 +392,7 @@ fun ViewerContent(
         listState.scrollBy(item.offset + item.size * frac - line)
     }
 
-    LaunchedEffect(flash) { if (flash != null) { delay(1600); flash = null } }
+    LaunchedEffect(flash) { val f = flash; if (f != null) { delay(1600L + (f.length - 20).coerceAtLeast(0) * 45L); flash = null } }
     LaunchedEffect(reader.undoNotice) { if (reader.undoNotice != null) { delay(4500); reader.undoNotice = null } }
     LaunchedEffect(reader.problem) { reader.problem?.let { flash = it; reader.problem = null } }
 
@@ -449,6 +463,10 @@ fun ViewerContent(
                     }
                 }
                 Hairline(color = Ink.Rule)
+                if (!reader.marking && !reader.searchOpen && reader.docSignatures.isNotEmpty()) {
+                    SignaturesBanner(reader.docSignatures) { reader.signaturesOpen = true }
+                    Hairline(color = Ink.Rule)
+                }
             }
         }
 
@@ -540,6 +558,7 @@ fun ViewerContent(
     reader.colorPick?.let { pick -> ColorPickerDialog(pick.initial, reader.customColors, onDismiss = { reader.colorPick = null }) { c -> reader.applyPicked(pick, c) } }
     reader.zoomFigure?.let { (pg, bx) -> FigureViewer(reader, pg, bx) { reader.zoomFigure = null } }
     reader.signPad?.let { initials -> SignPadHost(reader, initials) }
+    DigitalSignHost(reader)
     if (reader.stampAsk) StampAsk(onDismiss = { reader.stampAsk = false }) { k -> reader.stampAsk = false; reader.addStamp(k) }
     reader.deleteSignAsk?.let { sg ->
         AlertDialog(
@@ -1130,12 +1149,19 @@ private fun MarkupBar(reader: Reader) {
                     InkScope.entries.forEach { sc -> Chip(sc.label, { reader.pickInkScope(sc) }, selected = reader.inkScope == sc) }
                 }
                 Tool.SIGN -> {
-                    reader.signs.forEach { sg -> SignThumb(sg, reader.signId == sg.id || (reader.signId == null && sg == reader.signs.first()), { reader.pickSign(sg.id) }, { reader.deleteSignAsk = sg }) }
-                    Chip("New signature", { reader.signPad = false })
-                    Chip("New initials", { reader.signPad = true })
+                    Chip("Digital", { reader.pickDigital(!reader.digital) }, selected = reader.digital)
                     Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
-                    Chip("With date", { reader.pickSignWithDate(!reader.signWithDate) }, selected = reader.signWithDate)
-                    if (reader.signWithDate) DateStyleChips(reader)
+                    if (reader.digital) {
+                        reader.certs.forEach { c -> CertChip(c, reader.cert == c, { reader.pickCert(c.id) }, { reader.deleteCertAsk = c }) }
+                        Chip("Add certificate", { reader.certSheet = true })
+                    } else {
+                        reader.signs.forEach { sg -> SignThumb(sg, reader.signId == sg.id || (reader.signId == null && sg == reader.signs.first()), { reader.pickSign(sg.id) }, { reader.deleteSignAsk = sg }) }
+                        Chip("New signature", { reader.signPad = false })
+                        Chip("New initials", { reader.signPad = true })
+                        Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
+                        Chip("With date", { reader.pickSignWithDate(!reader.signWithDate) }, selected = reader.signWithDate)
+                        if (reader.signWithDate) DateStyleChips(reader)
+                    }
                 }
                 Tool.STAMP -> {
                     (StandardStamps + reader.customStamps).forEach { k -> StampChip(k, reader.stamp == k) { reader.pickStamp(k) } }
@@ -1182,7 +1208,12 @@ private fun MarkupBar(reader: Reader) {
             Tool.SHAPE -> "Drag from one corner to the other."
             Tool.TEXT -> "Tap where the text should start."
             Tool.SELECT -> "Draw a loop round marks to pick them all, or tap one."
-            Tool.SIGN -> if (reader.signs.isEmpty()) "Make a signature first: New signature." else "Tap where the signature goes. Then drag or resize it."
+            Tool.SIGN -> when {
+                reader.digital && reader.certs.isEmpty() -> "Add a certificate first: Add certificate."
+                reader.digital -> "Tap where the digital signature goes. The file is saved as soon as it is signed."
+                reader.signs.isEmpty() -> "Make a signature first: New signature."
+                else -> "Tap where the signature goes. Then drag or resize it."
+            }
             Tool.STAMP -> "Tap where the stamp goes."
             Tool.TICK -> "Tap to put a tick."
             Tool.CROSS -> "Tap to put a cross."
@@ -1907,6 +1938,8 @@ internal fun FieldPanel(f: com.fadysaeed.pdfx.engine.Field, reader: Reader) {
             com.fadysaeed.pdfx.engine.FieldKind.SIGNATURE -> Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 reader.signs.forEach { sg -> SignThumb(sg, false, { reader.pickSign(sg.id); reader.placeSign(f.page, 0f, 0f, into = f.box); reader.closeField() }, {}) }
                 Chip("New signature", { reader.signField = f; reader.signPad = false; reader.closeField() })
+                Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
+                Chip("Sign digitally", { reader.closeField(); reader.askDigital(f.page, 0f, 0f, into = f.box, field = f.index) })
             }
             else -> Unit
         }

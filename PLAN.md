@@ -168,3 +168,12 @@ signatures, and a full pass on every screen for clarity.
   today's date, stamps (standard and custom, with date), tick / cross / dot / date tools. Tested on
   a real AcroForm fixture made with PyMuPDF (same MuPDF 1.28.5). Next: 4b digital signing with a
   PKCS#12 certificate and verifying signatures.
+- 2026-11-02 — Phase 4b: digital signing. Certificates (.p12/.pfx imported, or made here: RSA 2048,
+  self-signed) kept in app files, passwords optionally sealed with an Android Keystore AES key.
+  Signing goes through MuPDF (PDFWidget.sign) with our own BouncyCastle CMS signer (detached,
+  SHA-256, chain included) into an empty signature field or a new one, showing the saved signature
+  picture or the name, then saves at once (appended, so earlier signatures keep holding) and
+  reopens. Opening a signed file shows a banner and details: unchanged / altered, vouched for by a
+  phone-trusted authority / own certificate / unknown authority, changed after signing. Tests use
+  real-world fixtures (tools/make-signing-fixtures.py): a letter with a signature field, a doctor
+  certificate from an unknown CA, a pyHanko-signed file and the same file with one letter changed.

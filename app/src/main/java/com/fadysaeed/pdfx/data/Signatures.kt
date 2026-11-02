@@ -89,7 +89,21 @@ class Signatures(private val dir: File) {
     fun delete(id: String) {
         val all = list()
         all.firstOrNull { it.id == id }?.image?.let { File(it).delete() }
+        File(pictures, "$id-drawn.png").delete()
         write(all.filter { it.id != id })
+    }
+
+    /**
+     * A picture of a saved signature, for a digital signature's look: photographed ones are already
+     * pictures; drawn ones are drawn in their own colour on a clear background.
+     */
+    fun pictureOf(sg: SavedSign): String? {
+        sg.image?.let { return it }
+        val out = File(pictures, "${sg.id}-drawn.png")
+        if (out.exists()) return out.absolutePath
+        val bmp = drawn(sg, 900) ?: return null
+        FileOutputStream(out).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        return out.absolutePath
     }
 
     private fun decode(context: Context, uri: Uri): Bitmap? = runCatching {
@@ -101,6 +115,27 @@ class Signatures(private val dir: File) {
     }.getOrNull()
 
     companion object {
+        /** Draws a signature's strokes [width] pixels wide, with a little room around them. */
+        fun drawn(sg: SavedSign, width: Int): Bitmap? {
+            if (sg.strokes.isEmpty()) return null
+            val pad = width * 0.04f
+            val inner = width - pad * 2
+            val h = (inner / sg.aspect.coerceAtLeast(0.2f) + pad * 2).toInt().coerceIn(8, width * 3)
+            val bmp = Bitmap.createBitmap(width, h, Bitmap.Config.ARGB_8888)
+            val c = android.graphics.Canvas(bmp)
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = sg.color; style = android.graphics.Paint.Style.STROKE
+                strokeWidth = width / 90f; strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
+            }
+            sg.strokes.forEach { st ->
+                val path = android.graphics.Path()
+                st.forEachIndexed { i, (x, y) -> val px = pad + x * inner; val py = pad + y * inner; if (i == 0) path.moveTo(px, py) else path.lineTo(px, py) }
+                if (st.size == 1) path.lineTo(pad + st[0].first * inner + 0.5f, pad + st[0].second * inner)
+                c.drawPath(path, paint)
+            }
+            return bmp
+        }
+
         /**
          * Keeps the ink and drops the paper: a threshold between the two (Otsu's method on
          * brightness), ink turned dark with its softness kept at the edges, then a tight crop.

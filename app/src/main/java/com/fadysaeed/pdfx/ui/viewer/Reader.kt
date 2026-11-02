@@ -117,6 +117,9 @@ internal fun styleFromPref(p: String?): BoxStyle? = runCatching {
 data class ColorPick(val initial: Int, val mark: Mark? = null, val forWords: Boolean = false)
 
 /** Scroll the document so a point on a page sits a third of the way down the screen. */
+/** A digital signature about to be placed: on a page, in a box, or in the page's signature field [field]. */
+data class DigitalAsk(val page: Int, val box: Box, val field: Int? = null)
+
 data class Jump(val page: Int, val y: Float = 0f, val x: Float? = null, val id: Long = System.nanoTime())
 
 /**
@@ -378,7 +381,7 @@ class Reader(
     private var formOrder: List<com.fadysaeed.pdfx.engine.Field>? = null
 
     init {
-        if (session != null) checkForm()
+        if (session != null) { checkForm(); loadSignatures() }
     }
 
     fun checkForm() {
@@ -400,6 +403,8 @@ class Reader(
     /** A tap on a field: boxes tick at once, everything else opens in the panel. */
     fun tapField(f: com.fadysaeed.pdfx.engine.Field) {
         clearSelection(); selectedMark = null
+        // A signed signature field shows who signed instead.
+        if (f.kind == com.fadysaeed.pdfx.engine.FieldKind.SIGNATURE && docSignatures.any { it.page == f.page && it.field == f.name }) { signaturesOpen = true; return }
         when (f.kind) {
             com.fadysaeed.pdfx.engine.FieldKind.CHECKBOX, com.fadysaeed.pdfx.engine.FieldKind.RADIO -> { toggleField(f); editingField = f }
             else -> editingField = f
@@ -494,8 +499,63 @@ class Reader(
     /** Today's date in the chosen style. */
     fun today(): String = com.fadysaeed.pdfx.engine.formatToday(com.fadysaeed.pdfx.engine.DatePatterns[dateStyle])
 
+    // ------------------------------------------------------------ digital signatures
+
+    /** Signing certificates on this phone, and the one in hand. */
+    val certs = mutableStateListOf<com.fadysaeed.pdfx.data.SavedCert>()
+    var certId by mutableStateOf(prefs?.getString("cert_id", null))
+        private set
+    /** Signing places a digital signature (with a certificate) instead of a drawn one. */
+    var digital by mutableStateOf(prefs?.getBoolean("digital", false) ?: false)
+        private set
+    /** The sheet for adding a certificate is open. */
+    var certSheet by mutableStateOf(false)
+    /** A certificate waiting for "delete?" to be answered. */
+    var deleteCertAsk by mutableStateOf<com.fadysaeed.pdfx.data.SavedCert?>(null)
+    /** Where a digital signature is about to go: the sign dialog is open for it. */
+    var digitalAsk by mutableStateOf<DigitalAsk?>(null)
+    /** Signatures in the open file, checked, and whether their details are showing. */
+    val docSignatures = mutableStateListOf<com.fadysaeed.pdfx.engine.DocSignature>()
+    var signaturesOpen by mutableStateOf(false)
+    /** Set by the screen: saves the file, opens it again from the saved copy, then shows the message. */
+    var saveNow: ((String) -> Unit)? = null
+
+    val cert: com.fadysaeed.pdfx.data.SavedCert? get() = certs.firstOrNull { it.id == certId } ?: certs.firstOrNull()
+
+    fun pickCert(id: String?) { certId = id; prefs?.edit()?.putString("cert_id", id)?.apply() }
+    fun pickDigital(on: Boolean) { digital = on; prefs?.edit()?.putBoolean("digital", on)?.apply() }
+
+    fun loadSignatures() {
+        val s = session ?: return
+        scope.launch {
+            val found = runCatching { s.signatures() }.getOrDefault(emptyList())
+            docSignatures.clear(); docSignatures.addAll(found)
+        }
+    }
+
+    /** Opens the sign dialog for a digital signature at (x, y), or in a signature field's [into]. */
+    fun askDigital(page: Int, x: Float, y: Float, into: Box? = null, field: Int? = null) {
+        if (cert == null) { certSheet = true; return }
+        val box = into ?: Box(x - 95f, y - 32f, x + 95f, y + 32f)
+        digitalAsk = DigitalAsk(page, box, field)
+    }
+
+    /** Signs with a certificate where [ask] says, then saves straight away so the signature is complete. */
+    suspend fun signDigitally(ask: DigitalAsk, signer: com.artifex.mupdf.fitz.PKCS7Signer, image: String?, reason: String, location: String): Boolean {
+        val s = session ?: return false
+        val ok = s.signDigitally(ask.page, if (ask.field == null) ask.box else null, ask.field, signer, image, reason, location)
+        if (ok) {
+            digitalAsk = null
+            dirty = true
+            pages?.invalidate(listOf(ask.page))
+            saveNow?.invoke("Signed digitally and saved.")
+        }
+        return ok
+    }
+
     /** Puts the chosen signature on [page], centred on (x, y) or filling [into]; today's date under it when asked. */
     fun placeSign(page: Int, x: Float, y: Float, into: Box? = null) {
+        if (digital && into == null) { askDigital(page, x, y); return }
         val sg = signs.firstOrNull { it.id == signId } ?: signs.firstOrNull() ?: run { signPad = false; return }
         val s = session ?: return
         val w0 = if (sg.initials) 60f else 150f
