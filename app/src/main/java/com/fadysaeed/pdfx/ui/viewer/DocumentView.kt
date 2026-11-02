@@ -346,7 +346,7 @@ fun DocumentView(
                                     down.consume()
                                     // The S Pen's side button held down turns the pen into an eraser.
                                     val button = currentEvent.buttons.let { it.isPrimaryPressed || it.isSecondaryPressed }
-                                    reader.begin(i, down.position.x / k, down.position.y / k, eraser = down.type == PointerType.Eraser || (pen && button), reach = 20.dp.toPx() / k)
+                                    reader.begin(i, down.position.x / k, down.position.y / k, eraser = down.type == PointerType.Eraser || (pen && button), reach = 20.dp.toPx() / k, slop = viewConfiguration.touchSlop / k)
                                     var done = false
                                     while (!done) {
                                         val e = awaitPointerEvent(PointerEventPass.Initial)
@@ -410,6 +410,7 @@ fun DocumentView(
                                         val field = reader.fieldAt(i, p.x / k, p.y / k, 6.dp.toPx() / k)
                                         when {
                                             reader.selection != null -> reader.clearSelection()
+                                            mark == null && reader.tapWithTool(i, p.x / k, p.y / k) -> Unit
                                             field != null -> { reader.tapField(field); haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
                                             reader.editingField != null -> reader.closeField()
                                             reader.selectedMark != null -> reader.selectMark(null)

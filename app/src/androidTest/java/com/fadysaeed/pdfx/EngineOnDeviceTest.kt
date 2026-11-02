@@ -9,6 +9,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.geometry.Offset
+import com.fadysaeed.pdfx.ui.viewer.Tool
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.artifex.mupdf.fitz.Document
@@ -207,6 +211,59 @@ class EngineOnDeviceTest {
         } finally {
             again.close()
         }
+    }
+
+    /** Real taps on the screen, as a finger makes them, place a signature, a stamp, a tick and a date. */
+    @Test
+    fun tapsPlaceSignaturesAndStamps() {
+        val file = samplePdf(2)
+        val session = runBlocking { PdfSession.open(ctx, Uri.fromFile(file)) }
+        var reader: Reader? = null
+        compose.setContent {
+            PdfxTheme {
+                val scope = rememberCoroutineScope()
+                val r = remember { Reader(session, session.pageCount, scope).also { reader = it } }
+                val pages = r.pages!!
+                ViewerContent(
+                    name = "Sign check", reader = r, aspects = pages.aspects, widths = pages.widths,
+                    image = { pages.images[it] }, tile = { pages.tiles[it] }, listState = rememberLazyListState(),
+                    onWant = pages::want, onTiles = pages::wantTiles, onBack = {},
+                )
+            }
+        }
+        compose.waitUntil(20_000) { (reader?.pages?.images?.size ?: 0) >= 1 }
+        val r = reader!!
+        val sign = com.fadysaeed.pdfx.data.SavedSign("t", false, listOf(listOf(0f to 0.2f, 0.3f to 0f, 0.6f to 0.3f, 1f to 0.1f)), 3f, Color.BLACK)
+        fun countOn(kind: MarkKind) = runBlocking { session.marks(0) }.count { it.kind == kind }
+        fun tapAt(fx: Float, fy: Float) {
+            compose.onNodeWithContentDescription("Page 1").performTouchInput {
+                // A finger never lands perfectly still: a small wobble, as on a real phone.
+                down(Offset(width * fx, height * fy)); moveBy(Offset(4f, 3f)); up()
+            }
+            compose.waitForIdle()
+        }
+        val steps = listOf(
+            Triple(Tool.SIGN, MarkKind.INK, 0.5f to 0.55f),
+            Triple(Tool.STAMP, MarkKind.TEXT, 0.5f to 0.7f),
+            Triple(Tool.TICK, MarkKind.INK, 0.2f to 0.8f),
+            Triple(Tool.DATE, MarkKind.TEXT, 0.6f to 0.85f),
+        )
+        compose.runOnIdle { r.setSignsForTest(listOf(sign)); r.pickSign("t"); r.startMarking() }
+        for ((tool, kind, at) in steps) {
+            val before = countOn(kind)
+            compose.runOnIdle { r.selectMark(null); r.pickTool(tool) }
+            tapAt(at.first, at.second)
+            compose.waitUntil(10_000) { countOn(kind) > before }
+        }
+        // And with the pen in use, a finger tap still places things.
+        compose.runOnIdle { r.stylusSeen = true; r.selectMark(null); r.pickTool(Tool.CROSS) }
+        val inkBefore = countOn(MarkKind.INK)
+        tapAt(0.3f, 0.9f)
+        compose.waitUntil(10_000) { countOn(MarkKind.INK) > inkBefore }
+        compose.waitForIdle()
+        Thread.sleep(400)
+        save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "viewer_signed.png")
+        session.close()
     }
 
     /** A page with a ruled table of drugs, doses and checks, between two paragraphs. */

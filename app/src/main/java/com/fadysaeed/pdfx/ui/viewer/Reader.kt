@@ -549,6 +549,24 @@ class Reader(
         change(page, after = { selectLast(page, MarkKind.TEXT) }) { s.addTextBox(page, x - w / 2, y - 18f, text, st) }
     }
 
+    /**
+     * A tap in marking mode that did not draw (a finger once the pen is in use): tools that put
+     * something where you tap still do it.
+     */
+    fun tapWithTool(page: Int, x: Float, y: Float): Boolean {
+        if (!marking) return false
+        when (tool) {
+            Tool.SIGN -> placeSign(page, x, y)
+            Tool.STAMP -> placeStamp(page, x, y)
+            Tool.TICK, Tool.CROSS, Tool.DOT -> placeMark(page, x, y, tool)
+            Tool.DATE -> placeDate(page, x, y)
+            Tool.TEXT -> boxEdit = BoxEdit(page, x, y)
+            Tool.NOTE -> textAsk = TextAsk(page, x, y, note = true)
+            else -> return false
+        }
+        return true
+    }
+
     /** Picks the newest mark of a kind on a page: the one just placed, ready to move. */
     private suspend fun selectLast(page: Int, kind: MarkKind) {
         val s = session ?: return
@@ -752,8 +770,12 @@ class Reader(
     // A gesture on a page in marking mode: begin, extend with points, finish.
     private var gestureReach = 6f
 
-    fun begin(page: Int, x: Float, y: Float, eraser: Boolean, reach: Float = 6f) {
+    /** How far a finger may wander and still count as a tap, in page points. */
+    private var gestureSlop = 3f
+
+    fun begin(page: Int, x: Float, y: Float, eraser: Boolean, reach: Float = 6f, slop: Float = 3f) {
         gestureReach = reach
+        gestureSlop = slop
         gesturePage = page
         gestureTool = if (eraser) Tool.ERASER else tool
         anchor = x to y
@@ -773,7 +795,7 @@ class Reader(
         val page = gesturePage
         val a = anchor ?: return
         val last = points.lastOrNull() ?: return
-        if (!moved && kotlin.math.hypot(last.first - a.first, last.second - a.second) > 3f) moved = true
+        if (!moved && kotlin.math.hypot(last.first - a.first, last.second - a.second) > gestureSlop) moved = true
         when (gestureTool) {
             Tool.PEN, Tool.MARKER -> (draft as? Draft.Ink)?.let { draft = it.copy(points = it.points + points) }
             Tool.SHAPE -> draft = Draft.Shape(page, shape, a.first, a.second, last.first, last.second, penColor, PenWidths[widthStep])
