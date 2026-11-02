@@ -238,7 +238,7 @@ class EngineOnDeviceTest {
         fun tapAt(fx: Float, fy: Float) {
             compose.onNodeWithContentDescription("Page 1").performTouchInput {
                 // A finger never lands perfectly still: a small wobble, as on a real phone.
-                down(Offset(width * fx, height * fy)); moveBy(Offset(4f, 3f)); up()
+                down(Offset(width * fx, height * fy)); moveBy(Offset(9f, 7f)); up()
             }
             compose.waitForIdle()
         }
