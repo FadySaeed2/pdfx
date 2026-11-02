@@ -112,6 +112,8 @@ data class Para(
     val marker: String = "",
     /** For a table: what the page says it holds, read row by row (the text is then empty). */
     val table: TableModel? = null,
+    /** For a figure the page draws: its caption and notes, shown under the picture of [figure]. */
+    val figureInfo: FigureModel? = null,
 )
 
 /** A stroke of ink: points in PDF points. */
@@ -368,20 +370,24 @@ class PdfSession private constructor(
         val st = page(index).toStructuredText("preserve-images")
         try { st.walk(w) } finally { runCatching { st.destroy() } }
         val near = ((index - 2)..(index + 2)).filter { it != index && it in 0 until pageCount }.flatMap { bandLines(it) }.toSet()
-        buildParas(placeTables(w.blocks, tablesOn(index)), sizeNow(index).height, near)
+        val parts = partsOn(index)
+        buildParas(placeTables(w.blocks, parts.tables, parts.figures), sizeNow(index).height, near)
     }
 
-    private val tableCache = object : LinkedHashMap<Int, List<TableModel>>(8, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, List<TableModel>>) = size > 24
+    private val tableCache = object : LinkedHashMap<Int, PageParts>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, PageParts>) = size > 24
     }
 
-    /** The tables on a page, found strictly (see [TableFinder]); none when anything goes wrong. */
-    private fun tablesOn(index: Int): List<TableModel> = tableCache.getOrPut(index) {
-        runCatching { TableFinder.find(index, tableInput(page(index))) }.getOrDefault(emptyList())
+    /** The tables and figures on a page, found strictly (see [TableFinder]); none when anything goes wrong. */
+    private fun partsOn(index: Int): PageParts = tableCache.getOrPut(index) {
+        runCatching { TableFinder.read(index, tableInput(page(index))) }.getOrDefault(PageParts(emptyList(), emptyList()))
     }
 
     /** The tables on a page, as the reflowed view shows them. */
-    suspend fun tables(index: Int): List<TableModel> = onDoc { tablesOn(index) }
+    suspend fun tables(index: Int): List<TableModel> = onDoc { partsOn(index).tables }
+
+    /** The figures on a page, as the reflowed view shows them. */
+    suspend fun figures(index: Int): List<FigureModel> = onDoc { partsOn(index).figures }
 
     /**
      * A page's text as paragraphs, for reading reflowed to the screen width: bold and italic kept,

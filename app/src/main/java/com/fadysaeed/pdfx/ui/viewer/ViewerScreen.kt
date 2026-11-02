@@ -995,6 +995,7 @@ private fun ReflowView(reader: Reader, listState: LazyListState, padding: Paddin
                                                 if (img != null) androidx.compose.foundation.Image(img, null, Modifier.fillMaxSize(), colorFilter = filter)
                                             }
                                         }
+                                        p.figureInfo?.let { FigureCaption(it, size, ink, latin, query, mark) }
                                         return@forEach
                                     }
                                     val table = p.table

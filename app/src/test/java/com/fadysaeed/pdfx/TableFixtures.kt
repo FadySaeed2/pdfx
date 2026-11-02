@@ -37,6 +37,7 @@ object TableFixtures {
                 when (kind) {
                     "fill" -> ss += TShape("fill", x0, y0, x1, y1, s.getDouble(5).toFloat(), s.getDouble(6).toFloat(), s.getDouble(7).toFloat())
                     "line" -> ss += TShape("line", x0, y0, x1, y1)
+                    "path" -> ss += TShape("path", x0, y0, x1, y1)
                     "box" -> {
                         // A stroked rectangle reaches the app as four lines.
                         ss += TShape("line", x0, y0, x1, y0); ss += TShape("line", x0, y1, x1, y1)
@@ -54,4 +55,8 @@ object TableFixtures {
     /** The tables found on one page of a fixture file ("gpm", "coch", "grid"). */
     fun tables(file: String, page: Int): List<TableModel> =
         TableFinder.find(page, cache.getOrPut(file) { pages("$file-pages.json.gz") }.getValue(page))
+
+    /** The figures found on one page of a fixture file. */
+    fun figures(file: String, page: Int): List<com.fadysaeed.pdfx.engine.FigureModel> =
+        TableFinder.read(page, cache.getOrPut(file) { pages("$file-pages.json.gz") }.getValue(page)).figures
 }

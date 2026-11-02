@@ -546,6 +546,13 @@ class ScreensTest {
 
     @Test fun tableRuledGrid() = tableShot("39_table_ruled_grid.png", "grid", 1)
 
+    @Test fun figureWithCaption() = viewerShot("40_figure_caption.png") { r ->
+        r.changeReflowFont(ReflowFont.SERIF)
+        val f = TableFixtures.figures("gpm", 62).first()
+        r.chrome = false
+        r.showReflowForTest(true, mapOf(0 to listOf(Para("A drawn figure, its caption and its notes.", 2), Para("", figure = f.box, figureInfo = f))))
+    }
+
     @Test fun stampTools() = viewerShot("27_stamp_tools.png") { r -> r.showMarking(Tool.STAMP, null) }
 
     @Test

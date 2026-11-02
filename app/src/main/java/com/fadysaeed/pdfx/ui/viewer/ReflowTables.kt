@@ -271,3 +271,24 @@ private fun TableList(t: TableModel, size: Int, ink: Color, cell: Cell) {
         }
     }
 }
+
+/** A figure's caption and notes under its picture, read as text: the label bold, the notes smaller. */
+@Composable
+internal fun FigureCaption(f: com.fadysaeed.pdfx.engine.FigureModel, size: Int, ink: Color, latin: FontFamily, query: String?, mark: Color) {
+    fun style(text: String, fs: Float, alpha: Float) = TextStyle(
+        fontFamily = if (isArabic(tablePlain(text))) PlexArabic else latin,
+        fontSize = fs.sp, lineHeight = (fs * 1.38f).sp, color = ink.copy(alpha = alpha), textDirection = TextDirection.Content,
+    )
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy((size * 0.3f).dp)) {
+        if (f.caption.isNotBlank()) {
+            // The label ("FIGURE 2–1.", "Fig. 1") in bold, the title after it plain.
+            val label = Regex("^\\S+\\s+${Regex.escape(f.number)}[.:]?").find(f.caption)?.value ?: ""
+            val text = buildAnnotatedString {
+                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(tableText(label, query, mark)) }
+                append(tableText(f.caption.substring(label.length), query, mark))
+            }
+            Text(text, style = style(f.caption, size * 0.86f, 0.9f))
+        }
+        f.notes.forEach { n -> Text(tableText(n, query, mark), style = style(n, size * 0.76f, 0.7f)) }
+    }
+}

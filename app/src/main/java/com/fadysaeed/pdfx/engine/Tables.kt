@@ -53,6 +53,18 @@ class TableModel(
     var extent: Box = box
 }
 
+/**
+ * A figure the page draws (a diagram of boxes and arrows, a chart) with its caption: [box] is the
+ * drawing with its labels, to show as a picture; the caption and notes are read as text.
+ */
+class FigureModel(val page: Int, val caption: String, val number: String, val box: Box, val notes: List<String>) {
+    /** The drawing, its caption and its notes: the text there belongs to the figure. */
+    var extent: Box = box
+}
+
+/** What a page holds besides running text: its tables and its figures. */
+class PageParts(val tables: List<TableModel>, val figures: List<FigureModel>)
+
 private class Word(
     var x0: Float, var y0: Float, var x1: Float, var y1: Float,
     var text: String, var size: Float, var bold: Boolean, var mini: Boolean,
@@ -67,6 +79,7 @@ private class VLine(val words: MutableList<Word>, val base: Float) // one visual
 private val SPACES = setOf(32, 160, 0x2002, 0x2003, 0x2009, 0x200A)
 private val SYMFONT = Regex("symbol|dingbat|wingding|webding|zapf|\\bpi\\b|universal", RegexOption.IGNORE_CASE)
 private val CAP = Regex("^(TABLE|Table)$")
+private val FIGCAP = Regex("^(FIGURE|Figure|Fig\\.?)$")
 private val NUM = Regex("^[A-Z]?\\d+([.–\\-]\\d+)?[.:]?$")
 private val CONT = Regex("^\\(?[Cc]ontinued\\)?\\.?$")
 private const val BULLETS = "•▪●◦■□–"
@@ -90,7 +103,10 @@ fun goldenText(s: String): String = GLYPH_INDEX.replace(s, "⟧")
 
 object TableFinder {
 
-    fun find(page: Int, input: PageInput): List<TableModel> = Finder(page, input).run()
+    fun find(page: Int, input: PageInput): List<TableModel> = Finder(page, input).run().tables
+
+    /** The page's tables and figures, read together from the same characters and shapes. */
+    fun read(page: Int, input: PageInput): PageParts = Finder(page, input).run()
 
     private class Finder(val pno: Int, val input: PageInput) {
         val glyphs = ArrayList<Box>()
@@ -98,6 +114,8 @@ object TableFinder {
         /** Every thin straight piece, short ones too: at, from, to. Cell borders are often drawn cell by cell. */
         val hsegs = ArrayList<FloatArray>()
         val vsegs = ArrayList<FloatArray>()
+        /** The outline of everything drawn: x0, y0, x1, y1. */
+        val paths = ArrayList<FloatArray>()
         /** Where the notes read last end, for the table being made. */
         var notesEnd = 0f
 
@@ -107,7 +125,7 @@ object TableFinder {
             return t
         }
 
-        fun run(): List<TableModel> {
+        fun run(): PageParts {
             val words = wordsOf()
             val (rules, bands) = shapesOf()
             val upright = words.filter { it.upright }
@@ -126,7 +144,8 @@ object TableFinder {
             }
             tables += gridTables(upright, bands, body, tables.map { it.box })
             tables += ruledTables(upright, rules, body, tables.map { it.box })
-            return tables
+            val figures = runCatching { figures(upright, lines, bands, body, tables.map { it.extent }) }.getOrDefault(emptyList())
+            return PageParts(tables, figures)
         }
 
         // ---------------------------------------------------------------- words and shapes
@@ -182,6 +201,7 @@ object TableFinder {
             for (s in input.shapes) {
                 val w = s.x1 - s.x0
                 val h = s.y1 - s.y0
+                paths += floatArrayOf(s.x0, s.y0, s.x1, s.y1)
                 if (s.kind == "fill") {
                     val lum = 0.3f * s.r + 0.59f * s.g + 0.11f * s.b
                     if (lum < 0.97f && h <= 3 && w >= max(2f, 2 * h)) hsegs += floatArrayOf((s.y0 + s.y1) / 2, s.x0, s.x1)
@@ -298,6 +318,126 @@ object TableFinder {
                     out += withNotes(t); used += t.box
                     break
                 }
+            }
+            return out
+        }
+
+        // ---------------------------------------------------------------- figures
+
+        /**
+         * Figures drawn on the page, each found from its caption ("FIGURE 2–1.", "Fig. 1" in bold or
+         * on a band): the drawing is what is drawn right above the caption, in its column, every
+         * piece within a short reach of the next, with the labels set among it and a title just
+         * over it in the figure's own type. Nothing drawn there means no figure is taken.
+         */
+        fun figures(words: List<Word>, lines: List<List<Word>>, bands: List<Band>, body: Float, taken: List<Box>): List<FigureModel> {
+            val out = ArrayList<FigureModel>()
+            val pw = input.w
+            val ph = input.h
+            val fontCount = HashMap<String, Int>()
+            for (w in words) if (!w.mini && abs(w.size - body) < 0.6f) fontCount[w.font] = (fontCount[w.font] ?: 0) + w.text.length
+            val bodyFont = fontCount.maxByOrNull { it.value }?.key ?: ""
+            fun inTaken(p: FloatArray) = taken.any { t -> p[0] >= t.x0 - 2 && p[2] <= t.x1 + 2 && p[1] >= t.y0 - 2 && p[3] <= t.y1 + 2 }
+            val drawn = paths.filter { p ->
+                val w = p[2] - p[0]
+                val h = p[3] - p[1]
+                !(w > 0.8f * pw && h > 0.8f * ph) && (w > 0.5f || h > 0.5f) && p[1] > ph * 0.04f && p[3] < ph * 0.97f && !inTaken(p)
+            }
+            for ((li, line) in lines.withIndex()) {
+                if (line.size < 2 || !FIGCAP.matches(line[0].text) || !NUM.matches(line[1].text)) continue
+                val num = line[1].text
+                val capy0 = line.minOf { it.y0 }
+                val capy1 = line.maxOf { it.y1 }
+                val band = bands.firstOrNull { b -> b.y0 < capy1 && b.y1 > capy0 && b.x0 <= line[0].x0 + 2 && b.x1 >= line[1].x1 - 2 }
+                if (!(line[0].bold || num.endsWith(".") || num.endsWith(":") || band != null)) continue
+                if (out.any { f -> capy0 >= f.extent.y0 - 1 && capy0 <= f.extent.y1 + 1 && line[0].x0 >= f.extent.x0 - 2 && line[0].x0 <= f.extent.x1 }) continue
+                if (taken.any { t -> capy0 >= t.y0 && capy0 <= t.y1 && line[0].x0 >= t.x0 - 2 && line[0].x0 <= t.x1 }) continue
+                // The caption: the rest of its line (the page may give it as pieces), then the lines
+                // right under it in the same type and column.
+                val size = line.filter { !it.mini }.maxOfOrNull { it.size } ?: body
+                val row = ArrayList<Word>()
+                for (w in words.filter { w -> abs(w.base - line[0].base) < 0.4f * size && w.x0 >= line[0].x0 - 1 }.sortedBy { it.x0 }) {
+                    if (row.isNotEmpty() && w.x0 - row.last().x1 > 2.5f * size) break
+                    row += w
+                }
+                val cap = arrayListOf<List<Word>>(row)
+                val colX0 = min(line[0].x0, band?.x0 ?: line[0].x0)
+                val colX1 = max(row.maxOf { it.x1 }, band?.x1 ?: 0f)
+                var bottom = max(capy1, row.maxOf { it.y1 })
+                val under = words.filter { it.y0 > bottom - 1 && it.x0 >= colX0 - 3 && it.x1 <= colX1 + 3 }
+                for (l in baselineLines(under, size).sortedBy { it.base }) {
+                    val top = l.words.minOf { it.y0 }
+                    val ns = l.words.filter { !it.mini }.maxOfOrNull { it.size } ?: 0f
+                    if (top - bottom > 0.8f * size || abs(ns - size) > 0.6f || l.words[0].x0 > colX0 + 40) break
+                    cap += l.words
+                    bottom = max(bottom, l.words.maxOf { it.y1 })
+                }
+                if (band != null) bottom = max(bottom, band.y1)
+                // The drawing: pieces above the caption, each within reach of the ones below it.
+                val cand = drawn.filter { p -> p[3] <= capy0 + 1.5f && p[2] > colX0 - 30 && p[0] < colX1 + 30 }.sortedByDescending { it[3] }
+                val used = BooleanArray(cand.size)
+                var edge = capy0
+                var x0 = Float.MAX_VALUE
+                var x1 = -Float.MAX_VALUE
+                var count = 0
+                var grew = true
+                while (grew) {
+                    grew = false
+                    for ((k, p) in cand.withIndex()) {
+                        if (used[k] || p[3] < edge - (if (count == 0) 50f else 40f)) continue
+                        used[k] = true; count++; grew = true
+                        edge = min(edge, p[1]); x0 = min(x0, p[0]); x1 = max(x1, p[2])
+                    }
+                }
+                if (count == 0 || capy0 - edge < 24f) continue
+                // Labels among the drawing, and a title just over it set in the figure's own type.
+                fun inColumn(l: List<Word>) = l.maxOf { it.x1 } > min(colX0, x0) - 6 && l.minOf { it.x0 } < max(colX1, x1) + 6
+                for (l in lines) {
+                    val cy = (l.minOf { it.y0 } + l.maxOf { it.y1 }) / 2
+                    if (cy > edge && cy < capy0 && inColumn(l)) { x0 = min(x0, l.minOf { it.x0 }); x1 = max(x1, l.maxOf { it.x1 }) }
+                }
+                for (round in 0 until 3) {
+                    val over = lines.filter { l ->
+                        val gap = edge - l.maxOf { it.y1 }
+                        gap > -2f && gap < 16f && l.minOf { it.y0 } < edge && inColumn(l) && l.none { it.font == bodyFont && !it.mini }
+                    }
+                    if (over.isEmpty()) break
+                    edge = over.minOf { l -> l.minOf { it.y0 } }
+                    for (l in over) { x0 = min(x0, l.minOf { it.x0 }); x1 = max(x1, l.maxOf { it.x1 }) }
+                }
+                // Within the column the caption sets, or the drawing's own width when it is wider.
+                val left = min(line[0].x0, cand.filterIndexed { k, _ -> used[k] }.minOf { it[0] }) - 6f
+                val right = max(cap.maxOf { l -> l.maxOf { it.x1 } }, cand.filterIndexed { k, _ -> used[k] }.maxOf { it[2] }) + 6f
+                x0 = max(x0, left); x1 = min(x1, right)
+                val caption = cap.joinToString(" ") { textOf(it) }.replace(Regex("(?<=[a-z])- (?=[a-z])"), "-")
+                // Notes: the lines right under the caption in smaller type (key, source, levels…).
+                val after = words.filter { min(colX0, x0) - 3 < it.x0 && it.x1 < max(colX1, x1) + 3 && it.y0 > bottom - 0.5f }
+                val kept = ArrayList<VLine>()
+                var last = bottom
+                for (l in baselineLines(after, size)) {
+                    val top = l.words.minOf { it.y0 }
+                    val ms = l.words.filter { !it.mini }.maxOfOrNull { it.size } ?: break
+                    val small = ms < size - 0.3f || (ms <= size + 0.2f && ms < 0.92f * body)
+                    if (!small || top - last > 14) break
+                    kept += l; last = l.words.maxOf { it.y1 }
+                }
+                notesEnd = last
+                // A key, a numbered list or a sentence each keep their own lines.
+                val notes = ArrayList<String>()
+                var prevX = 0f
+                for (l in kept) {
+                    val t = textOf(l.words)
+                    val w0 = l.words[0]
+                    val prev = notes.lastOrNull()
+                    val starts = prev == null || NOTE_START.matches(w0.text) || NUMBERED.matches(w0.text) || prev.endsWith(":") || w0.x0 < prevX - 2f || (w0.x0 > prevX + 2f && prev.endsWith("."))
+                    if (starts) notes += t
+                    else notes[notes.size - 1] = if (prev!!.endsWith("-") && !prev.endsWith(" -")) prev + t else "$prev $t"
+                    prevX = w0.x0
+                }
+                val box = Box(max(0f, x0 - 2f), max(0f, edge - 2f), min(pw, x1 + 2f), min(capy0, band?.y0 ?: capy0) - 1f)
+                val f = FigureModel(pno, caption, num.trimEnd('.', ':'), box, notes)
+                f.extent = Box(min(box.x0, colX0), box.y0, max(box.x1, colX1), max(bottom, notesEnd))
+                out += f
             }
             return out
         }

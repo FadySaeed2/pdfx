@@ -47,6 +47,8 @@ class TablesOnDeviceTest {
     private fun check(file: String) = runBlocking {
         val want = JSONArray(assets.open("$file-tables.json").bufferedReader().readText())
         val byPage = (0 until want.length()).map { want.getJSONObject(it) }.groupBy { it.getInt("page") }
+        val figs = JSONArray(assets.open("$file-figures.json").bufferedReader().readText())
+        val figsByPage = (0 until figs.length()).map { figs.getJSONObject(it) }.groupBy { it.getInt("page") }
         val pdf = copy("$file.pdf")
         val report = StringBuilder()
         val problems = ArrayList<String>()
@@ -70,6 +72,26 @@ class TablesOnDeviceTest {
                             problems += "page ${page + 1} $key"
                             report.append("  $key differs\n    want $a\n    got  $b\n")
                         }
+                    }
+                }
+                // Figures: the drawing's outline, the caption and the notes.
+                val figures = s.figures(page)
+                val wantFigs = figsByPage[page].orEmpty()
+                if (figures.isNotEmpty() || wantFigs.isNotEmpty()) report.append("page ${page + 1}: ${figures.size} figures (${figures.joinToString { it.number + " " + it.box }}), ${wantFigs.size} expected\n")
+                if (figures.size != wantFigs.size) problems += "page ${page + 1}: found ${figures.size} figures, expected ${wantFigs.size}"
+                else for ((w, f) in wantFigs.zip(figures)) {
+                    val b = w.getJSONArray("box")
+                    val got = listOf(f.box.x0, f.box.y0, f.box.x1, f.box.y1)
+                    if ((0 until 4).any { kotlin.math.abs(b.getDouble(it) - got[it]) > 3.0 }) { problems += "page ${page + 1} figure box"; report.append("  box want $b got $got\n") }
+                    if (w.getString("caption") != f.caption) { problems += "page ${page + 1} figure caption"; report.append("  caption want ${w.getString("caption")}\n          got  ${f.caption}\n") }
+                    if (w.getJSONArray("notes").toString() != JSONArray(f.notes).toString()) { problems += "page ${page + 1} figure notes"; report.append("  notes want ${w.getJSONArray("notes")}\n        got  ${JSONArray(f.notes)}\n") }
+                }
+                if (wantFigs.isNotEmpty()) {
+                    val paras = s.paragraphs(page)
+                    if (paras.count { it.figureInfo != null } != figures.size) problems += "page ${page + 1}: reflow shows ${paras.count { it.figureInfo != null }} figures"
+                    for (f in figures) {
+                        val probe = f.caption.split(' ').drop(2).take(4).joinToString(" ")
+                        if (probe.length >= 10 && paras.any { it.figureInfo == null && it.text.contains(probe) }) problems += "page ${page + 1}: figure caption '$probe' also left as loose text"
                     }
                 }
                 // In reflowed text the table stands in for its words.

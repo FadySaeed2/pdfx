@@ -21,50 +21,53 @@ internal class RawLine(
 )
 
 /** A block of a page: lines of text, a picture, or a table found on the page. */
-internal class RawBlock(val box: Box, val lines: List<RawLine>, val image: Boolean, val table: TableModel? = null)
+internal class RawBlock(val box: Box, val lines: List<RawLine>, val image: Boolean, val table: TableModel? = null, val figure: FigureModel? = null)
 
 /**
  * Puts each table found on a page in place of the text it covers: the table itself (or, when it
  * could not be read cleanly, a picture of it), where its first line was. Lines outside every
  * table stay as they were.
  */
-internal fun placeTables(blocks: List<RawBlock>, tables: List<TableModel>): List<RawBlock> {
+internal fun placeTables(blocks: List<RawBlock>, tables: List<TableModel>, figures: List<FigureModel> = emptyList()): List<RawBlock> {
     // A picture fallback only when the finder knew the whole table's outline.
     val use = tables.filter { it.kind != TableKind.IMAGE || (it.extent.width >= 100f && it.extent.height >= 40f) }
-    if (use.isEmpty()) return blocks
-    fun owner(l: RawLine): TableModel? {
+    if (use.isEmpty() && figures.isEmpty()) return blocks
+    // Each table or figure, the page area its text is in, and the block that stands in for it.
+    class Part(val extent: Box, val block: RawBlock)
+    val parts = use.map { t ->
+        Part(t.extent, if (t.kind == TableKind.IMAGE) RawBlock(t.extent, emptyList(), true) else RawBlock(t.extent, emptyList(), false, t))
+    } + figures.map { f -> Part(f.extent, RawBlock(f.box, emptyList(), false, figure = f)) }
+    fun owner(l: RawLine): Part? {
         val cy = (l.y0 + l.y1) / 2
-        return use.firstOrNull { t ->
-            val e = t.extent
+        return parts.firstOrNull { p ->
+            val e = p.extent
             cy > e.y0 - 1.5f && cy < e.y1 + 1.5f && min(l.x1, e.x1) - max(l.x0, e.x0) > 0.5f * (l.x1 - l.x0)
         }
     }
-    fun tableBlock(t: TableModel) =
-        if (t.kind == TableKind.IMAGE) RawBlock(t.extent, emptyList(), true) else RawBlock(t.extent, emptyList(), false, t)
-    val placed = HashSet<TableModel>()
+    val placed = HashSet<Part>()
     val out = ArrayList<RawBlock>()
     for (b in blocks) {
         if (b.image) {
-            // A picture inside a table (a drawn arrow, a logo) is part of the table.
+            // A picture inside a table or a figure (a drawn arrow, a logo) is part of it.
             val cx = (b.box.x0 + b.box.x1) / 2
             val cy = (b.box.y0 + b.box.y1) / 2
-            if (use.any { t -> cx > t.extent.x0 && cx < t.extent.x1 && cy > t.extent.y0 && cy < t.extent.y1 }) continue
+            if (parts.any { p -> cx > p.extent.x0 && cx < p.extent.x1 && cy > p.extent.y0 && cy < p.extent.y1 }) continue
             out += b; continue
         }
         var keep = ArrayList<RawLine>()
         for (l in b.lines) {
-            val t = owner(l)
-            if (t == null) { keep += l; continue }
+            val p = owner(l)
+            if (p == null) { keep += l; continue }
             if (keep.isNotEmpty()) { out += RawBlock(boxOf(keep, b.box), keep, false); keep = ArrayList() }
-            if (placed.add(t)) out += tableBlock(t)
+            if (placed.add(p)) out += p.block
         }
         if (keep.size == b.lines.size) out += b
         else if (keep.isNotEmpty()) out += RawBlock(boxOf(keep, b.box), keep, false)
     }
-    // A table whose text the page reader did not give (drawn as outlines, say) still shows, in its place.
-    for (t in use) if (t !in placed) {
-        val at = out.indexOfFirst { it.box.y0 > t.extent.y0 }.let { if (it < 0) out.size else it }
-        out.add(at, tableBlock(t))
+    // One whose text the page reader did not give (drawn as outlines, say) still shows, in its place.
+    for (p in parts) if (p !in placed) {
+        val at = out.indexOfFirst { it.box.y0 > p.extent.y0 }.let { if (it < 0) out.size else it }
+        out.add(at, p.block)
     }
     return out
 }
@@ -160,6 +163,10 @@ internal fun buildParas(blocks: List<RawBlock>, pageHeight: Float, nearBands: Se
     for (b in blocks) {
         if (b.table != null) {
             out += Para("", table = b.table)
+            continue
+        }
+        if (b.figure != null) {
+            out += Para("", figure = b.figure.box, figureInfo = b.figure)
             continue
         }
         if (b.image) {

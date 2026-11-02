@@ -111,6 +111,7 @@ internal class ShapeDevice : Device() {
             })
         }
         flush()
+        outline(p, m)
         // Done with it now, rather than whenever the collector gets to it.
         runCatching { p.destroy() }
     }
@@ -132,7 +133,28 @@ internal class ShapeDevice : Device() {
                 override fun closePath() { val s = start; val l = last; if (s != null && l != null) seg(l, s); last = s }
             })
         }
+        outline(p, m)
         runCatching { p.destroy() }
+    }
+
+    /** The whole path's outline, curves included: what a figure is drawn with. */
+    private fun outline(p: Path, m: Matrix) {
+        var b: FloatArray? = null
+        fun add(x: Float, y: Float) {
+            val q = pt(m, x, y)
+            val c = b
+            if (c == null) b = floatArrayOf(q[0], q[1], q[0], q[1])
+            else { c[0] = min(c[0], q[0]); c[1] = min(c[1], q[1]); c[2] = max(c[2], q[0]); c[3] = max(c[3], q[1]) }
+        }
+        runCatching {
+            p.walk(object : PathWalker {
+                override fun moveTo(x: Float, y: Float) { add(x, y) }
+                override fun lineTo(x: Float, y: Float) { add(x, y) }
+                override fun curveTo(cx1: Float, cy1: Float, cx2: Float, cy2: Float, ex: Float, ey: Float) { add(cx1, cy1); add(cx2, cy2); add(ex, ey) }
+                override fun closePath() {}
+            })
+        }
+        b?.let { shapes += TShape("path", it[0], it[1], it[2], it[3]) }
     }
 
     override fun close() {}

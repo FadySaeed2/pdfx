@@ -21,6 +21,8 @@ def page_data(p):
     shapes = []
     for g in p.get_drawings():
         bb = pymupdf.Rect(g["rect"]) * M
+        # The whole path's outline, curves included: what a figure is drawn with.
+        shapes.append(["path", round(bb.x0,2), round(bb.y0,2), round(bb.x1,2), round(bb.y1,2)])
         fill = g.get("fill"); col = g.get("color")
         if fill is not None:
             # Each subpath on its own, as a path walker sees them: a frame drawn as thin strips

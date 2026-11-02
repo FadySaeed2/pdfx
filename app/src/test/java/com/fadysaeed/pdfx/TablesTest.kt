@@ -67,6 +67,33 @@ class TablesTest {
         assertEquals("$file: every golden table met", expected.length(), count)
     }
 
+    /** Figures: the drawing's outline (to a point or two), the caption and the notes, and no others. */
+    private fun checkFigures(file: String) {
+        val input = pages("$file-pages.json.gz")
+        val expected = JSONArray(resource("$file-figures.json").bufferedReader().readText())
+        val byPage = (0 until expected.length()).map { expected.getJSONObject(it) }.groupBy { it.getInt("page") }
+        var count = 0
+        for (page in input.keys.sorted()) {
+            val found = TableFinder.read(page, input.getValue(page)).figures
+            val want = byPage[page].orEmpty()
+            assertEquals("$file page ${page + 1}: how many figures", want.size, found.size)
+            for ((w, f) in want.zip(found)) {
+                assertEquals("$file page ${page + 1} caption", w.getString("caption"), f.caption)
+                assertEquals("$file page ${page + 1} notes", w.getJSONArray("notes").toString(), JSONArray(f.notes).toString())
+                val b = w.getJSONArray("box")
+                val got = listOf(f.box.x0, f.box.y0, f.box.x1, f.box.y1)
+                for (k in 0 until 4) assertEquals("$file page ${page + 1} box $k", b.getDouble(k).toFloat(), got[k], 2f)
+                count++
+            }
+        }
+        // Not every page of the files is in the fixtures; every figure on the pages that are must be met.
+        assertEquals("$file: figures met", byPage.filterKeys { it in input.keys }.values.sumOf { it.size }, count)
+    }
+
+    @Test fun handbookFigures() = checkFigures("gpm")
+
+    @Test fun cochraneFigures() = checkFigures("coch")
+
     @Test fun handbookTables() = check("gpm")
 
     @Test fun cochraneTables() = check("coch")

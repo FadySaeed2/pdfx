@@ -1,0 +1,83 @@
+[
+ {
+  "page": 26,
+  "number": "2–1",
+  "caption": "FIGURE 2–1. Borderline personality disorder’s interpersonal coherence.",
+  "box": [
+   35.1,
+   92.0,
+   350.4,
+   470.6
+  ],
+  "notes": []
+ },
+ {
+  "page": 43,
+  "number": "4–1",
+  "caption": "FIGURE 4–1. Algorithm for intersession availability of therapist.",
+  "box": [
+   35.2,
+   72.0,
+   350.5,
+   363.1
+  ],
+  "notes": [
+   "ER=emergency room."
+  ]
+ },
+ {
+  "page": 52,
+  "number": "5–1",
+  "caption": "FIGURE 5–1. Acute-on-chronic suicide risk.",
+  "box": [
+   35.1,
+   71.4,
+   350.4,
+   308.9
+  ],
+  "notes": [
+   "In patients with borderline personality disorder (BPD), the acute-on-chronic level of suicide risk (curved arrow) can change more quickly than in the general population and will be modified by several factors that can cause (upward arrow) and several that might reduce (downward arrow) an acute exacerbation of risk.",
+   "Source. Adapted from Gunderson JG, Links P: Borderline Personality Disorder: A Clinical Guide, 2nd Edition. Washington, DC, American Psychiatric Publishing, 2008. Used with per-mission."
+  ]
+ },
+ {
+  "page": 53,
+  "number": "5–2",
+  "caption": "FIGURE 5–2. Algorithm for selecting the level of care in response to self-endangering behaviors.",
+  "box": [
+   35.2,
+   72.0,
+   350.5,
+   235.9
+  ],
+  "notes": [
+   "Levels of care:",
+   "1. OPC=outpatient clinic/office practice.",
+   "2. IOP/PH=intensive outpatient (>3 hours/week)/partial hospital (>10 hours/week).",
+   "3. Residential=structured living environments (e.g., halfway house).",
+   "4. Hospital."
+  ]
+ },
+ {
+  "page": 62,
+  "number": "6–1",
+  "caption": "FIGURE 6–1. Algorithm for medication choice for borderline personality disorder.",
+  "box": [
+   35.1,
+   72.2,
+   350.4,
+   343.8
+  ],
+  "notes": [
+   "AD=antidepressant; AP=antipsychotic; MS=mood stabilizer; SSRI=selective serotonin reuptake inhibitor.",
+   "Assess the following:",
+   "1. Patient’s motivation",
+   "2. Symptom severity and type: anxiety/depression/affective instability, impulsive/anger, cognitive/perceptual (Cogn/Perc)",
+   "3. Current medications",
+   "If patient is severely distressed or insistent, proceed as follows:",
+   "1. Affectively unstable, anxious/depressed—start with MS (e.g., topiramate or lamotrigine), move to AD (e.g., SSRIs)",
+   "2. Impulsive/anger—start with APs (e.g., aripiprazole or ziprasidone) or MS, move to the other class of medication",
+   "3. Cognitive/perceptual—start with APs, move to other types"
+  ]
+ }
+]
