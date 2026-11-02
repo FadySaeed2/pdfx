@@ -83,7 +83,9 @@ class ViewerOnDeviceTest {
         compose.waitUntil(15_000) { reader?.pages?.aspects?.size == 6 }
         compose.waitForIdle()
         val first = reader!!
-        compose.onNode(SemanticsMatcher("opens the pages") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull()?.startsWith("Pages:") == true }).performClick()
+        compose.onNode(SemanticsMatcher("opens more") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull()?.startsWith("More:") == true }).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Pages").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Pages").performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithText("hold and drag to move", substring = true).fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(10_000) { compose.onAllNodes(SemanticsMatcher("page 2 drawn") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull() == "Small picture of page 2" }).fetchSemanticsNodes().isNotEmpty() }
         compose.onNode(SemanticsMatcher("page 2") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull() == "Small picture of page 2" }).performClick()

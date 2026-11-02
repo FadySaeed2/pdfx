@@ -54,7 +54,11 @@ object Arranger {
      * the same way). Pages of other files that are locked cannot be used; those are left out and
      * their files named in the result.
      */
-    fun write(base: String, items: List<PageItem>, out: String, password: String? = null, otherPasswords: Map<String, String> = emptyMap()): Result {
+    fun write(
+        base: String, items: List<PageItem>, out: String, password: String? = null, otherPasswords: Map<String, String> = emptyMap(),
+        /** Contents entries to add at the end of the file's own list: a title and the item it opens at. */
+        contents: List<Pair<String, Int>> = emptyList(),
+    ): Result {
         require(items.isNotEmpty()) { "A file needs at least one page." }
         val d = open(base, password)
         val opened = ArrayList<Document>()
@@ -70,9 +74,11 @@ object Arranger {
             val used = BooleanArray(n)
             val order = ArrayList<Int>()
             val turns = ArrayList<Int>()
+            // Where each item ends up; items that could not be used are left out.
+            val where = IntArray(items.size) { -1 }
             var next = n
             var copied = false
-            for (it in items) {
+            for ((idx, it) in items.withIndex()) {
                 val at: Int = when (it.source) {
                     PageSource.ORIGINAL -> {
                         require(it.page in 0 until n) { "Page ${it.page + 1} is not in the file." }
@@ -108,6 +114,7 @@ object Arranger {
                 }
                 order += at
                 turns += it.turn
+                where[idx] = order.size - 1
             }
             if (order.isEmpty()) throw IllegalArgumentException("None of the pages could be used.")
             d.rearrangePages(order.toIntArray())
@@ -118,6 +125,7 @@ object Arranger {
                 p.put("Rotate", ((r + t) % 360 + 360) % 360)
             }
             restoreRoot(d, kept)
+            if (contents.isNotEmpty()) addContents(d, contents.mapNotNull { (t, i) -> where.getOrNull(i)?.takeIf { it >= 0 }?.let { t to it } })
             d.save(out, if (copied) "garbage=deduplicate" else "garbage=compact")
             return Result(order.size, skipped.toList())
         } finally {
@@ -160,6 +168,40 @@ object Arranger {
         } finally {
             runCatching { img.destroy() }
         }
+    }
+
+    /** Adds entries to the end of the file's contents list, each opening at the top of its page. */
+    private fun addContents(d: PDFDocument, entries: List<Pair<String, Int>>) {
+        if (entries.isEmpty()) return
+        val root = d.trailer.get("Root")
+        var outlines = root.get("Outlines")
+        if (!outlines.isDictionary) {
+            val ref = d.createObject()
+            ref.writeObject(d.newDictionary().apply { put("Type", d.newName("Outlines")) })
+            root.put("Outlines", ref)
+            outlines = root.get("Outlines")
+        }
+        var prev: PDFObject? = outlines.get("Last").takeIf { it.isDictionary }
+        var added = 0
+        for ((title, page) in entries) {
+            if (page !in 0 until d.countPages()) continue
+            val item = d.createObject()
+            val dest = d.newArray().apply {
+                push(d.findPage(page)); push(d.newName("XYZ")); push(d.newNull()); push(d.newNull()); push(d.newNull())
+            }
+            item.writeObject(d.newDictionary().apply {
+                put("Title", title)
+                put("Parent", outlines)
+                put("Dest", dest)
+            })
+            val p = prev
+            if (p == null) outlines.put("First", item) else { p.put("Next", item); item.put("Prev", p) }
+            outlines.put("Last", item)
+            prev = item
+            added++
+        }
+        val count = outlines.get("Count").let { if (it.isNull) 0 else it.asInteger() }
+        outlines.put("Count", if (count < 0) count - added else count + added)
     }
 
     private val SKIP_KEYS = setOf("P", "Parent", "Popup", "IRT", "Dest", "A", "Kids")

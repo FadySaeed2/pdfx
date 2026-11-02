@@ -163,4 +163,93 @@ class ArrangeOnDeviceTest {
         val again = Document.openDocument(base.absolutePath)
         try { assertEquals(6, again.countPages()) } finally { again.destroy() }
     }
+
+    @Test
+    fun mergesFilesWithAContentsEntryForEach() {
+        val a = asset("organise.pdf")
+        val b = asset("signable.pdf")
+        val c = asset("long-letter.pdf")
+        val items = ArrayList<PageItem>()
+        val contents = ArrayList<Pair<String, Int>>()
+        contents += "Chapters" to items.size; repeat(6) { items += PageItem(PageSource.ORIGINAL, it) }
+        contents += "Referral" to items.size; items += PageItem(PageSource.OTHER, 0, b.absolutePath)
+        contents += "Long letter" to items.size; repeat(12) { items += PageItem(PageSource.OTHER, it, c.absolutePath) }
+        val out = File(shots, "merged.pdf")
+        assertEquals(19, Arranger.write(a.absolutePath, items, out.absolutePath, contents = contents).pages)
+        val d = Document.openDocument(out.absolutePath)
+        try {
+            assertEquals(19, d.countPages())
+            assertTrue(text(d, 6).contains("Referral letter"))
+            val toc = outline(d)
+            // The first file's own chapters stay, then one entry per file.
+            assertEquals(1, toc["Chapter 2"])
+            assertEquals(0, toc["Chapters"])
+            assertEquals(6, toc["Referral"])
+            assertEquals(7, toc["Long letter"])
+            assertEquals(listOf("Chapter 1", "Chapter 2", "Chapter 3", "Chapter 4", "Chapter 5", "Chapter 6", "Chapters", "Referral", "Long letter"), toc.keys.toList())
+        } finally {
+            d.destroy()
+        }
+    }
+
+    @Test
+    fun splitsBySizeIntoFilesUnderTheLimit() {
+        val base = asset("gpm.pdf")
+        val total = Document.openDocument(base.absolutePath).let { val n = it.countPages(); it.destroy(); n }
+        val first = (0 until 30).map { PageItem(PageSource.ORIGINAL, it) }
+        val whole = File(ctx.cacheDir, "split-whole.pdf")
+        Arranger.write(base.absolutePath, first, whole.absolutePath)
+        val limit = whole.length() / 3
+        val parts = com.fadysaeed.pdfx.engine.Splits.bySize(30, limit, File(ctx.cacheDir, "split-try.pdf")) { pages, f ->
+            Arranger.write(base.absolutePath, pages.map { PageItem(PageSource.ORIGINAL, it) }, f.absolutePath)
+        }
+        assertEquals((0 until 30).toList(), parts.flatten())
+        assertTrue("several parts: ${parts.map { it.size }}", parts.size >= 3)
+        parts.forEachIndexed { k, pages ->
+            val f = File(shots, "split-$k.pdf")
+            Arranger.write(base.absolutePath, pages.map { PageItem(PageSource.ORIGINAL, it) }, f.absolutePath)
+            assertTrue("part ${k + 1} is ${f.length()} bytes, limit $limit", f.length() <= limit || pages.size == 1)
+        }
+        assertTrue(total > 30)
+    }
+
+    @Test
+    fun trimsMarginsAndShowsWholePagesAgain() = kotlinx.coroutines.runBlocking {
+        val f = asset("organise.pdf")
+        val s = com.fadysaeed.pdfx.engine.PdfSession.openFile(f.absolutePath)
+        try {
+            val box = s.contentBox(0)!!
+            // The words start 72 points in, about 100 down, and stop well before the bottom.
+            assertTrue("left edge near the words: $box", box.x0 in 60f..80f)
+            assertTrue("top near the title: $box", box.y0 in 80f..110f)
+            assertTrue("bottom above the page end: $box", box.y1 < 760f)
+            assertTrue(s.cropPages(mapOf(0 to com.fadysaeed.pdfx.engine.Box(box.x0 - 10, box.y0 - 10, box.x1 + 10, box.y1 + 10))))
+            val out = File(shots, "trimmed.pdf")
+            s.writeTo(out.absolutePath, incremental = false)
+        } finally {
+            s.close()
+        }
+        val d = Document.openDocument(File(shots, "trimmed.pdf").absolutePath)
+        try {
+            val p = d.loadPage(0)
+            val b = p.bounds
+            p.destroy()
+            assertTrue("page 1 is smaller now: $b", b.x1 - b.x0 < 560f && b.y1 - b.y0 < 760f)
+            assertTrue("its words are all still there", text(d, 0).contains("Line 20 of chapter 1"))
+            val q = d.loadPage(1).let { val r = it.bounds; it.destroy(); r }
+            assertEquals("other pages untouched", 842f, q.y1 - q.y0, 0.5f)
+        } finally {
+            d.destroy()
+        }
+        // And back to whole pages.
+        val again = com.fadysaeed.pdfx.engine.PdfSession.openFile(File(shots, "trimmed.pdf").absolutePath)
+        try {
+            assertTrue(again.hasCrops())
+            again.cropPages(mapOf(0 to null))
+            assertTrue(!again.hasCrops())
+            assertEquals(842f, again.pageSize(0).height, 0.5f)
+        } finally {
+            again.close()
+        }
+    }
 }

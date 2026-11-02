@@ -554,6 +554,8 @@ class Reader(
     var saveNow: ((String) -> Unit)? = null
     /** Opens the pages screen, to put the file's pages in order. Set by the viewer. */
     var openPages: (() -> Unit)? = null
+    /** Opens one of the file tools ("trim", "split", "merge"). Set by the viewer. */
+    var openTool: ((String) -> Unit)? = null
 
     val cert: com.fadysaeed.pdfx.data.SavedCert? get() = certs.firstOrNull { it.id == certId } ?: certs.firstOrNull()
 

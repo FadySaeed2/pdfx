@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -92,12 +93,16 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     val notice by vm.notice.collectAsState()
     var sheet by remember { mutableStateOf<Sheet?>(null) }
     var ask by remember { mutableStateOf<Ask?>(null) }
+    /** The file tools: merging (with the file to start from) and splitting a file. */
+    var merging by remember { mutableStateOf<Doc?>(null) }
+    var splitting by remember { mutableStateOf<Doc?>(null) }
 
     BackHandler(enabled = ui.place != Place() || ui.query.isNotEmpty()) { vm.back() }
     LaunchedEffect(notice?.id) {
         if (notice != null) { delay(if (notice?.undo != null) 6000 else 3500); vm.dismissNotice() }
     }
 
+    Box(Modifier.fillMaxSize()) {
     LibraryContent(
         ui = ui,
         notice = notice,
@@ -124,6 +129,20 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             dismissNotice = vm::dismissNotice,
         ),
     )
+    merging?.let { start ->
+        com.fadysaeed.pdfx.ui.tools.MergeScreen(start, onClose = { merging = null }) { made ->
+            merging = null
+            vm.notice.value = Notice("Merged into ${LibraryModel.display(made)}, beside ${LibraryModel.display(start)}.")
+            onOpen(made, 0)
+        }
+    }
+    }
+    splitting?.let { d ->
+        com.fadysaeed.pdfx.ui.tools.SplitDialog(d, onDismiss = { splitting = null }) { made ->
+            splitting = null
+            vm.notice.value = Notice("Split into ${made.size} files, beside ${LibraryModel.display(d)}.")
+        }
+    }
 
     val current = sheet
     if (current != null) {
@@ -160,6 +179,8 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
                                 DocAction.FORGET -> vm.forget(d)
                                 DocAction.FOLDER -> d.folder?.let { vm.openFolder(it) }
                                 DocAction.VERSIONS -> sheet = Sheet.History(d)
+                                DocAction.MERGE -> merging = d
+                                DocAction.SPLIT -> splitting = d
                             }
                         },
                     )
@@ -238,7 +259,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     }
 }
 
-enum class DocAction { OPEN, STAR, RENAME, MOVE, COPY, TAGS, SHARE, TRASH, RESTORE, DELETE, SAVE_COPY, FORGET, FOLDER, VERSIONS }
+enum class DocAction { OPEN, STAR, RENAME, MOVE, COPY, TAGS, SHARE, TRASH, RESTORE, DELETE, SAVE_COPY, FORGET, FOLDER, VERSIONS, MERGE, SPLIT }
 
 @Composable
 private fun SheetTitle(title: String, note: String?) {
@@ -264,6 +285,8 @@ fun ActionsSheet(d: Doc, label: String, versions: Int = 0, pick: (DocAction) -> 
                 SheetRow(if (d.starred) Glyph.STAR_FILLED else Glyph.STAR, if (d.starred) "Remove star" else "Star", { pick(DocAction.STAR) })
                 SheetRow(Glyph.TAG, "Tags", { pick(DocAction.TAGS) })
                 SheetRow(Glyph.SHARE, "Share", { pick(DocAction.SHARE) })
+                SheetRow(Glyph.PLUS, "Merge with other files…", { pick(DocAction.MERGE) }, note = "Into a new file, in Documents/PDFx")
+                SheetRow(Glyph.GRID, "Split into files…", { pick(DocAction.SPLIT) })
                 SheetRow(Glyph.CLOSE, "Remove from the list", { pick(DocAction.FORGET) }, note = "The original stays in the other app")
             }
             else -> {
@@ -275,6 +298,8 @@ fun ActionsSheet(d: Doc, label: String, versions: Int = 0, pick: (DocAction) -> 
                 SheetRow(Glyph.COPY, "Copy to…", { pick(DocAction.COPY) })
                 SheetRow(Glyph.FOLDER, "Show its folder", { pick(DocAction.FOLDER) }, note = label)
                 SheetRow(Glyph.SHARE, "Share", { pick(DocAction.SHARE) })
+                SheetRow(Glyph.PLUS, "Merge with other files…", { pick(DocAction.MERGE) }, note = "Into a new file beside this one")
+                SheetRow(Glyph.GRID, "Split into files…", { pick(DocAction.SPLIT) }, note = "Every few pages, by pages, or by size")
                 if (versions > 0) SheetRow(Glyph.RESTORE, "Earlier versions", { pick(DocAction.VERSIONS) }, note = if (versions == 1) "1 saved before your last change" else "$versions saved before your last changes")
                 SheetRow(Glyph.TRASH, "Move to trash", { pick(DocAction.TRASH) }, note = "Kept for 30 days")
             }

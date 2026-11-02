@@ -140,6 +140,7 @@ import com.fadysaeed.pdfx.ui.components.Glyph
 import com.fadysaeed.pdfx.ui.components.GlyphIcon
 import com.fadysaeed.pdfx.ui.components.Hairline
 import com.fadysaeed.pdfx.ui.components.IconButton
+import com.fadysaeed.pdfx.ui.components.SheetRow
 import com.fadysaeed.pdfx.ui.components.InkField
 import com.fadysaeed.pdfx.ui.library.LibraryModel
 import com.fadysaeed.pdfx.ui.theme.Ink
@@ -205,6 +206,12 @@ fun ViewerScreen(
     /** The pages screen: open, and asked for while the file was being saved first. */
     var organizer by remember(request) { mutableStateOf<Organizer?>(null) }
     var wantPages by remember(request) { mutableStateOf(false) }
+    /** A file tool asked for while the file was being saved first, and the one open now. */
+    var wantTool by remember(request) { mutableStateOf<String?>(null) }
+    var tool by remember(request) { mutableStateOf<String?>(null) }
+    var trimBusy by remember(request) { mutableStateOf(false) }
+    var trimNote by remember(request) { mutableStateOf<String?>(null) }
+    var hasTrims by remember(request) { mutableStateOf(false) }
     var organizing by remember(request) { mutableStateOf(false) }
     var leavePages by remember(request) { mutableStateOf(false) }
     var signedPages by remember(request) { mutableStateOf(false) }
@@ -327,6 +334,51 @@ fun ViewerScreen(
                 if (session.dirty) { wantPages = true; saveAndReopen(null); return }
                 organizer = Organizer(session.pageCount, scope, session)
             }
+            fun openTool(t: String) {
+                // The tools read the file on the phone, so changes not yet saved go into it first.
+                if (session.dirty) { wantTool = t; saveAndReopen(null); return }
+                trimNote = if (t == "trim" && reader.docSignatures.isNotEmpty()) "This file is signed: trimming counts as a change after signing." else null
+                tool = t
+            }
+            fun trim(same: Boolean) {
+                if (trimBusy) return
+                trimBusy = true
+                scope.launch {
+                    val n = session.pageCount
+                    val found = ArrayList<Pair<Int, com.fadysaeed.pdfx.engine.Box>>()
+                    for (i in 0 until n) {
+                        trimNote = "Looking at page ${i + 1} of $n…"
+                        runCatching { session.contentBox(i) }.getOrNull()?.let { found += i to it }
+                    }
+                    if (found.isEmpty()) { trimBusy = false; trimNote = "There is nothing on the pages to trim to."; return@launch }
+                    val pad = 12f
+                    val all = found.fold(found[0].second) { a, (_, b) -> com.fadysaeed.pdfx.engine.Box(minOf(a.x0, b.x0), minOf(a.y0, b.y0), maxOf(a.x1, b.x1), maxOf(a.y1, b.y1)) }
+                    val boxes = HashMap<Int, com.fadysaeed.pdfx.engine.Box?>()
+                    for ((i, own) in found) {
+                        val b = if (same) all else own
+                        val size = runCatching { session.pageSize(i) }.getOrNull() ?: continue
+                        boxes[i] = com.fadysaeed.pdfx.engine.Box(
+                            (b.x0 - pad).coerceAtLeast(0f), (b.y0 - pad).coerceAtLeast(0f),
+                            (b.x1 + pad).coerceAtMost(size.width), (b.y1 + pad).coerceAtMost(size.height),
+                        )
+                    }
+                    val ok = runCatching { session.cropPages(boxes) }.getOrDefault(false)
+                    trimBusy = false
+                    if (!ok) { trimNote = "The margins could not be trimmed."; return@launch }
+                    tool = null
+                    saveAndReopen(if (boxes.size == 1) "Margins trimmed." else "Margins trimmed on ${boxes.size} pages. More, then Trim white margins, shows whole pages again.")
+                }
+            }
+            fun untrim() {
+                if (trimBusy) return
+                trimBusy = true
+                scope.launch {
+                    val ok = runCatching { session.cropPages((0 until session.pageCount).associateWith { null }) }.getOrDefault(false)
+                    trimBusy = false
+                    tool = null
+                    if (ok) saveAndReopen("Whole pages shown again.")
+                }
+            }
             fun closePages() {
                 organizer?.close(); organizer = null
                 leavePages = false
@@ -389,6 +441,7 @@ fun ViewerScreen(
             SideEffect {
                 reader.saveNow = { msg -> saveAndReopen(msg) }
                 reader.openPages = ::openPages
+                reader.openTool = ::openTool
                 onReader?.invoke(reader) { centreItem(listState) }
             }
             LaunchedEffect(reader) {
@@ -399,6 +452,8 @@ fun ViewerScreen(
             }
             LaunchedEffect(reader) { notice?.let { reader.problem = it; notice = null } }
             LaunchedEffect(reader) { if (wantPages) { wantPages = false; openPages() } }
+            LaunchedEffect(reader) { wantTool?.let { wantTool = null; openTool(it) } }
+            LaunchedEffect(tool) { if (tool == "trim") hasTrims = runCatching { session.hasCrops() }.getOrDefault(false) }
             // Going to the background: save, then carry on from the saved file when back.
             LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
                 if (session.dirty) saveAndReopen(null)
@@ -416,6 +471,21 @@ fun ViewerScreen(
                 onTiles = pages::wantTiles,
                 onBack = ::leave,
             )
+            when (tool) {
+                "trim" -> com.fadysaeed.pdfx.ui.tools.TrimDialog(hasTrims, trimBusy, trimNote, onDismiss = { tool = null }, onTrim = ::trim, onRestore = ::untrim)
+                "split" -> doc?.let { d ->
+                    com.fadysaeed.pdfx.ui.tools.SplitDialog(d, onDismiss = { tool = null }) { made ->
+                        tool = null
+                        reader.problem = "Split into ${made.size} files, beside this one. They are in your library."
+                    }
+                }
+                "merge" -> doc?.let { d ->
+                    com.fadysaeed.pdfx.ui.tools.MergeScreen(d, onClose = { tool = null }) { made ->
+                        tool = null
+                        reader.problem = "Merged into ${made.name.removeSuffix(".pdf")}, beside this file. It is in your library."
+                    }
+                }
+            }
             organizer?.let { o ->
                 val pickPdf = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri == null) return@rememberLauncherForActivityResult
@@ -492,7 +562,7 @@ fun ViewerScreen(
     }
 }
 
-private enum class ViewerSheet { CONTENTS, DISPLAY }
+private enum class ViewerSheet { CONTENTS, DISPLAY, MORE }
 
 /** The reader: pages or reflowed text, with its bars, search, selection, contents and display menus. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -627,16 +697,8 @@ fun ViewerContent(
                         IconButton(Glyph.SEARCH, "Find in document", { reader.searchOpen = true }, color = Ink.Sand, size = 42.dp)
                         IconButton(Glyph.REFLOW, if (reader.reflow) "Show the pages" else "Reflow text for reading", ::toggleReflow, color = if (reader.reflow) Ink.Amber else Ink.Sand, size = 42.dp)
                         if (reader.canMark && !reader.reflow) IconButton(Glyph.PEN, "Mark up", reader::startMarking, color = Ink.Sand, size = 42.dp)
-                        if (reader.canMark && !reader.reflow) IconButton(Glyph.GRID, "Pages: put them in order, turn, add or take out", { reader.openPages?.invoke() }, color = Ink.Sand, size = 42.dp)
-                        val marked = current in reader.bookmarks
-                        IconButton(
-                            if (marked) Glyph.BOOKMARK_FILLED else Glyph.BOOKMARK,
-                            if (marked) "Remove bookmark" else "Bookmark this page",
-                            { reader.toggleBookmark(current); flash = if (marked) "Bookmark removed" else "Page ${current + 1} bookmarked" },
-                            color = if (marked) Ink.Amber else Ink.Sand, size = 42.dp,
-                        )
-                        IconButton(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS }, color = Ink.Sand, size = 42.dp)
-                        IconButton(Glyph.MOON, "Page colours and reading mode", { sheet = ViewerSheet.DISPLAY }, color = Ink.Sand, size = 42.dp)
+                        // The rest live under one button, so the file's name has room.
+                        IconButton(Glyph.MORE, "More: bookmark, contents, pages, page colours", { sheet = ViewerSheet.MORE }, color = Ink.Sand, size = 42.dp)
                     }
                 }
                 Hairline(color = Ink.Rule)
@@ -796,6 +858,21 @@ fun ViewerContent(
                 when (open) {
                     ViewerSheet.CONTENTS -> ContentsSheetOnTab(reader, null, current, name) { p, y -> sheet = null; reader.go(p, y) }
                     ViewerSheet.DISPLAY -> DisplaySheet(reader, onFlatten = { sheet = null; askFlatten = true }, onReflow = ::toggleReflow)
+                    ViewerSheet.MORE -> {
+                        val marked = current in reader.bookmarks
+                        SheetRow(
+                            if (marked) Glyph.BOOKMARK_FILLED else Glyph.BOOKMARK,
+                            if (marked) "Remove the bookmark on page ${current + 1}" else "Bookmark page ${current + 1}",
+                            { sheet = null; reader.toggleBookmark(current); flash = if (marked) "Bookmark removed" else "Page ${current + 1} bookmarked" },
+                            color = if (marked) Ink.Amber else Ink.Bone,
+                        )
+                        SheetRow(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS })
+                        if (reader.canMark && !reader.reflow) SheetRow(Glyph.GRID, "Pages", { sheet = null; reader.openPages?.invoke() }, note = "Put them in order, turn, add or take out, or save some as a new file")
+                        if (reader.canMark && !reader.reflow) SheetRow(Glyph.PAGE, "Trim white margins", { sheet = null; reader.openTool?.invoke("trim") }, note = "Bigger words on a phone; whole pages can come back")
+                        if (reader.canMark) SheetRow(Glyph.GRID, "Split into files…", { sheet = null; reader.openTool?.invoke("split") })
+                        if (reader.canMark) SheetRow(Glyph.PLUS, "Merge with other files…", { sheet = null; reader.openTool?.invoke("merge") })
+                        SheetRow(Glyph.MOON, "Page colours and reading mode", { sheet = ViewerSheet.DISPLAY })
+                    }
                 }
             }
         }

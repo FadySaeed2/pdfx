@@ -1022,6 +1022,69 @@ class PdfSession private constructor(
         true
     }
 
+    // ------------------------------------------------------------------ margins
+
+    /**
+     * Where a page's ink is: the smallest box holding everything that is not near-white, from a
+     * small drawing of the page, in page points. Null for a page with nothing on it.
+     */
+    suspend fun contentBox(index: Int, widthPx: Int = 280): Box? {
+        val size = pageSize(index)
+        val bmp = render(index, widthPx)
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val w = bmp.width
+            val h = bmp.height
+            val px = IntArray(w * h)
+            bmp.getPixels(px, 0, w, 0, 0, w, h)
+            fun ink(c: Int): Boolean {
+                val r = (c shr 16) and 0xFF; val g = (c shr 8) and 0xFF; val b = c and 0xFF
+                return r < 232 || g < 232 || b < 232
+            }
+            // A row or column counts once it holds two marked pixels, so a speck of dust does not.
+            val rows = IntArray(h)
+            val cols = IntArray(w)
+            for (y in 0 until h) for (x in 0 until w) if (ink(px[y * w + x])) { rows[y]++; cols[x]++ }
+            val top = rows.indexOfFirst { it >= 2 }
+            val left = cols.indexOfFirst { it >= 2 }
+            if (top < 0 || left < 0) return@withContext null
+            val bottom = rows.indexOfLast { it >= 2 }
+            val right = cols.indexOfLast { it >= 2 }
+            val k = size.width / w
+            Box(left * k, top * k, (right + 1) * k, (bottom + 1) * k)
+        }
+    }
+
+    /**
+     * Shows only part of each page: [boxes] gives, for each page, the part to keep in page points
+     * (as the page is seen now), or null to show the whole page again. One undoable change.
+     */
+    suspend fun cropPages(boxes: Map<Int, Box?>): Boolean = onDoc {
+        val d = pdf ?: return@onDoc false
+        d.beginOperation("Trim margins")
+        try {
+            for ((i, box) in boxes) {
+                val p = pdfPage(i)
+                if (box == null) p.getObject().delete("CropBox")
+                else p.setCropBox(Rect(box.x0, box.y0, box.x1, box.y1))
+            }
+            d.endOperation()
+        } catch (t: Throwable) {
+            runCatching { d.abandonOperation() }
+            throw t
+        }
+        dropPages()
+        sizes.clear()
+        refreshFlags()
+        dirty = true
+        true
+    }
+
+    /** True when any page shows only part of itself. */
+    suspend fun hasCrops(): Boolean = onDoc {
+        val d = pdf ?: return@onDoc false
+        (0 until pageCount).any { i -> runCatching { !d.findPage(i).get("CropBox").isNull }.getOrDefault(false) }
+    }
+
     /** Whether changes can be appended to the original; asked on the document's own thread. */
     suspend fun canSaveIncrementally(): Boolean = onDoc { runCatching { pdf?.canBeSavedIncrementally() ?: false }.getOrDefault(false) }
 
