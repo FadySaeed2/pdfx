@@ -177,3 +177,9 @@ signatures, and a full pass on every screen for clarity.
   phone-trusted authority / own certificate / unknown authority, changed after signing. Tests use
   real-world fixtures (tools/make-signing-fixtures.py): a letter with a signature field, a doctor
   certificate from an unknown CA, a pyHanko-signed file and the same file with one letter changed.
+  Found on the emulator: MuPDF's byte stream for signing and checking reads empty on Android, so
+  the signer hands MuPDF a marker and the real bytes are signed after the save (completeSignatures,
+  which also fills the ByteRange MuPDF leaves as a placeholder in whole-file saves); checks read the
+  ByteRange from the file. Split signature fields are merged with their widget before signing, and
+  nothing is edited after signing. pyHanko validates the app's signed files (intact, whole file).
+  Shipped as 0.3.59.
