@@ -529,6 +529,8 @@ class ScreensTest {
         assertEquals(com.fadysaeed.pdfx.engine.SignState.BROKEN, sig("a", false, true, false).check.state)
     }
 
+    @Test fun backToPage() = viewerShot("34_back_to_page.png") { r -> r.backTo = 36 to 120 }
+
     @Test fun stampTools() = viewerShot("27_stamp_tools.png") { r -> r.showMarking(Tool.STAMP, null) }
 
     @Test

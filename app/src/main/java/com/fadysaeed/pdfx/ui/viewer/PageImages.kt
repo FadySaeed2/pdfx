@@ -25,12 +25,18 @@ data class Tile(val req: TileReq, val image: ImageBitmap)
  * are drawn first; when the reader jumps ahead, unfinished work for old pages is dropped.
  * Memory is held to a fixed pixel budget so a 2,000-page file costs the same as a 10-page one.
  */
-class PageImages(private val session: PdfSession, scope: CoroutineScope) {
-    val images = mutableStateMapOf<Int, ImageBitmap>()
+class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: PageImages? = null) {
+    /**
+     * When the same file is opened again after saving, [seed] is the copy on screen until then: its
+     * page shapes and pictures carry over, so the list of pages never empties for a moment (which
+     * threw the reader back to page 1) and nothing blinks while the pages are drawn again.
+     */
+    private val carried = seed?.takeIf { it.aspects.size == session.pageCount && it.widths.size == session.pageCount }
+    val images = mutableStateMapOf<Int, ImageBitmap>().apply { carried?.images?.toMap()?.let { putAll(it) } }
     /** Width over height for every page; starts as page 1's shape and settles as pages are measured. */
-    val aspects = mutableStateListOf<Float>()
+    val aspects = carried?.aspects?.toList()?.let { mutableStateListOf(*it.toTypedArray()) } ?: mutableStateListOf<Float>()
     /** Page widths in PDF points, to place highlights and selections on the page. */
-    val widths = mutableStateListOf<Float>()
+    val widths = carried?.widths?.toList()?.let { mutableStateListOf(*it.toTypedArray()) } ?: mutableStateListOf<Float>()
     /** At most one sharp patch per page, for whatever is on screen when zoomed in deep. */
     val tiles = mutableStateMapOf<Int, Tile>()
     private val wantedTiles = MutableStateFlow<Pair<Int, List<TileReq>>>(0 to emptyList())
@@ -49,10 +55,13 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope) {
             runCatching { withFrameNanos { } }
             val n = session.pageCount
             if (n == 0) return@launch
-            val firstSize = session.pageSize(0)
-            val first = firstSize.aspect
-            aspects.addAll(List(n) { first })
-            widths.addAll(List(n) { firstSize.width })
+            if (aspects.size != n) {
+                val firstSize = session.pageSize(0)
+                val first = firstSize.aspect
+                aspects.clear(); widths.clear()
+                aspects.addAll(List(n) { first })
+                widths.addAll(List(n) { firstSize.width })
+            }
             // Measure the rest in chunks so rendering can slip in between.
             var start = 0
             while (start < n) {

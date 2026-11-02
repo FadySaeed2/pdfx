@@ -183,7 +183,12 @@ data class OpenRequest(val uri: Uri, val page: Int? = null, val query: String? =
  */
 @OptIn(FlowPreview::class)
 @Composable
-fun ViewerScreen(request: OpenRequest, onClose: (message: String?) -> Unit) {
+fun ViewerScreen(
+    request: OpenRequest,
+    /** For tests: the reader in use (a new one after each save and reopen), and the page in the middle of the screen. */
+    onReader: ((Reader, () -> Int) -> Unit)? = null,
+    onClose: (message: String?) -> Unit,
+) {
     val context = LocalContext.current
     val app = context.applicationContext as PdfxApp
     val library = app.library
@@ -194,6 +199,9 @@ fun ViewerScreen(request: OpenRequest, onClose: (message: String?) -> Unit) {
     var saveError by remember(request) { mutableStateOf<String?>(null) }
     /** A message to show once the file is open again after saving. */
     var notice by remember(request) { mutableStateOf<String?>(null) }
+    /** Carried across a save and reopen: the pages on screen, and the place being read (page, pixels into it). */
+    val carry = remember(request) { arrayOfNulls<PageImages>(1) }
+    var spot by remember(request) { mutableStateOf<Pair<Int, Int>?>(null) }
     val scope = rememberCoroutineScope()
     val fallbackName = remember(request) { library.describe(request.uri).first.removeSuffix(".pdf") }
     val name = doc?.let { LibraryModel.display(it) } ?: fallbackName
@@ -233,7 +241,7 @@ fun ViewerScreen(request: OpenRequest, onClose: (message: String?) -> Unit) {
             val last = (session.pageCount - 1).coerceAtLeast(0)
             val start = remember(request) { (request.page ?: doc?.lastPage ?: 0).coerceIn(0, last) }
             val prefs = remember { context.getSharedPreferences("reader", Context.MODE_PRIVATE) }
-            val reader = remember(session) { Reader(session, session.pageCount, scope, library.bookmarks, doc?.id, prefs) }
+            val reader = remember(session) { Reader(session, session.pageCount, scope, library.bookmarks, doc?.id, prefs, seed = carry[0]).also { carry[0] = null } }
             val pages = reader.pages!!
             LaunchedEffect(reader) {
                 val saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.signatures.list() }.getOrDefault(emptyList()) }
@@ -284,13 +292,25 @@ fun ViewerScreen(request: OpenRequest, onClose: (message: String?) -> Unit) {
                             saved is Saver.Saved.AsCopy -> "$message This file belongs to another app, so the signed copy is in Documents/PDFx."
                             else -> message
                         }
+                        // Keep the place: the new copy starts with these pages and goes back to this spot.
+                        carry[0] = pages
+                        spot = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
                         val old = session
                         load = Load.Ready(fresh)
                         old.close()
                     }
                 }
             }
-            SideEffect { reader.saveNow = { msg -> saveAndReopen(msg) } }
+            SideEffect {
+                reader.saveNow = { msg -> saveAndReopen(msg) }
+                onReader?.invoke(reader) { centreItem(listState) }
+            }
+            LaunchedEffect(reader) {
+                val (i, o) = spot ?: return@LaunchedEffect
+                spot = null
+                kotlinx.coroutines.withTimeoutOrNull(3000) { snapshotFlow { pages.aspects.size }.first { it > i } }
+                if (listState.firstVisibleItemIndex != i || listState.firstVisibleItemScrollOffset != o) listState.scrollToItem(i, o)
+            }
             LaunchedEffect(reader) { notice?.let { reader.problem = it; notice = null } }
             // Going to the background: save, then carry on from the saved file when back.
             LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
@@ -379,6 +399,18 @@ fun ViewerContent(
     }
     fun toggleReflow() = reader.toggleReflow(spot())
 
+    /**
+     * Like tapping the top of the screen on an iPhone: a tap on the file's name glides to the very
+     * start of the file, and offers the way back for a few seconds in case it was a slip.
+     */
+    fun goToStart() {
+        val i = listState.firstVisibleItemIndex
+        val o = listState.firstVisibleItemScrollOffset
+        if (i == 0 && o == 0) return
+        reader.backTo = if (i >= 1) i to o else null
+        scope.launch { listState.animateScrollToItem(0) }
+    }
+
     // After switching between pages and reflowed text, put the reading line back where it was.
     LaunchedEffect(reader.reflow) {
         val (page, frac) = reader.readingSpot ?: return@LaunchedEffect
@@ -392,6 +424,7 @@ fun ViewerContent(
         listState.scrollBy(item.offset + item.size * frac - line)
     }
 
+    LaunchedEffect(reader.backTo) { if (reader.backTo != null) { delay(6000); reader.backTo = null } }
     LaunchedEffect(flash) { val f = flash; if (f != null) { delay(1600L + (f.length - 20).coerceAtLeast(0) * 45L); flash = null } }
     LaunchedEffect(reader.undoNotice) { if (reader.undoNotice != null) { delay(4500); reader.undoNotice = null } }
     LaunchedEffect(reader.problem) { reader.problem?.let { flash = it; reader.problem = null } }
@@ -432,7 +465,7 @@ fun ViewerContent(
                 if (reader.marking) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("Done", style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 15.sp), modifier = Modifier.clickable { reader.stopMarking() }.padding(horizontal = 14.dp, vertical = 12.dp))
-                        Column(Modifier.weight(1f)) {
+                        Column(Modifier.weight(1f).clickable(onClickLabel = "Go to the start of the file") { goToStart() }) {
                             Text("Mark up", style = Type.title)
                             Text(if (reader.dirty) "Saved when you close the file" else name, style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
@@ -444,7 +477,7 @@ fun ViewerContent(
                 } else {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(Glyph.BACK, "Back to library", onBack)
-                        Column(Modifier.weight(1f).padding(end = 4.dp)) {
+                        Column(Modifier.weight(1f).clickable(onClickLabel = "Go to the start of the file") { goToStart() }.padding(end = 4.dp)) {
                             Text(name, style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(if (pageCount == 1) "1 page" else "$pageCount pages", style = Type.small)
                         }
@@ -502,6 +535,21 @@ fun ViewerContent(
             Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars).imePadding().padding(bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            val back = reader.backTo
+            if (back != null) {
+                Row(
+                    Modifier.background(Ink.Field, Corner).border(1.dp, Ink.Amber.copy(alpha = 0.6f), Corner)
+                        .clickable(onClickLabel = "Go back to where you were") {
+                            reader.backTo = null
+                            scope.launch { listState.animateScrollToItem(back.first, back.second) }
+                        }
+                        .padding(horizontal = 16.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Back to page ${back.first + 1}", style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 14.sp))
+                }
+                Spacer(Modifier.height(10.dp))
+            }
             val msg = flash
             if (msg != null) {
                 Text(msg, style = Type.note.copy(color = Ink.Bone), modifier = Modifier.background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(horizontal = 14.dp, vertical = 9.dp))

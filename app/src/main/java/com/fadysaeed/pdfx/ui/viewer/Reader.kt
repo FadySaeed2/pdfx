@@ -133,8 +133,10 @@ class Reader(
     private val bookmarksStore: Bookmarks? = null,
     private val docId: Long? = null,
     private val prefs: android.content.SharedPreferences? = null,
+    /** The pages of the same file from before it was saved and opened again, to carry over. */
+    seed: PageImages? = null,
 ) {
-    val pages: PageImages? = session?.let { PageImages(it, scope) }
+    val pages: PageImages? = session?.let { PageImages(it, scope, seed) }
 
     var mode by mutableStateOf(prefs?.getString("mode", null)?.let { runCatching { PaperMode.valueOf(it) }.getOrNull() } ?: PaperMode.PAPER)
         private set
@@ -165,6 +167,11 @@ class Reader(
      */
     var readingSpot: Pair<Int, Float>? = null
     var chrome by mutableStateOf(true)
+    /**
+     * After a jump to the start of the file: where reading was (page, and pixels into it), offered
+     * for a few seconds as "Back to page N" in case the jump was a slip.
+     */
+    var backTo by mutableStateOf<Pair<Int, Int>?>(null)
     var jump by mutableStateOf<Jump?>(null)
         private set
 
