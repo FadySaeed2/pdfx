@@ -595,6 +595,7 @@ class PdfSession private constructor(
                 w.getObject().put("Lock", lock)
             }
         }
+        if (fieldIndex != null) runCatching { mergeIntoField(d, w) }.onFailure { android.util.Log.w("PdfxSigning", "field left as it was", it) }
         val img = imagePath?.let { runCatching { com.artifex.mupdf.fitz.Image(it) }.getOrNull() }
         try {
             var flags = PDFWidget.SIGNATURE_SHOW_LABELS or PDFWidget.SIGNATURE_SHOW_TEXT_NAME or PDFWidget.SIGNATURE_SHOW_DATE
@@ -605,25 +606,6 @@ class PdfSession private constructor(
         }
         // A field drawn by a separate widget keeps its value on the field itself, where other
         // readers look; MuPDF puts it on the widget, so the field gets it too.
-        // MuPDF shows the reason and place on the page only; readers also look for them in the signature.
-        runCatching {
-            val v = inherited(w.getObject(), "V") ?: return@runCatching
-            if (reason.isNullOrBlank() && location.isNullOrBlank()) return@runCatching
-            d.beginOperation("Signature details")
-            try {
-                if (!reason.isNullOrBlank()) v.put("Reason", d.newString(reason))
-                if (!location.isNullOrBlank()) v.put("Location", d.newString(location))
-                d.endOperation()
-            } catch (t: Throwable) { runCatching { d.abandonOperation() }; throw t }
-        }.onFailure { android.util.Log.w("PdfxSigning", "reason and place not written", it) }
-        runCatching {
-            val o = w.getObject()
-            val parent = o.get("Parent")
-            if (!parent.isNull && o.get("T").isNull && parent.get("FT").asName() == "Sig") {
-                d.beginOperation("Signature value")
-                try { parent.put("V", o.get("V")); d.endOperation() } catch (t: Throwable) { runCatching { d.abandonOperation() }; throw t }
-            }
-        }.onFailure { android.util.Log.w("PdfxSigning", "field value not copied to its parent", it) }
         pendingSigners += signer
         runCatching { page.update() }
         textCache.remove(index)?.let { runCatching { it.destroy() } }
@@ -633,6 +615,36 @@ class PdfSession private constructor(
         refreshFlags()
         dirty = true
         true
+    }
+
+    /**
+     * Some files draw a signature field with a separate widget under it. MuPDF signs the widget, but
+     * other readers look for the signature on the field; so, before signing, the field and its only
+     * widget become one, as most PDF software makes them. Nothing else in the file changes.
+     */
+    private fun mergeIntoField(d: PDFDocument, w: PDFWidget) {
+        val o = w.getObject()
+        val parent = o.get("Parent")
+        if (parent == null || parent.isNull || !o.get("T").isNull) return
+        if (parent.get("FT").asName() != "Sig" || !parent.get("Parent").isNull) return
+        if (parent.get("Kids").size() != 1) return
+        val fields = d.trailer.get("Root").get("AcroForm").get("Fields")
+        val num = parent.asIndirect()
+        if (num <= 0 || o.asIndirect() <= 0) return
+        val at = (0 until fields.size()).firstOrNull { fields.get(it).asIndirect() == num } ?: return
+        d.beginOperation("Signature field")
+        try {
+            for (k in listOf("T", "TU", "TM", "FT", "Ff", "DA", "Q", "Lock", "SV")) {
+                val v = parent.get(k)
+                if (v != null && !v.isNull && o.get(k).isNull) o.put(k, v)
+            }
+            o.delete("Parent")
+            fields.put(at, o)
+            d.endOperation()
+        } catch (t: Throwable) {
+            runCatching { d.abandonOperation() }
+            throw t
+        }
     }
 
     /** True when the file holds digital signatures: changes must then be appended, never rewritten. */
