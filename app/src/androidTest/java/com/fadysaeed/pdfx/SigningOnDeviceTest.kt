@@ -144,6 +144,9 @@ class SigningOnDeviceTest {
         assertTrue("first signature unchanged: ${sigs[0].check.problem}", sigs[0].check.intact)
         assertFalse(sigs[0].check.changedAfter)
         assertTrue(s.hasSignatures())
+        // Other readers look for the value on the field itself, not on the widget that draws it.
+        val raw = first.readText(Charsets.ISO_8859_1)
+        assertTrue("the field holds the signature", Regex("/T\\(doctor_signature\\)[^>]*/V \\d+ 0 R|/V \\d+ 0 R[^>]*/T\\(doctor_signature\\)").containsMatchIn(raw))
         assertEquals("Jane Citizen", s.fields(0).first { it.name == "patient_name" }.value)
 
         // 2. A second signer, in a new place, with a drawn signature as its picture.

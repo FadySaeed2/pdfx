@@ -608,8 +608,11 @@ class PdfSession private constructor(
         runCatching {
             val o = w.getObject()
             val parent = o.get("Parent")
-            if (!parent.isNull && o.get("T").isNull && parent.get("FT").asName() == "Sig") parent.put("V", o.get("V"))
-        }
+            if (!parent.isNull && o.get("T").isNull && parent.get("FT").asName() == "Sig") {
+                d.beginOperation("Signature value")
+                try { parent.put("V", o.get("V")); d.endOperation() } catch (t: Throwable) { runCatching { d.abandonOperation() }; throw t }
+            }
+        }.onFailure { android.util.Log.w("PdfxSigning", "field value not copied to its parent", it) }
         pendingSigners += signer
         runCatching { page.update() }
         textCache.remove(index)?.let { runCatching { it.destroy() } }
