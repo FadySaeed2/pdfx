@@ -603,6 +603,13 @@ class PdfSession private constructor(
         } finally {
             runCatching { img?.destroy() }
         }
+        // A field drawn by a separate widget keeps its value on the field itself, where other
+        // readers look; MuPDF puts it on the widget, so the field gets it too.
+        runCatching {
+            val o = w.getObject()
+            val parent = o.get("Parent")
+            if (!parent.isNull && o.get("T").isNull && parent.get("FT").asName() == "Sig") parent.put("V", o.get("V"))
+        }
         pendingSigners += signer
         runCatching { page.update() }
         textCache.remove(index)?.let { runCatching { it.destroy() } }

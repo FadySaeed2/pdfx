@@ -86,7 +86,8 @@ class P12Signer(private val key: PrivateKey, private val chain: List<X509Certifi
         val gen = CMSSignedDataGenerator()
         gen.addSignerInfoGenerator(JcaSignerInfoGeneratorBuilder(JcaDigestCalculatorProviderBuilder().setProvider(Crypto).build()).build(signer, chain.first()))
         gen.addCertificates(JcaCertStore(chain))
-        return gen.generate(CMSProcessableByteArray(data), false).encoded
+        // DER, with definite lengths: readers (and our own check) find where the signature ends.
+        return gen.generate(CMSProcessableByteArray(data), false).toASN1Structure().getEncoded(org.bouncycastle.asn1.ASN1Encoding.DER)
     }
 
     /** Room MuPDF keeps in the file for the signature: generous, for long chains. */
@@ -185,6 +186,7 @@ private fun trimmed(sig: ByteArray): ByteArray {
     if (sig.size < 4 || sig[0] != 0x30.toByte()) return sig
     // DER length of the outer SEQUENCE.
     val b1 = sig[1].toInt() and 0xFF
+    if (b1 == 0x80) return sig // indefinite length (BER): the parser stops at its end mark by itself
     val (len, head) = if (b1 < 0x80) b1 to 2 else {
         val n = b1 and 0x7F
         var l = 0
@@ -247,7 +249,7 @@ private fun selectorOf(id: org.bouncycastle.cms.SignerId): org.bouncycastle.util
     id as org.bouncycastle.util.Selector<X509CertificateHolder>
 
 /** Where a signature's parts sit in a file: the two signed byte ranges and the hex hole between them. */
-private class SigSlot(val a: Long, val la: Long, val b: Long, val lb: Long, val holeStart: Long, val holeEnd: Long)
+private class SigSlot(val a: Long, val la: Long, val b: Long, val lb: Long, val holeStart: Long, val holeEnd: Long, val rangeAt: Int = -1, val rangeEnd: Int = -1)
 
 private fun indexOf(hay: ByteArray, needle: ByteArray, from: Int): Int {
     var i = from.coerceAtLeast(0)
@@ -271,7 +273,18 @@ private fun slots(bytes: ByteArray): List<SigSlot> {
             while (j < bytes.size && bytes[j] != '['.code.toByte()) j++
             val close = (j until minOf(bytes.size, j + 200)).first { bytes[it] == ']'.code.toByte() }
             val nums = String(bytes, j + 1, close - j - 1, Charsets.ISO_8859_1).trim().split(Regex("\\s+")).map { it.toLong() }
-            if (nums.size == 4) {
+            if (nums.size == 4 && nums.all { it == 2147483647L }) {
+                // MuPDF leaves this placeholder when it writes the whole file afresh: the ranges are
+                // worked out here from where the hex string sits, as MuPDF does when appending.
+                val c = indexOf(bytes, ct, close)
+                if (c in 0..(close + 400)) {
+                    var lt = c + ct.size
+                    while (lt < bytes.size && bytes[lt] != '<'.code.toByte()) lt++
+                    var gt = lt + 1
+                    while (gt < bytes.size && bytes[gt] != '>'.code.toByte()) gt++
+                    if (gt < bytes.size) out += SigSlot(0, lt.toLong(), gt + 1L, bytes.size - (gt + 1L), lt + 1L, gt.toLong(), j, close)
+                }
+            } else if (nums.size == 4) {
                 // The hole is the hex string the first range stops at.
                 val lt = nums[0] + nums[1]
                 val gt = nums[2] - 1
@@ -316,6 +329,16 @@ fun completeSignatures(path: String, signers: List<P12Signer>) {
             val signer = left.firstOrNull { m -> inside.size >= m.marker.size && inside.copyOf(m.marker.size).contentEquals(m.marker) }
                 ?: if (empty) left.first() else null
             signer ?: continue
+            if (slot.rangeAt >= 0) {
+                // Write the real ranges over the placeholder, padded with spaces, before signing.
+                val text = "[${slot.a} ${slot.la} ${slot.b} ${slot.lb}]"
+                val room = slot.rangeEnd - slot.rangeAt + 1
+                require(text.length <= room) { "The signature's place in the file is too small." }
+                val fill = (text + " ".repeat(room - text.length)).toByteArray(Charsets.ISO_8859_1)
+                System.arraycopy(fill, 0, bytes, slot.rangeAt, room)
+                raf.seek(slot.rangeAt.toLong())
+                raf.write(fill)
+            }
             val data = ByteArray((slot.la + slot.lb).toInt())
             System.arraycopy(bytes, slot.a.toInt(), data, 0, slot.la.toInt())
             System.arraycopy(bytes, slot.b.toInt(), data, slot.la.toInt(), slot.lb.toInt())
