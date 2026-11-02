@@ -74,13 +74,19 @@ internal class ShapeDevice : Device() {
 
     private fun rgb(cs: ColorSpace?, color: FloatArray?): FloatArray {
         val c = color ?: return floatArrayOf(0f, 0f, 0f)
-        val n = runCatching { cs?.numberOfComponents ?: c.size }.getOrDefault(c.size)
+        if (c.isEmpty()) return floatArrayOf(0f, 0f, 0f)
+        fun gray(v: Float) = floatArrayOf(v, v, v)
+        fun kind(f: ColorSpace.() -> Boolean) = runCatching { cs?.f() == true }.getOrDefault(false)
         return when {
-            n == 1 && c.isNotEmpty() -> floatArrayOf(c[0], c[0], c[0])
-            n == 3 && c.size >= 3 -> floatArrayOf(c[0], c[1], c[2])
-            n == 4 && c.size >= 4 -> floatArrayOf((1 - c[0]) * (1 - c[3]), (1 - c[1]) * (1 - c[3]), (1 - c[2]) * (1 - c[3]))
-            c.isNotEmpty() -> (1 - c[0]).let { floatArrayOf(it, it, it) } // a spot colour: its tint
-            else -> floatArrayOf(0f, 0f, 0f)
+            cs == null -> gray(0f)
+            kind { isRGB } && c.size >= 3 -> floatArrayOf(c[0], c[1], c[2])
+            kind { isGray } -> gray(c[0])
+            kind { isCMYK } && c.size >= 4 -> floatArrayOf((1 - c[0]) * (1 - c[3]), (1 - c[1]) * (1 - c[3]), (1 - c[2]) * (1 - c[3]))
+            kind { isLab } -> gray((c[0] / 100f).coerceIn(0f, 1f))
+            kind { isIndexed } -> gray(0.5f)
+            // A spot colour (Separation, DeviceN): its values are amounts of ink, so more is darker.
+            // How dark the ink itself is the file does not say here; a full tint counts as dark.
+            else -> gray(1f - 0.85f * c.max().coerceIn(0f, 1f))
         }
     }
 
