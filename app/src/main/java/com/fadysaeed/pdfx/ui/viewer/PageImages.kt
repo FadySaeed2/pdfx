@@ -2,6 +2,8 @@ package com.fadysaeed.pdfx.ui.viewer
 
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.fadysaeed.pdfx.engine.PdfSession
@@ -31,12 +33,12 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
      * page shapes and pictures carry over, so the list of pages never empties for a moment (which
      * threw the reader back to page 1) and nothing blinks while the pages are drawn again.
      */
-    private val carried = seed?.takeIf { it.aspects.size == session.pageCount && it.widths.size == session.pageCount }
-    val images = mutableStateMapOf<Int, ImageBitmap>().apply { carried?.images?.toMap()?.let { putAll(it) } }
+    private val carried: PageImages? = seed?.takeIf { it.aspects.size == session.pageCount && it.widths.size == session.pageCount }
+    val images: SnapshotStateMap<Int, ImageBitmap> = mutableStateMapOf<Int, ImageBitmap>().apply { carried?.images?.toMap()?.let { putAll(it) } }
     /** Width over height for every page; starts as page 1's shape and settles as pages are measured. */
-    val aspects = carried?.aspects?.toList()?.let { mutableStateListOf(*it.toTypedArray()) } ?: mutableStateListOf<Float>()
+    val aspects: SnapshotStateList<Float> = mutableStateListOf<Float>().apply { carried?.aspects?.toList()?.let { addAll(it) } }
     /** Page widths in PDF points, to place highlights and selections on the page. */
-    val widths = carried?.widths?.toList()?.let { mutableStateListOf(*it.toTypedArray()) } ?: mutableStateListOf<Float>()
+    val widths: SnapshotStateList<Float> = mutableStateListOf<Float>().apply { carried?.widths?.toList()?.let { addAll(it) } }
     /** At most one sharp patch per page, for whatever is on screen when zoomed in deep. */
     val tiles = mutableStateMapOf<Int, Tile>()
     private val wantedTiles = MutableStateFlow<Pair<Int, List<TileReq>>>(0 to emptyList())
