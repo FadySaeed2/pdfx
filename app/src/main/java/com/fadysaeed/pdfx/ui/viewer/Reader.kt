@@ -381,7 +381,7 @@ class Reader(
     private var formOrder: List<com.fadysaeed.pdfx.engine.Field>? = null
 
     init {
-        if (session != null) { checkForm(); loadSignatures() }
+        if (session != null) checkForm()
     }
 
     fun checkForm() {
@@ -531,6 +531,11 @@ class Reader(
             val found = runCatching { s.signatures() }.getOrDefault(emptyList())
             docSignatures.clear(); docSignatures.addAll(found)
         }
+    }
+
+    // Declared after the lists it fills, so they exist when it runs.
+    init {
+        if (session != null) loadSignatures()
     }
 
     /** Opens the sign dialog for a digital signature at (x, y), or in a signature field's [into]. */
