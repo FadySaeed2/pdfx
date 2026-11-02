@@ -105,6 +105,8 @@ internal class ShapeDevice : Device() {
             })
         }
         flush()
+        // Done with it now, rather than whenever the collector gets to it.
+        runCatching { p.destroy() }
     }
 
     override fun strokePath(path: Path?, stroke: StrokeState?, ctm: Matrix?, cs: ColorSpace?, color: FloatArray?, alpha: Float, cp: Int) {
@@ -124,6 +126,7 @@ internal class ShapeDevice : Device() {
                 override fun closePath() { val s = start; val l = last; if (s != null && l != null) seg(l, s); last = s }
             })
         }
+        runCatching { p.destroy() }
     }
 
     override fun close() {}
@@ -157,21 +160,18 @@ internal class ShapeDevice : Device() {
 
 /** What the table finder reads from a page: its characters and its drawn shapes. */
 internal fun tableInput(page: Page): PageInput {
-    // The page's own contents only: a highlight or a note the reader added is not part of a table.
-    val list = page.toDisplayList(false)
+    val st = page.toStructuredText(TABLE_TEXT_OPTIONS)
     val walker = CharWalker()
+    try { st.walk(walker) } finally { runCatching { st.destroy() } }
+    // The page's own drawing only, run straight from the page: a highlight the reader added is not
+    // part of a table. (Not through a display list: its paths are packed and freed with the list,
+    // and the Java wrappers MuPDF hands the device would later free them again.)
     val dev = ShapeDevice()
     try {
-        val st = list.toStructuredText(TABLE_TEXT_OPTIONS)
-        try { st.walk(walker) } finally { runCatching { st.destroy() } }
-        try {
-            runCatching { list.run(dev, Matrix(), null) }
-            runCatching { dev.close() }
-        } finally {
-            runCatching { dev.destroy() }
-        }
+        runCatching { page.runPageContents(dev, Matrix(), null) }
+        runCatching { dev.close() }
     } finally {
-        runCatching { list.destroy() }
+        runCatching { dev.destroy() }
     }
     val b = page.bounds
     return PageInput(b.x1 - b.x0, b.y1 - b.y0, walker.chars, dev.shapes)
