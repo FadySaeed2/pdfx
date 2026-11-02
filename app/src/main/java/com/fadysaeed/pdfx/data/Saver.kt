@@ -53,7 +53,7 @@ class Saver(private val library: Library) {
                 val tmp = File(f.parentFile, ".${f.name}.pdfx-saving")
                 tmp.delete()
                 try {
-                    val incremental = session.canSaveIncrementally
+                    val incremental = session.canSaveIncrementally()
                     if (incremental) f.copyTo(tmp, overwrite = true)
                     session.writeTo(tmp.absolutePath, incremental)
                     check(tmp, session.pageCount)
@@ -75,7 +75,7 @@ class Saver(private val library: Library) {
                 try {
                     // Start from the original's own bytes and append the changes when possible, so a
                     // signed file keeps its signatures valid; otherwise write the whole file afresh.
-                    val appended = session.canSaveIncrementally && runCatching {
+                    val appended = session.canSaveIncrementally() && runCatching {
                         library.context.contentResolver.openInputStream(uri)?.use { i -> tmp.outputStream().use { i.copyTo(it) } } != null
                     }.getOrDefault(false)
                     session.writeTo(tmp.absolutePath, incremental = appended)

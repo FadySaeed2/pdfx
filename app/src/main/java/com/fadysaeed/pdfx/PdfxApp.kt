@@ -23,6 +23,11 @@ class PdfxApp : Application() {
     val signatures: com.fadysaeed.pdfx.data.Signatures by lazy { com.fadysaeed.pdfx.data.Signatures(filesDir) }
     val certificates: com.fadysaeed.pdfx.data.Certificates by lazy { com.fadysaeed.pdfx.data.Certificates(filesDir) }
     private val scanLock = Mutex()
+
+    override fun onCreate() {
+        super.onCreate()
+        com.fadysaeed.pdfx.data.CrashReports.install(this)
+    }
     private var prepared = false
     @Volatile private var lastScan = 0L
 

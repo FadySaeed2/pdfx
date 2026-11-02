@@ -987,7 +987,8 @@ class PdfSession private constructor(
         true
     }
 
-    val canSaveIncrementally: Boolean get() = runCatching { pdf?.canBeSavedIncrementally() ?: false }.getOrDefault(false)
+    /** Whether changes can be appended to the original; asked on the document's own thread. */
+    suspend fun canSaveIncrementally(): Boolean = onDoc { runCatching { pdf?.canBeSavedIncrementally() ?: false }.getOrDefault(false) }
 
     /**
      * Writes the document to [path]. Incremental saving appends only the changes, so [path] must
@@ -1068,9 +1069,18 @@ class PdfSession private constructor(
         dispatcher.close()
     }
 
+    /**
+     * Runs [block] on the document's own thread. Once the document is closed, waiting work is
+     * dropped as cancelled (quietly, like a screen that has gone away), and the check is made again
+     * on the thread itself: a page still drawing when the file is saved and opened again must never
+     * reach a document that is already freed, which crashed the app.
+     */
     private suspend fun <T> onDoc(block: () -> T): T {
-        check(!closed) { "Document is closed" }
-        return withContext(dispatcher) { block() }
+        if (closed) throw kotlinx.coroutines.CancellationException("Document is closed")
+        return withContext(dispatcher) {
+            if (closed || Thread.currentThread().name != "pdfx-doc") throw kotlinx.coroutines.CancellationException("Document is closed")
+            block()
+        }
     }
 
     companion object {

@@ -20,6 +20,7 @@ import com.fadysaeed.pdfx.ui.library.Notice
 import com.fadysaeed.pdfx.ui.viewer.OpenRequest
 import com.fadysaeed.pdfx.ui.viewer.ViewerScreen
 import android.content.Intent
+import androidx.compose.ui.unit.dp
 
 /** The library and an open document. A file handed over by another app opens straight away. */
 @Composable
@@ -30,6 +31,30 @@ fun PdfxRoot(incoming: Uri?, onIncomingHandled: () -> Unit) {
     var open by rememberSaveable(stateSaver = OpenRequest.Saver) { mutableStateOf<OpenRequest?>(null) }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
+
+    // If PDFx closed unexpectedly last time, offer the report so it can be passed on.
+    var crash by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        crash = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { com.fadysaeed.pdfx.data.CrashReports.pending(context) }.getOrNull() }
+    }
+    crash?.let { report ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { crash = null },
+            containerColor = com.fadysaeed.pdfx.ui.theme.Ink.Field,
+            shape = androidx.compose.ui.graphics.RectangleShape,
+            title = { androidx.compose.material3.Text("PDFx closed unexpectedly", style = com.fadysaeed.pdfx.ui.theme.Type.title) },
+            text = { androidx.compose.material3.Text("A report of what went wrong is kept on this phone. Share it to get the problem fixed; nothing is sent unless you send it.", style = com.fadysaeed.pdfx.ui.theme.Type.note) },
+            confirmButton = {
+                com.fadysaeed.pdfx.ui.components.AmberButton("Share report", {
+                    crash = null
+                    runCatching {
+                        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "PDFx crash report").putExtra(Intent.EXTRA_TEXT, report), null))
+                    }
+                })
+            },
+            dismissButton = { com.fadysaeed.pdfx.ui.components.GhostButton("Not now", { crash = null }, minHeight = 52.dp) },
+        )
+    }
 
     fun keep(uri: Uri) {
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }

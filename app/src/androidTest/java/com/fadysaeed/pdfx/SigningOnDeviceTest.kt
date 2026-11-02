@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -52,7 +53,7 @@ class SigningOnDeviceTest {
     /** Saves the way the app does: appended to an exact copy of the original when possible. */
     private suspend fun saveCopy(s: PdfSession, original: File, name: String): File {
         val out = File(ctx.cacheDir, "${System.nanoTime()}-$name")
-        val inc = s.canSaveIncrementally
+        val inc = s.canSaveIncrementally()
         if (inc) original.copyTo(out, overwrite = true)
         val r = runCatching { s.writeTo(out.absolutePath, inc) }
         Log.i(tag, "$name saved, incremental=$inc, ${out.length()} bytes")
@@ -239,6 +240,57 @@ class SigningOnDeviceTest {
         } finally {
             scope.cancel()
             s.close()
+        }
+    }
+
+    /**
+     * The app's own path, as Fady uses it: a file in the library opened by its Uri, pages drawing
+     * the whole time, signed, saved by the Saver, opened again, and the old copy closed while a
+     * page may still be drawing. This crashed the app on the phone.
+     */
+    @Test
+    fun signsSavesAndReopensWhilePagesDraw() = runBlocking<Unit> {
+        val root = File(ctx.cacheDir, "lib-${System.nanoTime()}").apply { mkdirs() }
+        val f = File(root, "Letter.pdf")
+        asset("signable.pdf").copyTo(f, overwrite = true)
+        val db = com.fadysaeed.pdfx.data.LibraryDb.inMemory(ctx)
+        val lib = com.fadysaeed.pdfx.data.Library(ctx, db, root, allFilesAccess = { true })
+        lib.scan()
+        val doc = db.dao().all().single()
+        val uri = android.net.Uri.fromFile(f)
+        val store = Certificates(File(ctx.cacheDir, "certs-${System.nanoTime()}"))
+        val mine = store.create("Phone Test", "", "", "secret9".toCharArray(), remember = true)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        var crashed: Throwable? = null
+        val guard = kotlinx.coroutines.CoroutineExceptionHandler { _, t -> crashed = t }
+        val s = PdfSession.open(ctx, uri)
+        try {
+            // Pages keep drawing, as on screen, and nothing catches what goes wrong.
+            val drawing = scope.launch(guard) { while (true) { s.render(0, 1080); s.marks(0) } }
+            val reader = Reader(s, s.pageCount, scope)
+            var message: String? = null
+            reader.saveNow = { message = it }
+            reader.certs.add(mine)
+            reader.pickDigital(true)
+            reader.placeSign(0, 400f, 600f)
+            val (bytes, pw) = store.open(mine.id)
+            assertTrue(reader.signDigitally(reader.digitalAsk!!, P12Signer.open(bytes, pw!!), null, "Checked", "Perth"))
+            assertEquals("Signed digitally and saved.", message)
+            val saved = com.fadysaeed.pdfx.data.Saver(lib).save(s, doc, uri).getOrThrow()
+            assertTrue(saved is com.fadysaeed.pdfx.data.Saver.Saved.InPlace)
+            val fresh = PdfSession.open(ctx, uri)
+            s.close()
+            delay(600)
+            assertTrue("drawing stops quietly once the old copy is closed", drawing.isCompleted)
+            assertEquals("nothing escaped: $crashed", null, crashed)
+            val sig = fresh.signatures().single()
+            assertTrue("signed and unchanged: ${sig.check.problem}", sig.check.intact)
+            assertEquals("Phone Test", sig.check.signer.name)
+            save(fresh.render(0, 595), "42-signed-through-the-app.png")
+            fresh.close()
+        } finally {
+            scope.cancel()
+            db.close()
         }
     }
 
