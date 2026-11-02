@@ -54,8 +54,10 @@ class SigningOnDeviceTest {
         val out = File(ctx.cacheDir, "${System.nanoTime()}-$name")
         val inc = s.canSaveIncrementally
         if (inc) original.copyTo(out, overwrite = true)
-        s.writeTo(out.absolutePath, inc)
+        val r = runCatching { s.writeTo(out.absolutePath, inc) }
         Log.i(tag, "$name saved, incremental=$inc, ${out.length()} bytes")
+        if (out.exists()) out.copyTo(File(shots, name), overwrite = true) // for a look from outside
+        r.getOrThrow()
         return out
     }
 
@@ -189,7 +191,9 @@ class SigningOnDeviceTest {
         val s = PdfSession.openFile(f.absolutePath)
         assertTrue(s.signDigitally(0, Box(300f, 700f, 520f, 770f), null, P12Signer.open(store.open(mine.id).first, "secret9".toCharArray()), null, "", ""))
         val out = File(ctx.cacheDir, "fresh-${System.nanoTime()}.pdf")
-        s.writeTo(out.absolutePath, incremental = false)
+        val r = runCatching { s.writeTo(out.absolutePath, incremental = false) }
+        if (out.exists()) out.copyTo(File(shots, "signed-fresh.pdf"), overwrite = true)
+        r.getOrThrow()
         s.close()
         val again = PdfSession.openFile(out.absolutePath)
         try {
