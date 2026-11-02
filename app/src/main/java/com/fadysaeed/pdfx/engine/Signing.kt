@@ -157,7 +157,7 @@ fun readSignature(sig: ByteArray): Triple<X509Certificate?, Long?, List<X509Cert
     val conv = JcaX509CertificateConverter().setProvider(Crypto)
     val certs = cms.certificates.getMatches(null).map { conv.getCertificate(it) }
     val info = cms.signerInfos.signers.firstOrNull()
-    val holder = info?.let { si -> cms.certificates.getMatches(si.sid).firstOrNull() }
+    val holder = info?.let { si -> cms.certificates.getMatches(selectorOf(si.sid)).firstOrNull() }
     val cert = holder?.let { conv.getCertificate(it) } ?: certs.firstOrNull()
     val t = info?.signedAttributes?.get(CMSAttributes.signingTime)?.attrValues?.getObjectAt(0)?.let { v ->
         when (v) {
@@ -201,7 +201,7 @@ class CmsVerifier : PKCS7Verifier() {
         val data = readAll(stream)
         val cms = CMSSignedData(CMSProcessableByteArray(data), trimmed(signature))
         val si = cms.signerInfos.signers.firstOrNull() ?: return@runCatching PKCS7VerifierNoSignature
-        val holder = cms.certificates.getMatches(si.sid).firstOrNull() ?: return@runCatching PKCS7VerifierNoCertificate
+        val holder = cms.certificates.getMatches(selectorOf(si.sid)).firstOrNull() ?: return@runCatching PKCS7VerifierNoCertificate
         val cert = JcaX509CertificateConverter().setProvider(Crypto).getCertificate(holder)
         if (si.verify(JcaSimpleSignerInfoVerifierBuilder().setProvider(Crypto).build(cert))) PKCS7VerifierOK else PKCS7VerifierDigestFailure
     }.getOrDefault(PKCS7VerifierDigestFailure)
@@ -216,3 +216,8 @@ class CmsVerifier : PKCS7Verifier() {
         }
     }
 }
+
+/** A signer's id picks out its certificate; BouncyCastle declares it untyped. */
+@Suppress("UNCHECKED_CAST")
+private fun selectorOf(id: org.bouncycastle.cms.SignerId): org.bouncycastle.util.Selector<X509CertificateHolder> =
+    id as org.bouncycastle.util.Selector<X509CertificateHolder>
