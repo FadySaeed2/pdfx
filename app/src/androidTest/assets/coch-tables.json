@@ -1,0 +1,870 @@
+[
+ {
+  "page": 3,
+  "pages": [
+   3
+  ],
+  "number": "1",
+  "caption": "Table 1 Characteristics of trials available for quantitative analyses (22 randomised controlled trials, reporting on 26 placebo-controlled comparisons)",
+  "kind": "cards",
+  "header": [
+   "Study",
+   "Country",
+   "Gender (% female)",
+   "Age (years), mean",
+   "Sample population comorbidity",
+   "Concomitant medication allowed",
+   "Setting",
+   "Design",
+   "Duration",
+   "Sample size",
+   "Intervention",
+   "Comparator",
+   "Outcomes relevant to this review"
+  ],
+  "rows": [
+   {
+    "group": true,
+    "cells": [
+     "Antipsychotics versus placebo",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     ""
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Black et al^44^",
+     "USA",
+     "70.53",
+     "29.5",
+     "Mood disorders, anxiety disorders, substance misuse and other Axis 1 disorders",
+     "Benzodiazepines and anticholinergics were allowed",
+     "Out-patient",
+     "Parallel",
+     "8 weeks",
+     "95",
+     "Quetiapine",
+     "Placebo",
+     "Depressive symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Bogenschutz and Nurnberg^45^",
+     "USA",
+     "62.50",
+     "32.6",
+     "Mean of 2.9 SCID-II personality disorders (including BPD) and a mean of 2.2 Axis 1 diagnoses",
+     "Medication for stable, chronic medical conditions such as hypertension",
+     "Out-patient",
+     "Parallel",
+     "12 weeks",
+     "40",
+     "Olanzapine (2.5–20 mg/d), most 5–10 mg/d, mean at end-point 6.9 mg/d (s.d. 3.2)",
+     "Placebo",
+     "Anxiety symptoms Psychotic symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Cowdry and Gardner^46^",
+     "USA",
+     "100",
+     "31.6",
+     "Other Axis 2 personality disorders (dependent, avoidant, histrionic schizotypal, narcissistic and paranoid), and Axis 1 disorders (atypical bipolar disorder, major depressive episode with and without melancholia, dysthymia)",
+     "Unclear, no information",
+     "Out-patient",
+     "Cross-over, multi-arm",
+     "6 weeks",
+     "16^c^",
+     "Trifluoperazine hydrochloride",
+     "Placebo",
+     "Depressive symptoms Anxiety symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Crawford et al^28^",
+     "UK",
+     "76%",
+     "30.0",
+     "High rates of personality disorder comorbidity (90% were rated as having a moderate or severe personality disorder (SASPD criteria))",
+     "No restrictions on the use of other treatments",
+     "In-patient (forensic setting)",
+     "Parallel",
+     "12 weeks",
+     "29",
+     "Clonidine",
+     "Placebo",
+     "Dissociation/psychotic-like symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Goldberg et al^47^",
+     "USA",
+     "58",
+     "32",
+     "Schizotypal personality disorder^a^",
+     "Unclear, no information",
+     "Out-patient",
+     "Parallel",
+     "12 weeks",
+     "40",
+     "Thiothixene",
+     "Placebo",
+     "Depressive symptoms Anxiety symptoms Psychotic symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Grant et al^48^",
+     "USA",
+     "53.6",
+     "39.7",
+     "Anxiety disorder, mood disorder, eating disorder, ADHD",
+     "Allowed as prescribed (antidepressants, mood stabilisers and stimulants)",
+     "Out-patient",
+     "Parallel",
+     "12 weeks",
+     "80",
+     "Brexpiprazole",
+     "Placebo",
+     "Depressive symptoms Anxiety symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Linehan et al^49^",
+     "USA",
+     "100",
+     "36.8",
+     "Unclear, no information",
+     "Unclear, no information",
+     "Out-patient",
+     "Parallel",
+     "24 weeks",
+     "24",
+     "Olanzapine (2.5–15 mg/d, mean final dose 4.46, s.d. 1.16) plus DBT",
+     "Placebo plus DBT",
+     "Depressive symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Nickel et al^50^",
+     "Germany",
+     "82.69",
+     "21.65",
+     "Depressive disorders, anxiety disorders, obsessive–compulsive disorders and somatoform disorders",
+     "Not allowed",
+     "Out-patient",
+     "Parallel",
+     "8 weeks",
+     "52",
+     "Aripiprazole",
+     "Placebo",
+     "Depressive symptoms Anxiety symptoms Psychotic symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Pascual et al^51^",
+     "Spain",
+     "81.67",
+     "29.2",
+     "Unclear, there is no information on population comorbidity.\nHowever, many psychiatric disorders were excluded",
+     "It was allowed to continue with benzodiazepine (maximum of 40 mg/d), antidepressants and mood stabilisers if initiated before inclusion; doses could not be modified",
+     "Out-patient",
+     "Parallel",
+     "12 weeks",
+     "60",
+     "Ziprasidone",
+     "Placebo",
+     "Depressive symptoms Anxiety symptoms Psychotic symptoms"
+    ]
+   }
+  ],
+  "notes": []
+ },
+ {
+  "page": 4,
+  "pages": [
+   4
+  ],
+  "number": "1",
+  "caption": "Table 1 (Continued)",
+  "kind": "cards",
+  "header": [
+   "Study",
+   "Country",
+   "Gender (% female)",
+   "Age (years), mean",
+   "Sample population comorbidity",
+   "Concomitant medication allowed",
+   "Setting",
+   "Design",
+   "Duration",
+   "Sample size",
+   "Intervention",
+   "Comparator",
+   "Outcomes relevant to this review"
+  ],
+  "rows": [
+   {
+    "group": false,
+    "cells": [
+     "Schulz et al^65^",
+     "Belgium, France, Germany, Norway, Portugal, Spain, Sweden, UK and USA",
+     "71.02",
+     "31.81",
+     "No apparent comorbidity (based on exclusion criteria)",
+     "No medications with primarily CNS activity (except for protocol-specified benzodiazepines and hypnotics)",
+     "Out-patient",
+     "Parallel",
+     "12 weeks",
+     "314",
+     "Olanzapine (2.5–20 mg/d, mean final dose 7.09 mg/d, s.d. 5.11)",
+     "Placebo",
+     "Depressive symptoms Psychotic symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Soler et al^52^",
+     "Spain",
+     "86.57",
+     "40.74",
+     "No apparent comorbidity, (e.g. patients with unstable comorbid Axis 1 disorders were excluded)",
+     "Treatment with benzodiazepines, antidepressants and mood stabilisers could be continued, but doses could not be modified during the trial",
+     "Out-patient",
+     "Parallel",
+     "12 weeks",
+     "60",
+     "Olanzapine plus DBT",
+     "Placebo plus DBT",
+     "Depressive symptoms Anxiety symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Soloff et al^53^",
+     "USA",
+     "75.56",
+     "25.1",
+     "Comorbid schizotypal personality disorder^^^^",
+     "Biperiden hydrochloride (2 mg)",
+     "In-patient",
+     "Parallel, multi-arm",
+     "5 weeks",
+     "90",
+     "Haloperidol (amitriptyline)",
+     "Placebo",
+     "Anxiety Depression Dissociation/psychosis"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Cornelius et al^54^",
+     "USA",
+     "75.93",
+     "26.7",
+     "Major depressive disorder",
+     "Not allowed",
+     "In- and out-patients",
+     "Parallel, multi-arm",
+     "5 weeks",
+     "108",
+     "Haloperidol (phenelzine sulphate)",
+     "Placebo",
+     "Depression Anxiety Dissociation/psychosis"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Zanarini et al^66^",
+     "Argentina, Chile, Italy, Peru, Poland, Romania, Turkey, USA and Venezuela",
+     "73.61",
+     "32.98",
+     "Mood disorders, substance use disorders, anxiety disorders, eating disorders and Axis 2 disorders besides BPD",
+     "Benzodiazepines, hypnotics, lorazepam and episodic use of anticholinergics, benztropine mesylate, biperiden or trihexyphenidyl allowed during trial at specific doses; however, prophylactic use of anticholinergics was not allowed",
+     "Out-patient",
+     "Parallel",
+     "12 weeks",
+     "301^b^",
+     "Olanzapine (5–10 mg/d, mean dose 6.66 mg/d)",
+     "Placebo",
+     "Depression Dissociation/psychosis"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Ziegenhorn et al^55c^",
+     "Germany",
+     "94.44",
+     "32",
+     "88% had comorbid disorders: PTSD, eating disorders and/or substance misuse",
+     "Stable psychotropic medication regimen of up to three psychotropic drugs allowed",
+     "In-patient",
+     "Cross-over",
+     "18 weeks",
+     "18",
+     "Clonidine",
+     "Placebo",
+     "Depression Dissociation/psychosis"
+    ]
+   },
+   {
+    "group": true,
+    "cells": [
+     "Anticonvulsants versus placebo",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     ""
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Cowdry and Gardner^46^",
+     "USA",
+     "100",
+     "31.6",
+     "Other Axis 2 personality disorders (dependent, avoidant, histrionic schizotypal, narcissistic and paranoid), and Axis 1 disorders (atypical bipolar disorder, major depressive episode with and without melancholia, dysthymia)",
+     "Unclear, no information",
+     "Out-patient",
+     "Cross-over, multi-arm",
+     "6 weeks",
+     "16^c^",
+     "Carbamazepine",
+     "Placebo",
+     "Depressive symptoms Anxiety symptoms"
+    ]
+   }
+  ],
+  "notes": []
+ },
+ {
+  "page": 5,
+  "pages": [
+   5
+  ],
+  "number": "1",
+  "caption": "Table 1 (Continued)",
+  "kind": "cards",
+  "header": [
+   "Study",
+   "Country",
+   "Gender (% female)",
+   "Age (years), mean",
+   "Sample population comorbidity",
+   "Concomitant medication allowed",
+   "Setting",
+   "Design",
+   "Duration",
+   "Sample size",
+   "Intervention",
+   "Comparator",
+   "Outcomes relevant to this review"
+  ],
+  "rows": [
+   {
+    "group": false,
+    "cells": [
+     "Crawford et al^56^",
+     "UK",
+     "75.36",
+     "36.1",
+     "Unclear, there is no information on population comorbidity.\nHowever, many psychiatric disorders were exclusion criteria",
+     "Mood stabilisers were not allowed, no further information",
+     "In- and out-patients",
+     "Parallel",
+     "52 weeks",
+     "276",
+     "Lamotrigine plus usual care",
+     "Placebo plus usual care",
+     "Depressive symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "De la Fuente and Lotstra^57^",
+     "Belgium",
+     "70",
+     "32.7",
+     "Unclear, no information",
+     "Not allowed",
+     "In-patient",
+     "Parallel",
+     "4 weeks",
+     "20",
+     "Carbamazepine",
+     "Placebo",
+     "Depressive symptoms Anxiety symptoms Psychotic symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Frankenburg and Zanarini^58^",
+     "USA",
+     "100",
+     "26.85",
+     "Bipolar disorder type 2",
+     "Psychotropics not allowed",
+     "Out-patient",
+     "Parallel",
+     "24 weeks",
+     "30",
+     "Valproate semisodium",
+     "Placebo",
+     "Depressive symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Hollander et al^59^",
+     "USA",
+     "52.38",
+     "38.6",
+     "Unclear, no information",
+     "Unclear, no information",
+     "Out-patient",
+     "Parallel",
+     "10 weeks",
+     "21^a^",
+     "Valproate semisodium",
+     "Placebo",
+     "Depressive symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Loew et al^60^",
+     "Germany",
+     "100",
+     "25.25",
+     "Unclear, no information",
+     "Psychotropics not allowed",
+     "Out-patient",
+     "Parallel",
+     "10 weeks",
+     "56",
+     "Topiramate",
+     "Placebo",
+     "Depressive symptoms Anxiety symptoms Psychotic symptoms"
+    ]
+   },
+   {
+    "group": true,
+    "cells": [
+     "Antidepressants versus placebo",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     ""
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Cowdry and Gardner^46^",
+     "USA",
+     "100",
+     "31.6",
+     "Other Axis 2 personality disorders (dependent, avoidant, histrionic schizotypal, narcissistic and paranoid), and Axis 1 disorders (atypical bipolar disorder, major depressive episode with and without melancholia, dysthymia)",
+     "Unclear, no information",
+     "Out-patient",
+     "Cross-over, multi-arm",
+     "6 weeks",
+     "16^c^",
+     "Tranylcypromine sulfate",
+     "Placebo",
+     "Depressive symptoms Anxiety symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Salzman et al^61^",
+     "USA",
+     "63.64^d^",
+     "36.3",
+     "Unclear, no information",
+     "Psychotropics not allowed",
+     "Out-patient",
+     "Parallel",
+     "12 weeks",
+     "22",
+     "Fluoxetine",
+     "Placebo",
+     "Depressive symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Simpson et al^62^",
+     "USA",
+     "100",
+     "36.26",
+     "Comorbid Axis I pathology. No further information",
+     "Trazodone 50–100 mg/d for insomnia",
+     "In- and out-patient",
+     "Parallel",
+     "12 weeks",
+     "25",
+     "Fluoxetine plus DBT",
+     "Placebo plus DBT",
+     "Anxiety symptoms Psychotic symptoms"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Soloff et al^53^",
+     "USA",
+     "75.56",
+     "25.1",
+     "Comorbid schizotypal personality disorder^^^^",
+     "Biperiden hydrochloride (2 mg)",
+     "In-patient",
+     "Parallel, multi-arm",
+     "5 weeks",
+     "90",
+     "Amitriptyline (haloperidol)",
+     "Placebo",
+     "Anxiety Depression Dissociation/psychosis"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Cornelius et al^54^",
+     "USA",
+     "75.93",
+     "26.7",
+     "Major depressive disorder",
+     "Not allowed",
+     "In- and out-patients",
+     "Parallel, multi-arm",
+     "5 weeks",
+     "108",
+     "Phenelzine sulphate (haloperidol)",
+     "Placebo",
+     "Depression Anxiety Dissociation/psychosis"
+    ]
+   }
+  ],
+  "notes": [
+   "SCID-II, Structured Clinical Interview for DSM personality disorders; BPD, borderline personality disorder; SASPD, Standardised Assessment of Severity of Personality Disorder; ADHD, attention-deficit hyperactivity disorder; DBT, dialectical behavioural therapy; CNS, central nervous system; PTSD, post-traumatic stress disorder; ^^, inclusion criteria to enter the trial.",
+   "a. Initially, 21 participants entered the trial, and only 16 were randomised to a treatment group. No explanation for this was reported.",
+   "b. Trial had three arms with an overall sample size of 451, the sample size reported in this table is for the olanzapine 5–10 mg/d arm and placebo arm only.",
+   "c. Only included in secondary sensitivity analyses (cross-over trial with only end-of-period data available).",
+   "d. Completers only."
+  ]
+ },
+ {
+  "page": 6,
+  "pages": [
+   6
+  ],
+  "number": "2",
+  "caption": "Effects of medications on co-occurring depressive, anxiety and dissociative-psychotic symptoms – summary of findings Table 2",
+  "kind": "grid",
+  "header": [
+   "Outcomes and interventions",
+   "Trials",
+   "n",
+   "Standardised mean difference^a^",
+   "95% CI",
+   "P-value",
+   "I^2^",
+   "Certainty of evidence (GRADE)"
+  ],
+  "rows": [
+   {
+    "group": true,
+    "cells": [
+     "Depressive symptoms",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     ""
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Antipsychotics",
+     "12^44,46,48,49,51,53,63–65,67,70^",
+     "1138",
+     "−0.22",
+     "−0.42 to −0.01",
+     "0.04",
+     "59%",
+     "⊕⊝⊝⊝ Very low^b,c^"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Anticonvulsants",
+     "6^46,56–60^",
+     "344",
+     "−0.44",
+     "−0.80 to −0.08",
+     "0.02",
+     "46%",
+     "⊕⊕⊝⊝ Low^b,d^"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Antidepressants",
+     "5^46,53,61,62,67^",
+     "187",
+     "−0.37",
+     ".0.82 to 0.08",
+     "0.11",
+     "52%",
+     "⊕⊝⊝⊝Very low^d,e,f^"
+    ]
+   },
+   {
+    "group": true,
+    "cells": [
+     "Dissociative–psychotic symptoms",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     ""
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Antipsychotics",
+     "9^28,45,51,53,63,65–67,70^",
+     "936",
+     "−0.28",
+     "−0.49 to −0.08",
+     "0.007",
+     "49%",
+     "⊕⊕⊝⊝ Low^b^"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Anticonvulsants",
+     "3^56,57,60^",
+     "270",
+     "−0.23",
+     "−0.66 to 0.20",
+     "0.30",
+     "51%",
+     "⊕⊝⊝⊝ Very low^b,f,d^"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Antidepressants",
+     "3^53,62,67^",
+     "139",
+     "−0.22",
+     "−0.62 to 0.18",
+     "0.29",
+     "25%",
+     "⊕⊝⊝⊝ Very low^b,f,d^"
+    ]
+   },
+   {
+    "group": true,
+    "cells": [
+     "Anxiety symptoms",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     ""
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Antipsychotics",
+     "6^46,51,53,63,64,67^",
+     "309",
+     "−0.35",
+     "−0.72 to 0.02",
+     "0.06",
+     "61%",
+     "⊕⊕⊝⊝ Low^b,d^"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Anticonvulsants",
+     "3^46,57,63^",
+     "104",
+     "−1.11",
+     "−1.60 to −0.62",
+     "<0.00001",
+     "24%",
+     "⊕⊝⊝⊝ Very low^b,d,f^"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Antidepressants",
+     "4^46,53,62,67^",
+     "164",
+     "−0.23",
+     "−0.58 to 0.12",
+     "0.20",
+     "17%",
+     "⊕⊝⊝⊝ Very low^b,d,f^"
+    ]
+   }
+  ],
+  "notes": [
+   "Grading of Recommendations, Assessment, Development and Evaluations (GRADE) Working Group grades of evidence: ‘high certainty’, further research is very unlikely to change our confidence in the estimate of effect; moderate certainty’, further research is likely to have an important impact on our confidence in the estimate of effect and may change the estimate; ‘low certainty’, further research is very likely to have an important impact on our confidence in the estimate of effect and is likely to change the estimate; ‘very low certainty’, we are very uncertain about the estimate.",
+   "a. Pooled standardised mean differences; negative values indicate beneficial effects of the experimental treatment. The inverse variance method and random effect model were used for pooling of effect estimates.",
+   "b. Downgraded two levels because of the inclusion of studies with a high risk of bias (i.e. several domains with a high risk of bias or most domains with unclear risk of bias).",
+   "c. Downgraded one level because of strongly suspected publication bias (cf. Fig. 2).",
+   "d. Publication bias undetected; unable to draw a funnel plot because of too few primary studies (≤10).",
+   "e. Downgraded two levels because of the inclusion of studies with a high risk of bias (i.e. several domains with a high risk of bias or most domains with unclear risk of bias).",
+   "f. Downgraded two levels because of a small sample size of <50% of optimal information size (assumed as n ≥400)."
+  ]
+ },
+ {
+  "page": 8,
+  "pages": [
+   8
+  ],
+  "number": "3",
+  "caption": "Differential effects of medications on co-occurring depressive, anxiety and dissociative–psychotic symptoms in relation to psychiatric exclusion Table 3 criteria – summary of findings",
+  "kind": "grid",
+  "header": [
+   "Outcomes and interventions",
+   "Trials",
+   "n",
+   "Standardised mean difference^a^",
+   "95% CI",
+   "P-value",
+   "I^2^",
+   "Certainty of evidence (GRADE)",
+   "χ^2^ -Test for subgroup differences (p)^b^"
+  ],
+  "rows": [
+   {
+    "group": true,
+    "cells": [
+     "Antipsychotics: depression",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     ""
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Substance use excluded",
+     "6^45,51,65–67,70^",
+     "799",
+     "−0.16",
+     "−0.30 to −0.02",
+     "0.02",
+     "0%",
+     "⊕⊕⊝⊝ Low^c,d^",
+     "0.001"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Substance use not excluded",
+     "3^28,53,63^",
+     "137",
+     "−0.79",
+     "−1.14 to −0.44",
+     "<0.0001",
+     "0%",
+     "⊕⊝⊝⊝ Very low^d,e,f^",
+     ""
+    ]
+   }
+  ],
+  "notes": [
+   "Grading of Recommendations, Assessment, Development and Evaluations (GRADE) Working Group grades of evidence: ‘high certainty’, further research is very unlikely to change our confidence in the estimate of effect; ‘moderate certainty’, further research is likely to have an important impact on our confidence in the estimate of effect and may change the estimate; ‘low certainty’, further research is very likely to have an important impact on our confidence in the estimate of effect and is likely to change the estimate; ‘very low certainty’, we are very uncertain about the estimate.",
+   "a. Pooled standardised mean differences; negative values indicate beneficial effects of the experimental treatment. The inverse variance method and random effect model were used for pooling of effect estimates.",
+   "b. When including study data from the cross-over study of Ziegenhorn et al^55^ in a predefined secondary sensitivity analyses (see Stoffers-Winterling et al^12^), the χ^2^-test for subgroup dif-ferences reached statistical significance (P = 0.04) for the outcome of depression, if trials excluding (four trials, N = 473, SMD −0.32, 95% CI −0.60 to −0.03, P = 0.03, I^2^= 55%) versus not excluding obsessive–compulsive disorder (four trials, n = 683, SMD 0.02, 95% CI −0.13 to 0.17, P = 0.84, I^2^= 0%) were compared. No substantial changes were observed if including Ziegenhorn et al with any of the other relevant comparisons in terms of pooled effect estimates changing the direction of effect or crossing boundaries of confidence intervals.",
+   "c. Downgraded two levels because of the inclusion of studies with a high risk of bias (i.e. several domains with a high risk of bias or most domains with unclear risk of bias).",
+   "d. Publication bias undetected; unable to draw a funnel plot because of too few primary studies (≤10).",
+   "e. Downgraded two levels because of a small sample size <50% of optimal information size (assumed as n ≥400).",
+   "f. Downgraded one level because of the inclusion of studies with moderate risk of bias (i.e. high risk of bias for a maximum of one domain and/or unclear risk of bias for several domains)."
+  ]
+ }
+]

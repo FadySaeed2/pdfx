@@ -1,0 +1,86 @@
+[
+ {
+  "page": 0,
+  "number": "",
+  "caption": "",
+  "kind": "grid",
+  "header": [
+   "Drug",
+   "Dose",
+   "Check"
+  ],
+  "rows": [
+   {
+    "group": false,
+    "cells": [
+     "Lithium",
+     "400 mg",
+     "Level at 12 h"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Valproate",
+     "500 mg",
+     "Liver tests"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Lamotrigine",
+     "25 mg",
+     "Rash"
+    ]
+   }
+  ],
+  "notes": []
+ },
+ {
+  "page": 1,
+  "number": "",
+  "caption": "",
+  "kind": "cards",
+  "header": [
+   "Medicine",
+   "Common effects",
+   "What to do"
+  ],
+  "rows": [
+   {
+    "group": false,
+    "cells": [
+     "Lithium",
+     "Tremor, thirst, passing more urine, weight gain",
+     "Check the level; reduce the dose if the level is high"
+    ]
+   },
+   {
+    "group": true,
+    "cells": [
+     "Antidepressants",
+     "",
+     ""
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Sertraline",
+     "Nausea, headache, sleep changes in the first two weeks",
+     "Usually settles; keep going unless severe"
+    ]
+   },
+   {
+    "group": false,
+    "cells": [
+     "Clozapine",
+     "Constipation, drooling, raised heart rate",
+     "Treat constipation early; check bowels every visit"
+    ]
+   }
+  ],
+  "notes": []
+ }
+]

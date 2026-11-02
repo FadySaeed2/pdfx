@@ -997,16 +997,9 @@ private fun ReflowView(reader: Reader, listState: LazyListState, padding: Paddin
                                         }
                                         return@forEach
                                     }
-                                    val rows = p.table
-                                    if (rows != null) {
-                                        ReflowTable(rows, p.tableHeader, size, ink, latin, query, mark)
-                                        val tb = p.tableBox
-                                        if (tb != null) DisableSelection {
-                                            Text(
-                                                "See this table as on the page", style = Type.small.copy(color = ink.copy(alpha = 0.55f), textDecoration = TextDecoration.Underline),
-                                                modifier = Modifier.clickable { reader.zoomFigure = i to tb }.padding(vertical = 4.dp),
-                                            )
-                                        }
+                                    val table = p.table
+                                    if (table != null) {
+                                        ReflowTableView(reader, i, table, size, ink, bg, latin, query, mark, filter)
                                         return@forEach
                                     }
                                     val arabic = isArabic(p.text)
@@ -1033,48 +1026,6 @@ private fun ReflowView(reader: Reader, listState: LazyListState, padding: Paddin
                                         Text(words, style = style, modifier = Modifier.fillMaxWidth().padding(top = if (p.level > 0) (size * 0.6f).dp else 0.dp))
                                     }
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * A table from the page as a real table: the same columns left to right as on the page (whatever
- * the language), cells that wrap, a bold header row, thin rules, and sideways scrolling when it is
- * wider than the screen.
- */
-@Composable
-private fun ReflowTable(rows: List<List<String>>, header: Boolean, size: Int, ink: Color, latin: androidx.compose.ui.text.font.FontFamily, query: String?, mark: Color) {
-    val cols = rows.maxOf { it.size }
-    val cell = size * 0.82f
-    val widths = (0 until cols).map { c ->
-        val longest = rows.maxOf { r -> r.getOrNull(c)?.length ?: 0 }
-        val chars = longest.coerceIn(5, 24)
-        (chars * cell * 0.56f + 18f).dp
-    }
-    val rule = ink.copy(alpha = 0.22f)
-    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
-        Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            Column(Modifier.border(1.dp, rule)) {
-                rows.forEachIndexed { ri, r ->
-                    val head = header && ri == 0
-                    Row(Modifier.height(androidx.compose.foundation.layout.IntrinsicSize.Min).background(if (head) ink.copy(alpha = 0.07f) else Color.Transparent)) {
-                        (0 until cols).forEach { c ->
-                            val t = r.getOrNull(c) ?: ""
-                            Box(Modifier.width(widths[c]).fillMaxHeight().border(0.5.dp, rule).padding(horizontal = 8.dp, vertical = 6.dp)) {
-                                Text(
-                                    styled(com.fadysaeed.pdfx.engine.Para(t), query, mark),
-                                    style = TextStyle(
-                                        fontFamily = if (isArabic(t)) PlexArabic else latin,
-                                        fontWeight = if (head) FontWeight.SemiBold else FontWeight.Normal,
-                                        fontSize = cell.sp, lineHeight = (cell * 1.35f).sp, color = ink,
-                                        textDirection = TextDirection.Content,
-                                    ),
-                                )
                             }
                         }
                     }

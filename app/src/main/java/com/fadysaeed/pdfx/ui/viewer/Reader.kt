@@ -246,6 +246,32 @@ class Reader(
         }
     }
 
+    /** Glyphs a table draws but does not name (an arrow, say), cut from the page. Keeps the last 96. */
+    val glyphs = mutableStateMapOf<String, androidx.compose.ui.graphics.ImageBitmap>()
+    private val glyphOrder = ArrayDeque<String>()
+
+    fun loadGlyph(page: Int, box: Box, sizePx: Int) {
+        val s = session ?: return
+        val key = figureKey(page, box, sizePx)
+        if (key in glyphOrder) return
+        glyphOrder.addLast(key)
+        while (glyphOrder.size > 96) glyphs.remove(glyphOrder.removeFirst())
+        scope.launch {
+            val pw = runCatching { s.pageSize(page).width }.getOrNull() ?: return@launch
+            // A square around the glyph, so it keeps its shape in the line.
+            val side = maxOf(box.width, box.height)
+            val cx = (box.x0 + box.x1) / 2
+            val cy = (box.y0 + box.y1) / 2
+            val k = (sizePx / side.coerceAtLeast(1f)).coerceAtMost(40f)
+            val pagePx = (pw * k).toInt().coerceIn(1, 12000)
+            val kk = pagePx / pw
+            val bmp = runCatching {
+                s.renderRegion(page, pagePx, ((cx - side / 2) * kk).toInt(), ((cy - side / 2) * kk).toInt(), (side * kk).toInt().coerceAtLeast(1), (side * kk).toInt().coerceAtLeast(1))
+            }.getOrNull() ?: return@launch
+            if (key in glyphOrder) glyphs[key] = bmp.asImageBitmap()
+        }
+    }
+
     fun changeReflowMargin(step: Int) { reflowMargin = step.coerceIn(0, 2); prefs?.edit()?.putInt("reflow_margin", reflowMargin)?.apply() }
 
     /** Switches between pages and reflowed text, keeping the place: [spot] is where reading was. */

@@ -8,207 +8,69 @@ import com.artifex.mupdf.fitz.Quad
 import com.artifex.mupdf.fitz.Rect
 import com.artifex.mupdf.fitz.StructuredText
 import com.artifex.mupdf.fitz.StructuredTextWalker
+import kotlin.math.max
+import kotlin.math.min
 
 /** A run of bold and/or italic words inside a paragraph, as character offsets. */
 data class Span(val start: Int, val end: Int, val bold: Boolean, val italic: Boolean)
 
 /** One line of a page as the engine read it, with the style of each character. */
-internal class RawLine(val text: String, val bold: BooleanArray, val italic: BooleanArray, val size: Float, val y0: Float, val y1: Float)
-
-/** A block of a page: lines of text, a picture, or a table found on the page. */
-internal class RawBlock(val box: Box, val lines: List<RawLine>, val image: Boolean, val table: RawTable? = null)
-
-/** A table the engine found: its outline and its cells, row by row, each with its text and whether it is bold. */
-internal class RawTable(
-    val box: Box,
-    val rows: List<List<Pair<String, Boolean>>>,
-    /** For each cell: the left edge of its first line, its type size, and how many lines it has. */
-    val geo: List<List<Triple<Float, Float, Int>>> = emptyList(),
+internal class RawLine(
+    val text: String, val bold: BooleanArray, val italic: BooleanArray, val size: Float, val y0: Float, val y1: Float,
+    val x0: Float = 0f, val x1: Float = 10000f,
 )
 
-/** A rough width for [s] set at [size]: capitals and digits wider, spaces and stops narrower. */
-internal fun textWidth(s: String, size: Float): Float = s.sumOf { c ->
-    when {
-        c.isUpperCase() -> 0.68
-        c.isDigit() -> 0.55
-        c == ' ' -> 0.28
-        c.isLetter() -> 0.5
-        else -> 0.33
-    }
-}.toFloat() * size
+/** A block of a page: lines of text, a picture, or a table found on the page. */
+internal class RawBlock(val box: Box, val lines: List<RawLine>, val image: Boolean, val table: TableModel? = null)
 
 /**
- * The engine sometimes cuts one column into several, splitting words ("Le" | "vel"). Where, in
- * every row, a cell's words run straight on into the next cell's, the two columns are one and
- * are joined back. Where columns are clearly apart they stay. Anything in between is unclear,
- * and the table is shown as a picture instead (null).
+ * Puts each table found on a page in place of the text it covers: the table itself (or, when it
+ * could not be read cleanly, a picture of it), where its first line was. Lines outside every
+ * table stay as they were.
  */
-internal fun repairColumns(t: RawTable, source: String = ""): RawTable? {
-    val plain = source.replace(Regex("\\s+"), " ")
-    if (t.geo.size != t.rows.size || t.rows.isEmpty()) return t
-    val rows = t.rows.map { it.toMutableList() }.toMutableList()
-    val geo = t.geo.map { it.toMutableList() }.toMutableList()
-    if (rows.any { it.size != rows[0].size } || geo.indices.any { geo[it].size != rows[it].size }) return t
-    var c = 0
-    while (c < rows[0].size - 1) {
-        val gaps = rows.indices.mapNotNull { r ->
-            val a = rows[r][c].first
-            val b = rows[r][c + 1].first
-            val (al, asz, alines) = geo[r][c]
-            val (bl, _, _) = geo[r][c + 1]
-            if (a.isBlank() || b.isBlank() || alines != 1 || al.isNaN() || bl.isNaN() || asz <= 0f) null
-            else (bl - (al + textWidth(a, asz))) / asz
-        }
-        when {
-            gaps.isNotEmpty() && gaps.all { it < 0.9f } -> {
-                for (r in rows.indices) {
-                    val (a, ab) = rows[r][c]
-                    val (b, bb) = rows[r][c + 1]
-                    val (al, asz, alines) = geo[r][c]
-                    val (bl, bsz, blines) = geo[r][c + 1]
-                    val joined = when {
-                        a.isBlank() -> b
-                        b.isBlank() -> a
-                        // The page's own text says whether a space belongs between them.
-                        plain.contains("$a $b") && !plain.contains(a + b) -> "$a $b"
-                        plain.contains(a + b) && !plain.contains("$a $b") -> a + b
-                        else -> {
-                            val gap = if (asz > 0f && !al.isNaN() && !bl.isNaN()) (bl - (al + textWidth(a, asz))) / asz else 1f
-                            if (gap < 0.11f) a + b else "$a $b"
-                        }
-                    }
-                    rows[r][c] = joined to (if (a.isBlank()) bb else if (b.isBlank()) ab else ab && bb)
-                    geo[r][c] = if (a.isBlank()) Triple(bl, bsz, blines) else Triple(al, asz, maxOf(alines, blines))
-                    rows[r].removeAt(c + 1)
-                    geo[r].removeAt(c + 1)
-                }
-            }
-            gaps.isEmpty() || gaps.all { it > 1.8f } -> c++
-            else -> return null
+internal fun placeTables(blocks: List<RawBlock>, tables: List<TableModel>): List<RawBlock> {
+    // A picture fallback only when the finder knew the whole table's outline.
+    val use = tables.filter { it.kind != TableKind.IMAGE || (it.extent.width >= 100f && it.extent.height >= 40f) }
+    if (use.isEmpty()) return blocks
+    fun owner(l: RawLine): TableModel? {
+        val cy = (l.y0 + l.y1) / 2
+        return use.firstOrNull { t ->
+            val e = t.extent
+            cy > e.y0 - 1.5f && cy < e.y1 + 1.5f && min(l.x1, e.x1) - max(l.x0, e.x0) > 0.5f * (l.x1 - l.x0)
         }
     }
-    return RawTable(t.box, rows, geo)
-}
-
-/**
- * Reads the tables out of the engine's HTML for a page analysed for tables. (Walking that page
- * directly is not safe in this engine build: its vector callback hands Java a bad boolean.)
- * Each table's outline is rough here: the left and top of its lines, and their bottom.
- */
-internal fun parseTablesHtml(html: String): List<RawTable> {
-    val out = ArrayList<RawTable>()
-    val tableRe = Regex("<table[^>]*>(.*?)</table>", RegexOption.DOT_MATCHES_ALL)
-    val rowRe = Regex("<tr[^>]*>(.*?)</tr>", RegexOption.DOT_MATCHES_ALL)
-    val cellRe = Regex("<t[dh][^>]*>(.*?)</t[dh]>", RegexOption.DOT_MATCHES_ALL)
-    val pRe = Regex("<p style=\"top:([0-9.\\-]+)pt;left:([0-9.\\-]+)pt;line-height:([0-9.\\-]+)pt\">(.*?)</p>", RegexOption.DOT_MATCHES_ALL)
-    for (t in tableRe.findAll(html)) {
-        var x0 = Float.MAX_VALUE; var y0 = Float.MAX_VALUE; var x1 = -Float.MAX_VALUE; var y1 = -Float.MAX_VALUE
-        val geo = ArrayList<List<Triple<Float, Float, Int>>>()
-        val rows = rowRe.findAll(t.groupValues[1]).map { r ->
-            val rowGeo = ArrayList<Triple<Float, Float, Int>>()
-            val cells = cellRe.findAll(r.groupValues[1]).map { c ->
-                var firstLeft = Float.NaN
-                var firstSize = 0f
-                val lines = pRe.findAll(c.groupValues[1]).map { pm ->
-                    val top = pm.groupValues[1].toFloatOrNull() ?: 0f
-                    val left = pm.groupValues[2].toFloatOrNull() ?: 0f
-                    val lh = pm.groupValues[3].toFloatOrNull() ?: 0f
-                    x0 = minOf(x0, left); y0 = minOf(y0, top); y1 = maxOf(y1, top + lh * 1.25f); x1 = maxOf(x1, left)
-                    if (firstLeft.isNaN()) { firstLeft = left; firstSize = lh }
-                    pm.groupValues[4]
-                }.toList()
-                rowGeo += Triple(firstLeft, firstSize, lines.size)
-                val raw = lines.joinToString(" ")
-                val text = htmlText(raw)
-                val boldText = Regex("<b>(.*?)</b>", RegexOption.DOT_MATCHES_ALL).findAll(raw).sumOf { htmlText(it.groupValues[1]).count { ch -> !ch.isWhitespace() } }
-                val chars = text.count { !it.isWhitespace() }
-                text to (chars > 0 && boldText * 10 >= chars * 8)
-            }.toList()
-            if (cells.isNotEmpty()) geo += rowGeo
-            cells
-        }.filter { it.isNotEmpty() }.toList()
-        if (rows.isNotEmpty() && x0 < Float.MAX_VALUE) out += RawTable(Box(x0, y0, maxOf(x1, x0 + 1f), y1), rows, geo)
+    fun tableBlock(t: TableModel) =
+        if (t.kind == TableKind.IMAGE) RawBlock(t.extent, emptyList(), true) else RawBlock(t.extent, emptyList(), false, t)
+    val placed = HashSet<TableModel>()
+    val out = ArrayList<RawBlock>()
+    for (b in blocks) {
+        if (b.image) {
+            // A picture inside a table (a drawn arrow, a logo) is part of the table.
+            val cx = (b.box.x0 + b.box.x1) / 2
+            val cy = (b.box.y0 + b.box.y1) / 2
+            if (use.any { t -> cx > t.extent.x0 && cx < t.extent.x1 && cy > t.extent.y0 && cy < t.extent.y1 }) continue
+            out += b; continue
+        }
+        var keep = ArrayList<RawLine>()
+        for (l in b.lines) {
+            val t = owner(l)
+            if (t == null) { keep += l; continue }
+            if (keep.isNotEmpty()) { out += RawBlock(boxOf(keep, b.box), keep, false); keep = ArrayList() }
+            if (placed.add(t)) out += tableBlock(t)
+        }
+        if (keep.size == b.lines.size) out += b
+        else if (keep.isNotEmpty()) out += RawBlock(boxOf(keep, b.box), keep, false)
+    }
+    // A table whose text the page reader did not give (drawn as outlines, say) still shows, in its place.
+    for (t in use) if (t !in placed) {
+        val at = out.indexOfFirst { it.box.y0 > t.extent.y0 }.let { if (it < 0) out.size else it }
+        out.add(at, tableBlock(t))
     }
     return out
 }
 
-/** Plain text from a snippet of the engine's HTML: tags removed, character references decoded. */
-internal fun htmlText(s: String): String {
-    val noTags = s.replace(Regex("<[^>]+>"), "")
-    val sb = StringBuilder()
-    var i = 0
-    while (i < noTags.length) {
-        val c = noTags[i]
-        if (c == '&') {
-            val end = noTags.indexOf(';', i)
-            if (end > i) {
-                val ent = noTags.substring(i + 1, end)
-                val cp = when {
-                    ent.startsWith("#x") -> ent.substring(2).toIntOrNull(16)
-                    ent.startsWith("#") -> ent.substring(1).toIntOrNull()
-                    ent == "lt" -> '<'.code
-                    ent == "gt" -> '>'.code
-                    ent == "amp" -> '&'.code
-                    ent == "quot" -> '"'.code
-                    ent == "apos" -> '\''.code
-                    ent == "nbsp" -> ' '.code
-                    else -> null
-                }
-                if (cp != null) { sb.appendCodePoint(cp); i = end + 1; continue }
-            }
-        }
-        sb.append(c)
-        i++
-    }
-    return sb.toString().replace(Regex("\\s+"), " ").trim()
-}
-
-/**
- * Puts the tables found on a page in place of the plain text blocks they cover. A table is
- * kept as rows and cells only when it is clean (a real grid that holds all its words); otherwise
- * it is shown as a picture of that part of the page, so no number ever lands in the wrong cell.
- */
-internal fun mergeTables(blocks: List<RawBlock>, tables: List<RawTable>): List<RawBlock> {
-    if (tables.isEmpty()) return blocks
-    val squash = { t: String -> t.filter { !it.isWhitespace() } }
-    val tableText = tables.associateWith { t -> squash(t.rows.flatten().joinToString("") { it.first }) }
-    val covered = HashMap<RawTable, MutableList<RawBlock>>()
-    val out = ArrayList<RawBlock>()
-    for (b in blocks) {
-        val bt = squash(b.lines.joinToString("") { it.text })
-        val t = if (b.image || bt.isEmpty()) null else tables.firstOrNull { t ->
-            val cy = (b.box.y0 + b.box.y1) / 2
-            cy >= t.box.y0 - 4f && cy <= t.box.y1 + 4f && b.box.x1 >= t.box.x0 - 4f && tableText[t]!!.contains(bt)
-        }
-        if (t == null) { out += b; continue }
-        val list = covered.getOrPut(t) { ArrayList() }
-        if (list.isEmpty()) out += RawBlock(t.box, emptyList(), false, t)
-        list += b
-    }
-    return out.map { b ->
-        val t = b.table ?: return@map b
-        val cov = covered[t].orEmpty()
-        // The real outline: the table's lines and every block it took over.
-        val box = cov.fold(t.box) { a, c -> Box(minOf(a.x0, c.box.x0), minOf(a.y0, c.box.y0), maxOf(a.x1, c.box.x1), maxOf(a.y1, c.box.y1)) }
-        val chars = cov.sumOf { c -> c.lines.sumOf { l -> l.text.count { !it.isWhitespace() } } }
-        val source = cov.joinToString(" ") { c -> c.lines.joinToString(" ") { it.text } }
-        val whole = repairColumns(RawTable(box, t.rows, t.geo), source)
-        if (whole != null && isClean(whole, chars)) RawBlock(box, emptyList(), false, whole) else RawBlock(box, emptyList(), true, null)
-    }
-}
-
-/** A grid of at least 2 by 2, every row the same width, mostly filled, holding (nearly) all the words it covers. */
-internal fun isClean(t: RawTable, covered: Int): Boolean {
-    val rows = t.rows
-    if (rows.size < 2) return false
-    val cols = rows[0].size
-    if (cols < 2 || rows.any { it.size != cols }) return false
-    val cells = rows.flatten()
-    if (cells.count { it.first.isNotBlank() } * 10 < cells.size * 5) return false
-    val inCells = cells.sumOf { c -> c.first.count { !it.isWhitespace() } }
-    if (covered > 0 && (inCells * 10 < covered * 9 || inCells * 10 > covered * 11)) return false
-    return true
-}
+private fun boxOf(lines: List<RawLine>, within: Box) =
+    Box(max(within.x0, lines.minOf { it.x0 }), lines.minOf { it.y0 }, min(within.x1, lines.maxOf { it.x1 }).coerceAtLeast(within.x0 + 1f), lines.maxOf { it.y1 })
 
 /** Walks a page's text keeping what plain text loses: fonts (bold, italic), sizes, and where pictures are. */
 internal class FlowWalker : StructuredTextWalker {
@@ -248,7 +110,7 @@ internal class FlowWalker : StructuredTextWalker {
     override fun endLine() {
         val r = lineBox ?: return
         if (sb.isNotEmpty() && sb.isNotBlank()) {
-            lines?.add(RawLine(sb.toString(), bold.toBooleanArray(), italic.toBooleanArray(), sizeSum / bold.size.coerceAtLeast(1), r.y0, r.y1))
+            lines?.add(RawLine(sb.toString(), bold.toBooleanArray(), italic.toBooleanArray(), sizeSum / bold.size.coerceAtLeast(1), r.y0, r.y1, r.x0, r.x1))
         }
     }
 
@@ -297,9 +159,7 @@ internal fun buildParas(blocks: List<RawBlock>, pageHeight: Float, nearBands: Se
     val out = ArrayList<Para>()
     for (b in blocks) {
         if (b.table != null) {
-            val rows = b.table.rows.map { r -> r.map { it.first } }
-            val header = b.table.rows[0].all { it.second || it.first.isBlank() } && b.table.rows[0].any { it.second }
-            out += Para("", table = rows, tableHeader = header, figure = null, tableBox = b.box)
+            out += Para("", table = b.table)
             continue
         }
         if (b.image) {

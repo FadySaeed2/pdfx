@@ -234,7 +234,15 @@ class ScreensTest {
                 Para("Monitoring", 2),
                 Para("Check levels 12 hours after the last dose, weekly after each change until stable, then every three months for the first year."),
                 Para("يُفضَّل قياس مستوى الليثيوم بعد ١٢ ساعة من آخر جرعة، ومتابعة وظائف الكلى والغدة الدرقية كل ستة أشهر."),
-                Para("", table = listOf(listOf("Drug", "Dose", "Check"), listOf("Lithium", "400 mg", "Level at 12 h"), listOf("Valproate", "500 mg", "Liver tests"), listOf("ليثيوم", "٤٠٠ مجم", "مستوى الدم")), tableHeader = true, tableBox = Box(56f, 130f, 520f, 226f)),
+                Para("", table = com.fadysaeed.pdfx.engine.TableModel(
+                    0, "Table 2. Monitoring", "2", Box(56f, 130f, 520f, 226f), listOf("Drug", "Dose", "Check"),
+                    listOf(
+                        com.fadysaeed.pdfx.engine.TableRow(false, listOf("Lithium", "400 mg", "Level at 12 h^a^")),
+                        com.fadysaeed.pdfx.engine.TableRow(false, listOf("Valproate", "500 mg", "Liver tests")),
+                        com.fadysaeed.pdfx.engine.TableRow(false, listOf("ليثيوم", "٤٠٠ مجم", "مستوى الدم")),
+                    ),
+                    listOf("^a^ Twelve hours after the last dose."), com.fadysaeed.pdfx.engine.TableKind.GRID, cols = 3,
+                )),
                 Para("Check sodium and creatinine before starting.", list = true, marker = "•"),
                 Para("Avoid NSAIDs where possible, and warn about dehydration.", list = true, marker = "•"),
                 Para("Stopping lithium abruptly raises the risk of relapse; taper over at least four weeks.", spans = listOf(Span(0, 17, bold = true, italic = false), Span(54, 84, bold = false, italic = true))),
@@ -386,36 +394,24 @@ class ScreensTest {
         assertTrue(com.fadysaeed.pdfx.engine.runsOn(Para("and the dose was"), Para("halved after a week.")))
         assertTrue(!com.fadysaeed.pdfx.engine.runsOn(Para("The dose was halved."), Para("after a week.")))
         assertEquals("and the dose was halved.", com.fadysaeed.pdfx.engine.joinParas(Para("and the dose was"), Para("halved.")).text)
-        // Tables: a clean grid stays a table, a ragged one becomes a picture.
-        val grid = com.fadysaeed.pdfx.engine.RawTable(Box(50f, 500f, 500f, 600f), listOf(listOf("A" to true, "B" to true), listOf("1" to false, "2" to false)))
-        val inside = block(520f, line("A B 1 2", y = 520f))
-        val merged = com.fadysaeed.pdfx.engine.mergeTables(listOf(block(450f, line("Before", y = 450f)), inside), listOf(grid))
-        assertEquals(2, merged.size)
-        assertTrue(merged[1].table != null)
-        val ragged = com.fadysaeed.pdfx.engine.RawTable(Box(50f, 500f, 500f, 600f), listOf(listOf("A" to true, "B" to true), listOf("1 2" to false)))
-        val asPicture = com.fadysaeed.pdfx.engine.mergeTables(listOf(inside), listOf(ragged))
-        assertTrue(asPicture[0].image && asPicture[0].table == null)
-        val tp = com.fadysaeed.pdfx.engine.buildParas(merged, 842f, emptySet())
-        assertTrue(tp.any { it.table != null && it.tableHeader })
-        val html = "<div><table>\n<tr>\n<td>\n<p style=\"top:130.0pt;left:62.0pt;line-height:12.0pt\"><b>Drug</b></p>\n</td>\n<td>\n<p style=\"top:130.0pt;left:212.0pt;line-height:12.0pt\"><b>Dose</b></p>\n</td>\n</tr>\n" +
-            "<tr>\n<td>\n<p style=\"top:154.0pt;left:62.0pt;line-height:12.0pt\">Lithium &amp; co</p>\n</td>\n<td>\n<p style=\"top:154.0pt;left:212.0pt;line-height:12.0pt\">&#x664;&#x660;&#x660; mg</p>\n</td>\n</tr>\n</table></div>"
-        val parsed = com.fadysaeed.pdfx.engine.parseTablesHtml(html)
-        assertEquals(1, parsed.size)
-        assertEquals(listOf("Drug" to true, "Dose" to true), parsed[0].rows[0])
-        assertEquals(listOf("Lithium & co" to false, "٤٠٠ mg" to false), parsed[0].rows[1])
-        assertEquals(62f, parsed[0].box.x0, 0.1f)
-        // A column cut through words is joined back; clearly separate columns stay.
-        val cut = com.fadysaeed.pdfx.engine.RawTable(
-            Box(56f, 130f, 520f, 230f),
-            listOf(listOf("Drug" to true, "Dose" to true, "C" to true, "heck" to true), listOf("Lithium" to false, "400 mg" to false, "Le" to false, "vel at 12 h" to false)),
-            listOf(
-                listOf(Triple(62f, 12f, 1), Triple(212f, 12f, 1), Triple(342f, 12f, 1), Triple(350.7f, 12f, 1)),
-                listOf(Triple(62f, 12f, 1), Triple(212f, 12f, 1), Triple(342f, 12f, 1), Triple(355.4f, 12f, 1)),
-            ),
+        // Tables: the table takes the place of the lines it covers; the text around it stays.
+        val model = com.fadysaeed.pdfx.engine.TableModel(0, "", "", Box(50f, 500f, 500f, 600f), listOf("A", "B"), listOf(com.fadysaeed.pdfx.engine.TableRow(false, listOf("1", "2"))), emptyList(), com.fadysaeed.pdfx.engine.TableKind.GRID, cols = 2)
+        fun wide(t: String, y: Float) = com.fadysaeed.pdfx.engine.RawLine(t, BooleanArray(t.length), BooleanArray(t.length), 10f, y, y + 10f, 50f, 480f)
+        val around = listOf(
+            com.fadysaeed.pdfx.engine.RawBlock(Box(50f, 450f, 500f, 530f), listOf(wide("Before", 450f), wide("A B", 505f), wide("1 2", 520f)), false),
+            com.fadysaeed.pdfx.engine.RawBlock(Box(50f, 620f, 500f, 632f), listOf(wide("After", 620f)), false),
         )
-        val fixed = com.fadysaeed.pdfx.engine.repairColumns(cut)!!
-        assertEquals(listOf("Drug", "Dose", "Check"), fixed.rows[0].map { it.first })
-        assertEquals(listOf("Lithium", "400 mg", "Level at 12 h"), fixed.rows[1].map { it.first })
+        val placed = com.fadysaeed.pdfx.engine.placeTables(around, listOf(model))
+        assertEquals(3, placed.size)
+        assertEquals("Before", placed[0].lines.single().text)
+        assertTrue(placed[1].table === model)
+        assertEquals("After", placed[2].lines.single().text)
+        val tp = com.fadysaeed.pdfx.engine.buildParas(placed, 842f, emptySet())
+        assertTrue(tp.any { it.table === model } && tp.none { it.text.contains("A B") })
+        // A table read only as a picture shows as one, in its place.
+        val pic = com.fadysaeed.pdfx.engine.TableModel(0, "", "", Box(50f, 500f, 500f, 600f), emptyList(), emptyList(), emptyList(), com.fadysaeed.pdfx.engine.TableKind.IMAGE)
+        assertTrue(com.fadysaeed.pdfx.engine.placeTables(around, listOf(pic))[1].image)
+        assertEquals("1²", com.fadysaeed.pdfx.ui.viewer.tablePlain("1^²^"))
         // Text box style survives being written and read back.
         val st = com.fadysaeed.pdfx.engine.BoxStyle(font = com.fadysaeed.pdfx.engine.BoxFont.SERIF, size = 18f, bold = true, underline = true, align = com.fadysaeed.pdfx.engine.BoxAlign.CENTER, color = 0xFF2F6FED.toInt(), spacing = 2)
         val back = com.fadysaeed.pdfx.engine.BoxStyle.parse(st.css("hello"), "hello", 12f, 0, null, false, false)
@@ -530,6 +526,25 @@ class ScreensTest {
     }
 
     @Test fun backToPage() = viewerShot("34_back_to_page.png") { r -> r.backTo = 36 to 120 }
+
+    /** A real table, found the way the app finds it, reflowed: heading text then the table. */
+    private fun tableShot(file: String, source: String, page: Int, mode: PaperMode = PaperMode.PAPER) = viewerShot(file) { r ->
+        r.changeReflowFont(ReflowFont.SERIF)
+        if (mode != PaperMode.PAPER) r.changeMode(mode)
+        val t = TableFixtures.tables(source, page).first()
+        r.chrome = false
+        r.showReflowForTest(true, mapOf(0 to listOf(Para("The table as it reads on a phone.", 2), Para("", table = t))))
+    }
+
+    @Test fun tableCards() = tableShot("35_table_cards.png", "gpm", 41)
+
+    @Test fun tableGrid() = tableShot("36_table_grid.png", "coch", 6)
+
+    @Test fun tableList() = tableShot("37_table_list.png", "gpm", 50)
+
+    @Test fun tableWideGrid() = tableShot("38_table_wide_grid.png", "gpm", 65, PaperMode.NIGHT)
+
+    @Test fun tableRuledGrid() = tableShot("39_table_ruled_grid.png", "grid", 1)
 
     @Test fun stampTools() = viewerShot("27_stamp_tools.png") { r -> r.showMarking(Tool.STAMP, null) }
 

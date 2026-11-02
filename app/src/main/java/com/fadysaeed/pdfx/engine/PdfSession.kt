@@ -110,11 +110,8 @@ data class Para(
     /** For a picture: where it sits on the page (the text is then empty). */
     val figure: Box? = null,
     val marker: String = "",
-    /** For a table: its cells, row by row; [tableHeader] when the first row is the header. */
-    val table: List<List<String>>? = null,
-    val tableHeader: Boolean = false,
-    /** Where the table sits on the page, to show it as a picture too. */
-    val tableBox: Box? = null,
+    /** For a table: what the page says it holds, read row by row (the text is then empty). */
+    val table: TableModel? = null,
 )
 
 /** A stroke of ink: points in PDF points. */
@@ -370,11 +367,21 @@ class PdfSession private constructor(
         val w = FlowWalker()
         val st = page(index).toStructuredText("preserve-images")
         try { st.walk(w) } finally { runCatching { st.destroy() } }
-        // Table finding is switched off: on real documents the engine's table hunt took ordinary
-        // text for tables and missed real ones (see PLAN.md). Text reads as text again.
         val near = ((index - 2)..(index + 2)).filter { it != index && it in 0 until pageCount }.flatMap { bandLines(it) }.toSet()
-        buildParas(w.blocks, sizeNow(index).height, near)
+        buildParas(placeTables(w.blocks, tablesOn(index)), sizeNow(index).height, near)
     }
+
+    private val tableCache = object : LinkedHashMap<Int, List<TableModel>>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, List<TableModel>>) = size > 24
+    }
+
+    /** The tables on a page, found strictly (see [TableFinder]); none when anything goes wrong. */
+    private fun tablesOn(index: Int): List<TableModel> = tableCache.getOrPut(index) {
+        runCatching { TableFinder.find(index, tableInput(page(index))) }.getOrDefault(emptyList())
+    }
+
+    /** The tables on a page, as the reflowed view shows them. */
+    suspend fun tables(index: Int): List<TableModel> = onDoc { tablesOn(index) }
 
     /**
      * A page's text as paragraphs, for reading reflowed to the screen width: bold and italic kept,
@@ -615,6 +622,7 @@ class PdfSession private constructor(
         textCache.remove(index)?.let { runCatching { it.destroy() } }
         charsCache.remove(index)
         rawCache.clear()
+        tableCache.clear()
         bandCache.remove(index)
         refreshFlags()
         dirty = true
@@ -1033,6 +1041,7 @@ class PdfSession private constructor(
     private fun dropPages() {
         charsCache.clear()
         rawCache.clear()
+        tableCache.clear()
         bandCache.clear()
         textCache.values.forEach { runCatching { it.destroy() } }
         textCache.clear()
@@ -1055,6 +1064,7 @@ class PdfSession private constructor(
         textCache.remove(index)?.let { runCatching { it.destroy() } }
         charsCache.remove(index)
         rawCache.clear()
+        tableCache.clear()
         bandCache.remove(index)
         refreshFlags()
         dirty = true

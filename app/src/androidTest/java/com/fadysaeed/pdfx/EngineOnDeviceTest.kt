@@ -297,18 +297,22 @@ class EngineOnDeviceTest {
         val s = PdfSession.open(ctx, Uri.fromFile(tablePdf()))
         try {
             val paras = s.paragraphs(0)
-            val table = paras.firstOrNull { it.table != null }
+            val table = paras.firstNotNullOfOrNull { it.table }
             File(shots, "table_result.txt").writeText(paras.joinToString("\n") { p ->
+                val t = p.table
                 when {
-                    p.table != null -> "TABLE header=${p.tableHeader} " + p.table!!.joinToString(" | ") { it.joinToString(" ; ") }
+                    t != null -> "TABLE ${t.kind} header=${t.header} " + t.rows.joinToString(" | ") { it.cells.joinToString(" ; ") }
                     p.figure != null -> "FIGURE ${p.figure}"
                     else -> "PARA ${p.text}"
                 }
             })
-            // Table finding is off: every word of the page is still there, as text.
+            // A ruled grid is a table: its cells come from its lines, and the text around it stays text.
             assertTrue("the paragraphs around the table stay", paras.any { it.text.contains("monitored") } && paras.any { it.text.contains("after any change") })
-            assertTrue("the table's words are kept", paras.any { it.text.contains("Valproate") })
-            assertTrue("nothing is turned into a table", table == null)
+            assertTrue("the grid is a table", table != null)
+            val cells = table!!.header + table.rows.flatMap { it.cells }
+            assertTrue("every cell is there: $cells", listOf("Drug", "Valproate", "500 mg", "Lamotrigine", "Rash", "Level at 12 h").all { it in cells })
+            assertTrue("three columns", table.rows.all { it.cells.size == 3 })
+            assertTrue("the table's words are not loose text too", paras.none { it.table == null && it.text.contains("Valproate") })
         } finally {
             s.close()
         }
