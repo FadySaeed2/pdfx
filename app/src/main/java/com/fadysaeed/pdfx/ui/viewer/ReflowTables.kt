@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -136,7 +137,14 @@ internal fun ReflowTableView(
 
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy((size * 0.55f).dp)) {
         // A caption set apart from its number on the page still reads with it.
-        val caption = if (t.number.isNotEmpty() && t.caption.isNotBlank() && !t.caption.contains(t.number)) "Table ${t.number}. ${t.caption}" else t.caption
+        val label = Regex("\\s*(Table|TABLE)\\s+${Regex.escape(t.number)}[.:]?\\s*$")
+        val caption = when {
+            t.number.isEmpty() || t.caption.isBlank() -> t.caption
+            !t.caption.contains(t.number) -> "Table ${t.number}. ${t.caption}"
+            // Set to the right of its title on the page, the label still comes first here.
+            label.containsMatchIn(t.caption) -> "Table ${t.number}. " + label.replace(t.caption, "")
+            else -> t.caption
+        }
         if (caption.isNotBlank()) Words(caption, size * 0.95f, weight = FontWeight.SemiBold)
         when (t.kind) {
             TableKind.LIST -> TableList(t, size, ink) { text, fs, m, w, a -> Words(text, fs, m, w, a) }
@@ -203,6 +211,9 @@ private fun TableGrid(t: TableModel, size: Int, ink: Color, bg: Color, cell: Cel
     val headBg = ink.copy(alpha = 0.07f).compositeOver(bg)
     val scroll = rememberScrollState()
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+      BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // The held first column leaves most of the screen to the others.
+        val widths = if (cols > 1 && widths[0] > maxWidth * 0.4f) listOf(maxWidth * 0.4f) + widths.drop(1) else widths
         Box(Modifier.fillMaxWidth().horizontalScroll(scroll)) {
             Column(Modifier.border(1.dp, rule)) {
                 @Composable
@@ -231,6 +242,7 @@ private fun TableGrid(t: TableModel, size: Int, ink: Color, bg: Color, cell: Cel
                 }
             }
         }
+      }
     }
 }
 
