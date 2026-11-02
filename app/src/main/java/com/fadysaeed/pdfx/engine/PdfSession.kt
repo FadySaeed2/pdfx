@@ -546,6 +546,7 @@ class PdfSession private constructor(
             changedAfter = changed,
             validFrom = cert?.notBefore?.time ?: 0, validTo = cert?.notAfter?.time ?: 0,
             lockedChanged = locked,
+            problem = verifier.problem,
         )
         val r = w.bounds
         return DocSignature(

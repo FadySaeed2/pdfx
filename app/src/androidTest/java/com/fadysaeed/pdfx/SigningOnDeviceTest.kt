@@ -70,7 +70,7 @@ class SigningOnDeviceTest {
             assertEquals("Dr Elsewhere", c.signer.name)
             assertEquals("Elsewhere Clinic", c.signer.org)
             assertEquals("PDFx Test Authority", c.issuer.name)
-            assertTrue("unchanged since signing", c.intact)
+            assertTrue("unchanged since signing: ${c.problem}", c.intact)
             assertFalse("the test authority is not one the phone knows", c.trusted)
             assertFalse("issued by an authority, not self-signed", c.selfSigned)
             assertFalse(c.changedAfter)
@@ -139,7 +139,7 @@ class SigningOnDeviceTest {
         Log.i(tag, "after one: $sigs")
         assertEquals(1, sigs.size)
         assertEquals("Dr Elsewhere", sigs[0].check.signer.name)
-        assertTrue("first signature unchanged", sigs[0].check.intact)
+        assertTrue("first signature unchanged: ${sigs[0].check.problem}", sigs[0].check.intact)
         assertFalse(sigs[0].check.changedAfter)
         assertTrue(s.hasSignatures())
         assertEquals("Jane Citizen", s.fields(0).first { it.name == "patient_name" }.value)
@@ -195,7 +195,7 @@ class SigningOnDeviceTest {
         try {
             val c = again.signatures().single().check
             Log.i(tag, "fresh: $c")
-            assertTrue(c.intact)
+            assertTrue("fresh: ${c.problem}", c.intact)
             assertEquals("Fresh Writer", c.signer.name)
             save(again.render(0, 595), "41-signed-by-name.png")
         } finally {

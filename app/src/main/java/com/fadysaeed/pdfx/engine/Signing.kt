@@ -113,6 +113,8 @@ data class SignatureCheck(
     val validFrom: Long = 0, val validTo: Long = 0,
     /** Form entries the signature locked were changed afterwards. */
     val lockedChanged: Boolean = false,
+    /** Why the check failed, when it did: for diagnosis, not for show. */
+    val problem: String = "",
 ) {
     val state: SignState get() = when {
         !intact -> SignState.BROKEN
@@ -197,14 +199,27 @@ fun isSelfSigned(c: X509Certificate): Boolean = c.subjectX500Principal == c.issu
 
 /** Checks signatures for MuPDF: the bytes against the signature, and the certificate against the phone's trust. */
 class CmsVerifier : PKCS7Verifier() {
-    override fun checkDigest(stream: FitzInputStream, signature: ByteArray): Int = runCatching {
-        val data = readAll(stream)
-        val cms = CMSSignedData(CMSProcessableByteArray(data), trimmed(signature))
-        val si = cms.signerInfos.signers.firstOrNull() ?: return@runCatching PKCS7VerifierNoSignature
-        val holder = cms.certificates.getMatches(selectorOf(si.sid)).firstOrNull() ?: return@runCatching PKCS7VerifierNoCertificate
-        val cert = JcaX509CertificateConverter().setProvider(Crypto).getCertificate(holder)
-        if (si.verify(JcaSimpleSignerInfoVerifierBuilder().setProvider(Crypto).build(cert))) PKCS7VerifierOK else PKCS7VerifierDigestFailure
-    }.getOrDefault(PKCS7VerifierDigestFailure)
+    /** What went wrong in the last digest check, if anything. */
+    var problem: String = ""
+        private set
+
+    override fun checkDigest(stream: FitzInputStream, signature: ByteArray): Int {
+        problem = ""
+        var size = -1
+        return try {
+            val data = readAll(stream)
+            size = data.size
+            val cms = CMSSignedData(CMSProcessableByteArray(data), trimmed(signature))
+            val si = cms.signerInfos.signers.firstOrNull() ?: run { problem = "no signer"; return PKCS7VerifierNoSignature }
+            val holder = cms.certificates.getMatches(selectorOf(si.sid)).firstOrNull() ?: run { problem = "no certificate"; return PKCS7VerifierNoCertificate }
+            val cert = JcaX509CertificateConverter().setProvider(Crypto).getCertificate(holder)
+            if (si.verify(JcaSimpleSignerInfoVerifierBuilder().setProvider(Crypto).build(cert))) PKCS7VerifierOK
+            else { problem = "signature does not match (${size} bytes)"; PKCS7VerifierDigestFailure }
+        } catch (t: Throwable) {
+            problem = "${t.javaClass.simpleName}: ${t.message} (${size} bytes, signature ${signature.size} bytes, trimmed ${runCatching { trimmed(signature).size }.getOrDefault(-1)})"
+            PKCS7VerifierDigestFailure
+        }
+    }
 
     override fun checkCertificate(signature: ByteArray): Int {
         val (cert, _, chain) = readSignature(signature)
