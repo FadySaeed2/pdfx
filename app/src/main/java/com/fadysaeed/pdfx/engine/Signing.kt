@@ -65,13 +65,22 @@ private fun readAll(s: InputStream): ByteArray {
  * signing time among the signed attributes.
  */
 class P12Signer(private val key: PrivateKey, private val chain: List<X509Certificate>) : PKCS7Signer() {
+    /** A mark unique to this signer, which MuPDF writes into the file in place of the signature. */
+    val marker: ByteArray = ("PDFXSIG-" + java.util.UUID.randomUUID().toString().replace("-", "").take(16)).toByteArray()
+
     override fun name(): PKCS7DistinguishedName {
         val p = personOf(chain.first())
         return PKCS7DistinguishedName().apply { cn = p.name; o = p.org; email = p.email; c = p.country; ou = "" }
     }
 
-    override fun sign(stm: FitzInputStream): ByteArray {
-        val data = readAll(stm)
+    /**
+     * MuPDF hands over the bytes to sign while it writes the file, but on Android that stream reads
+     * back empty; so it gets a marker here, and [completeSignatures] signs the real bytes after.
+     */
+    override fun sign(stm: FitzInputStream): ByteArray = marker
+
+    /** A detached CMS (PKCS#7) signature over [data]: SHA-256, the chain included, signing time signed. */
+    fun signData(data: ByteArray): ByteArray {
         val algorithm = if (key.algorithm.equals("EC", true)) "SHA256withECDSA" else "SHA256withRSA"
         val signer = JcaContentSignerBuilder(algorithm).setProvider(Crypto).build(key)
         val gen = CMSSignedDataGenerator()
@@ -236,3 +245,115 @@ class CmsVerifier : PKCS7Verifier() {
 @Suppress("UNCHECKED_CAST")
 private fun selectorOf(id: org.bouncycastle.cms.SignerId): org.bouncycastle.util.Selector<X509CertificateHolder> =
     id as org.bouncycastle.util.Selector<X509CertificateHolder>
+
+/** Where a signature's parts sit in a file: the two signed byte ranges and the hex hole between them. */
+private class SigSlot(val a: Long, val la: Long, val b: Long, val lb: Long, val holeStart: Long, val holeEnd: Long)
+
+private fun indexOf(hay: ByteArray, needle: ByteArray, from: Int): Int {
+    var i = from.coerceAtLeast(0)
+    val last = hay.size - needle.size
+    outer@ while (i <= last) {
+        for (k in needle.indices) if (hay[i + k] != needle[k]) { i++; continue@outer }
+        return i
+    }
+    return -1
+}
+
+/** Every signature slot in [bytes] whose byte ranges are well formed: ByteRange, then Contents. */
+private fun slots(bytes: ByteArray): List<SigSlot> {
+    val out = ArrayList<SigSlot>()
+    val br = "/ByteRange".toByteArray()
+    val ct = "/Contents".toByteArray()
+    var i = indexOf(bytes, br, 0)
+    while (i >= 0) {
+        runCatching {
+            var j = i + br.size
+            while (j < bytes.size && bytes[j] != '['.code.toByte()) j++
+            val close = (j until minOf(bytes.size, j + 200)).first { bytes[it] == ']'.code.toByte() }
+            val nums = String(bytes, j + 1, close - j - 1, Charsets.ISO_8859_1).trim().split(Regex("\\s+")).map { it.toLong() }
+            if (nums.size == 4) {
+                // The hole is the hex string the first range stops at.
+                val lt = nums[0] + nums[1]
+                val gt = nums[2] - 1
+                if (lt in 0 until bytes.size && gt in 0 until bytes.size && bytes[lt.toInt()] == '<'.code.toByte() && bytes[gt.toInt()] == '>'.code.toByte()) {
+                    out += SigSlot(nums[0], nums[1], nums[2], nums[3], lt + 1, gt)
+                }
+            }
+        }
+        i = indexOf(bytes, br, i + br.size)
+    }
+    return out
+}
+
+private fun hexDecode(bytes: ByteArray, from: Long, to: Long): ByteArray {
+    val out = java.io.ByteArrayOutputStream()
+    var hi = -1
+    for (p in from until to) {
+        val v = Character.digit(bytes[p.toInt()].toInt().toChar(), 16)
+        if (v < 0) continue
+        if (hi < 0) hi = v else { out.write(hi * 16 + v); hi = -1 }
+    }
+    return out.toByteArray()
+}
+
+/**
+ * Finishes signatures MuPDF has just written into [path]: finds each slot still holding a signer's
+ * marker (or nothing), signs the file's real bytes around it, and writes the signature in. Throws
+ * when a signature cannot be completed, so a half-signed file is never kept.
+ */
+fun completeSignatures(path: String, signers: List<P12Signer>) {
+    if (signers.isEmpty()) return
+    val file = java.io.File(path)
+    require(file.length() < 400L * 1024 * 1024) { "This file is too large to sign on the phone." }
+    val bytes = file.readBytes()
+    val left = signers.toMutableList()
+    java.io.RandomAccessFile(file, "rw").use { raf ->
+        for (slot in slots(bytes)) {
+            if (left.isEmpty()) break
+            if (slot.b + slot.lb != bytes.size.toLong()) continue // not in the newest part of the file
+            val inside = hexDecode(bytes, slot.holeStart, slot.holeEnd)
+            val empty = inside.all { it == 0.toByte() }
+            val signer = left.firstOrNull { m -> inside.size >= m.marker.size && inside.copyOf(m.marker.size).contentEquals(m.marker) }
+                ?: if (empty) left.first() else null
+            signer ?: continue
+            val data = ByteArray((slot.la + slot.lb).toInt())
+            System.arraycopy(bytes, slot.a.toInt(), data, 0, slot.la.toInt())
+            System.arraycopy(bytes, slot.b.toInt(), data, slot.la.toInt(), slot.lb.toInt())
+            val sig = signer.signData(data)
+            val hex = sig.joinToString("") { "%02X".format(it.toInt() and 0xFF) }
+            val room = (slot.holeEnd - slot.holeStart).toInt()
+            require(hex.length <= room) { "The signature did not fit in the file." }
+            raf.seek(slot.holeStart)
+            raf.write((hex + "0".repeat(room - hex.length)).toByteArray(Charsets.ISO_8859_1))
+            left.remove(signer)
+        }
+    }
+    require(left.isEmpty()) { "The signature could not be completed in the saved file." }
+}
+
+/**
+ * Checks a signature against the file's own bytes: [range] is its ByteRange, [open] reads the file
+ * from the start. True when the signed bytes are unchanged; [problem] says why not.
+ */
+fun checkRanges(open: () -> InputStream, range: LongArray, signature: ByteArray): Pair<Boolean, String> = try {
+    require(range.size == 4 && range.all { it >= 0 }) { "odd byte range" }
+    val total = range[1] + range[3]
+    require(total < 400L * 1024 * 1024) { "too large" }
+    val data = ByteArray(total.toInt())
+    open().use { inp ->
+        val s = java.io.BufferedInputStream(inp, 1 shl 16)
+        fun skipTo(pos: Long, at: Long): Long { var p = at; while (p < pos) { val n = s.skip(pos - p); if (n <= 0) { if (s.read() < 0) error("file ends early"); p++ } else p += n }; return p }
+        fun fill(off: Int, len: Int) { var o = off; val end = off + len; while (o < end) { val n = s.read(data, o, end - o); if (n < 0) error("file ends early"); o += n } }
+        var p = skipTo(range[0], 0)
+        fill(0, range[1].toInt()); p += range[1]
+        skipTo(range[2], p)
+        fill(range[1].toInt(), range[3].toInt())
+    }
+    val cms = CMSSignedData(CMSProcessableByteArray(data), trimmed(signature))
+    val si = cms.signerInfos.signers.firstOrNull() ?: error("no signer")
+    val holder = cms.certificates.getMatches(selectorOf(si.sid)).firstOrNull() ?: error("no certificate")
+    val cert = JcaX509CertificateConverter().setProvider(Crypto).getCertificate(holder)
+    if (si.verify(JcaSimpleSignerInfoVerifierBuilder().setProvider(Crypto).build(cert))) true to "" else false to "signature does not match"
+} catch (t: Throwable) {
+    false to "${t.javaClass.simpleName}: ${t.message}"
+}

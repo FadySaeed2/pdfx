@@ -546,7 +546,7 @@ class Reader(
     }
 
     /** Signs with a certificate where [ask] says, then saves straight away so the signature is complete. */
-    suspend fun signDigitally(ask: DigitalAsk, signer: com.artifex.mupdf.fitz.PKCS7Signer, image: String?, reason: String, location: String): Boolean {
+    suspend fun signDigitally(ask: DigitalAsk, signer: com.fadysaeed.pdfx.engine.P12Signer, image: String?, reason: String, location: String): Boolean {
         val s = session ?: return false
         val ok = s.signDigitally(ask.page, if (ask.field == null) ask.box else null, ask.field, signer, image, reason, location)
         if (ok) {

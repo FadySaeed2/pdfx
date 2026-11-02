@@ -132,6 +132,8 @@ data class PageSize(val width: Float, val height: Float) {
 class PdfSession private constructor(
     private val doc: Document,
     private val source: Closeable?,
+    /** Reads the file as it is on disk, from the start: signatures are checked against these bytes. */
+    private val opener: (() -> java.io.InputStream)?,
     private val dispatcher: ExecutorCoroutineDispatcher,
 ) {
     @Volatile var pageCount: Int = 0
@@ -497,7 +499,7 @@ class PdfSession private constructor(
     // ------------------------------------------------------------------ digital signatures
 
     /** Signers in use for signatures not yet written; MuPDF calls them when the file is saved. */
-    private val pendingSigners = mutableListOf<PKCS7Signer>()
+    private val pendingSigners = mutableListOf<P12Signer>()
 
     private fun inherited(o: PDFObject?, key: String): PDFObject? {
         var cur = o
@@ -517,36 +519,43 @@ class PdfSession private constructor(
         val any = runCatching { d.trailer.get("Root").get("AcroForm").get("Fields").size() > 0 }.getOrDefault(false)
         if (!any) return@onDoc emptyList()
         val verifier = CmsVerifier()
+        val fileSize = runCatching { opener?.invoke()?.use { inp -> var n = 0L; val buf = ByteArray(1 shl 16); while (true) { val k = inp.read(buf); if (k < 0) break; n += k }; n } }.getOrNull()
         try {
             (0 until pageCount).flatMap { p ->
                 widgets(p).filter { w -> runCatching { w.fieldType == PDFWidget.TYPE_SIGNATURE && w.isSigned }.getOrDefault(false) }
-                    .map { w -> describeSignature(p, w, verifier) }
+                    .map { w -> describeSignature(p, w, verifier, fileSize) }
             }
         } finally {
             runCatching { verifier.destroy() }
         }
     }
 
-    private fun describeSignature(page: Int, w: PDFWidget, verifier: CmsVerifier): DocSignature {
+    private fun describeSignature(page: Int, w: PDFWidget, verifier: CmsVerifier, fileSize: Long?): DocSignature {
         val v = inherited(w.getObject(), "V")
         val contents = runCatching { v?.get("Contents")?.asByteString() }.getOrNull() ?: ByteArray(0)
         val (cert, time, chain) = readSignature(contents)
-        val digest = runCatching { w.checkDigest(verifier) }.getOrDefault(PKCS7Verifier.PKCS7VerifierUnknown)
-        val trust = runCatching { w.checkCertificate(verifier) }.getOrDefault(PKCS7Verifier.PKCS7VerifierUnknown)
-        val changed = runCatching { w.incrementalChangeSinceSigning() }.getOrDefault(false)
+        val range = runCatching {
+            val br = v!!.get("ByteRange")
+            LongArray(br.size()) { br.get(it).asInteger().toLong() }
+        }.getOrNull()
+        // The signed bytes are checked straight from the file: MuPDF's own stream for this reads empty on Android.
+        val (intact, problem) = if (range != null && opener != null) checkRanges(opener, range, contents) else false to "no byte range"
+        val trust = runCatching { verifier.checkCertificate(contents) }.getOrDefault(PKCS7Verifier.PKCS7VerifierUnknown)
+        val changed = if (range != null && range.size == 4 && fileSize != null) range[2] + range[3] < fileSize
+            else runCatching { w.incrementalChangeSinceSigning() }.getOrDefault(false)
         val locked = runCatching { w.validateSignature() != 0 }.getOrDefault(false)
         val signer = cert?.let { personOf(it) } ?: Person(runCatching { v?.get("Name")?.asString() }.getOrNull() ?: "")
         val issuer = cert?.let { runCatching { personOf(org.bouncycastle.cert.X509CertificateHolder(it.encoded).issuer) }.getOrNull() } ?: Person("")
         val check = SignatureCheck(
             signer = signer, issuer = issuer,
             time = time ?: pdfDate(runCatching { v?.get("M")?.asString() }.getOrNull()),
-            intact = digest == PKCS7Verifier.PKCS7VerifierOK,
+            intact = intact,
             trusted = trust == PKCS7Verifier.PKCS7VerifierOK,
             selfSigned = trust == PKCS7Verifier.PKCS7VerifierSelfSigned || (cert != null && isSelfSigned(cert)),
             changedAfter = changed,
             validFrom = cert?.notBefore?.time ?: 0, validTo = cert?.notAfter?.time ?: 0,
             lockedChanged = locked,
-            problem = verifier.problem,
+            problem = problem,
         )
         val r = w.bounds
         return DocSignature(
@@ -563,7 +572,7 @@ class PdfSession private constructor(
      * one at [box]. The signature shows [imagePath] (a signature picture) or the signer's name, with
      * the date. It is completed when the file is saved, so save straight after.
      */
-    suspend fun signDigitally(index: Int, box: Box?, fieldIndex: Int?, signer: PKCS7Signer, imagePath: String?, reason: String?, location: String?): Boolean = onDoc {
+    suspend fun signDigitally(index: Int, box: Box?, fieldIndex: Int?, signer: P12Signer, imagePath: String?, reason: String?, location: String?): Boolean = onDoc {
         val d = pdf ?: return@onDoc false
         val page = pdfPage(index)
         val w = if (fieldIndex != null) {
@@ -954,6 +963,10 @@ class PdfSession private constructor(
     suspend fun writeTo(path: String, incremental: Boolean) = onDoc {
         val d = pdf ?: error("Only PDF files can be saved.")
         d.save(path, if (incremental) "incremental" else "garbage=compact")
+        if (pendingSigners.isNotEmpty()) {
+            completeSignatures(path, pendingSigners.toList())
+            pendingSigners.clear()
+        }
     }
 
     private fun refreshFlags() {
@@ -1042,7 +1055,7 @@ class PdfSession private constructor(
                     val stream = FdStream(pfd)
                     try {
                         val doc = Document.openDocument(stream, "application/pdf")
-                        PdfSession(doc, stream, d).also { it.prepare() }
+                        PdfSession(doc, stream, { context.contentResolver.openInputStream(uri) ?: error("The file could not be read.") }, d).also { it.prepare() }
                     } catch (t: Throwable) {
                         stream.close(); throw t
                     }
@@ -1056,7 +1069,7 @@ class PdfSession private constructor(
         suspend fun openFile(path: String): PdfSession {
             val d = newThread()
             return try {
-                withContext(d) { PdfSession(Document.openDocument(path), null, d).also { it.prepare() } }
+                withContext(d) { PdfSession(Document.openDocument(path), null, { java.io.FileInputStream(path) }, d).also { it.prepare() } }
             } catch (t: Throwable) {
                 d.close(); throw t
             }
