@@ -859,18 +859,23 @@ fun ViewerContent(
                     ViewerSheet.CONTENTS -> ContentsSheetOnTab(reader, null, current, name) { p, y -> sheet = null; reader.go(p, y) }
                     ViewerSheet.DISPLAY -> DisplaySheet(reader, onFlatten = { sheet = null; askFlatten = true }, onReflow = ::toggleReflow)
                     ViewerSheet.MORE -> {
+                        // Close the sheet first, then open what was picked: a screen opened while the
+                        // sheet is still being taken down can upset the composition.
+                        fun then(action: () -> Unit) {
+                            scope.launch { state.hide() }.invokeOnCompletion { sheet = null; action() }
+                        }
                         val marked = current in reader.bookmarks
                         SheetRow(
                             if (marked) Glyph.BOOKMARK_FILLED else Glyph.BOOKMARK,
                             if (marked) "Remove the bookmark on page ${current + 1}" else "Bookmark page ${current + 1}",
-                            { sheet = null; reader.toggleBookmark(current); flash = if (marked) "Bookmark removed" else "Page ${current + 1} bookmarked" },
+                            { then { reader.toggleBookmark(current); flash = if (marked) "Bookmark removed" else "Page ${current + 1} bookmarked" } },
                             color = if (marked) Ink.Amber else Ink.Bone,
                         )
                         SheetRow(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS })
-                        if (reader.canMark && !reader.reflow) SheetRow(Glyph.GRID, "Pages", { sheet = null; reader.openPages?.invoke() }, note = "Put them in order, turn, add or take out, or save some as a new file")
-                        if (reader.canMark && !reader.reflow) SheetRow(Glyph.PAGE, "Trim white margins", { sheet = null; reader.openTool?.invoke("trim") }, note = "Bigger words on a phone; whole pages can come back")
-                        if (reader.canMark) SheetRow(Glyph.GRID, "Split into files…", { sheet = null; reader.openTool?.invoke("split") })
-                        if (reader.canMark) SheetRow(Glyph.PLUS, "Merge with other files…", { sheet = null; reader.openTool?.invoke("merge") })
+                        if (reader.canMark && !reader.reflow) SheetRow(Glyph.GRID, "Pages", { then { reader.openPages?.invoke() } }, note = "Put them in order, turn, add or take out, or save some as a new file")
+                        if (reader.canMark && !reader.reflow) SheetRow(Glyph.PAGE, "Trim white margins", { then { reader.openTool?.invoke("trim") } }, note = "Bigger words on a phone; whole pages can come back")
+                        if (reader.canMark) SheetRow(Glyph.GRID, "Split into files…", { then { reader.openTool?.invoke("split") } })
+                        if (reader.canMark) SheetRow(Glyph.PLUS, "Merge with other files…", { then { reader.openTool?.invoke("merge") } })
                         SheetRow(Glyph.MOON, "Page colours and reading mode", { sheet = ViewerSheet.DISPLAY })
                     }
                 }
