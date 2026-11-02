@@ -355,7 +355,7 @@ fun PagesScreen(
                 Text("Pick all", style = Type.bodyStrong.copy(color = Ink.Amber), modifier = Modifier.clickable(onClick = o::pickAll).padding(horizontal = 10.dp, vertical = 8.dp))
             }
         } else {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 ActionButton(Glyph.TURN_LEFT, "Turn left") { o.turn(-90) }
                 ActionButton(Glyph.TURN_RIGHT, "Turn right") { o.turn(90) }
                 ActionButton(Glyph.COPY, "Copy") { o.duplicate() }
@@ -382,9 +382,9 @@ fun PagesScreen(
 }
 
 @Composable
-private fun ActionButton(glyph: Glyph, label: String, onClick: () -> Unit) {
+private fun androidx.compose.foundation.layout.RowScope.ActionButton(glyph: Glyph, label: String, onClick: () -> Unit) {
     Column(
-        Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 6.dp).width(56.dp),
+        Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         GlyphIcon(glyph, Ink.Bone, size = 24.dp)

@@ -134,7 +134,9 @@ class ArrangeOnDeviceTest {
             val page6 = d.loadPage(6) as PDFPage
             val names = page6.widgets.orEmpty().map { it.name }
             page6.destroy()
-            assertTrue("the letter's fields came with it: $names", names.contains("patient_name") || names.contains("doctor_signature"))
+            assertEquals("the letter's fields came with it, each with its own name", listOf("patient_name", "doctor_signature"), names)
+            val annots = pdf.findPage(6).get("Annots")
+            assertTrue("copied marks are objects of their own", annots.isArray && annots.size() == 2 && (0 until annots.size()).all { annots.get(it).isIndirect })
         } finally {
             d.destroy()
         }

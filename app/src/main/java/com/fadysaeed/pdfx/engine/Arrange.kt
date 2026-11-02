@@ -198,7 +198,11 @@ object Arranger {
                 if (c.get("FT").let { it.isName && it.asName() == "Sig" }) c.delete("V")
             }
             c.put("P", dst)
-            out.push(d.addObject(c))
+            // An object of its own, as marks must be. (addObject in these bindings hands back the
+            // dictionary itself, not its reference, and lets go of it: so not that.)
+            val ref = d.createObject()
+            ref.writeObject(c)
+            out.push(ref)
         }
         if (out.size() > 0) dst.put("Annots", out)
     }
