@@ -197,3 +197,8 @@ signatures, and a full pass on every screen for clarity.
   or a list, with caption, notes and "See this table as on the page". Anything that does not add
   up is a picture of the table, never guessed text. Golden tables for both files (24 + 5, checked
   by eye) pass on the JVM and on the emulator, with no table found on any other page.
+- 2026-11-02 — Reflow figures (Fady: diagrams of boxes and arrows came out as jumbled text). A
+  figure is found from its caption (FIGURE 2–1., Fig. 1, bold or on a band); everything drawn
+  right above it in its column, with its labels and a title in the figure's own type, becomes one
+  picture, and the caption and notes read as text under it. The handbook's five figures and the
+  Cochrane paper's two, none elsewhere; a signature stamp over a figure is not part of it.

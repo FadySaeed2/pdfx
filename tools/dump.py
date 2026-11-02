@@ -5,6 +5,9 @@ def page_data(p):
     M = p.rotation_matrix
     chars = []
     li = 0
+    # The app reads the page's own text: a form field's or a note's appearance (a signature
+    # stamp, say) is not part of it.
+    skip = [pymupdf.Rect(a.rect) for a in p.annots()] + [pymupdf.Rect(w.rect) for w in p.widgets()]
     raw = p.get_text("rawdict", flags=pymupdf.TEXT_PRESERVE_WHITESPACE | pymupdf.TEXT_MEDIABOX_CLIP | pymupdf.TEXT_CID_FOR_UNKNOWN_UNICODE)
     for b in raw["blocks"]:
         for l in b.get("lines", []):
@@ -14,7 +17,9 @@ def page_data(p):
             for s in l["spans"]:
                 bold = 1 if (s["flags"] & 16) or any(k in s["font"] for k in ("Bold", "Black", "Heavy", "Semibold", ".B")) else 0
                 for c in s["chars"]:
-                    r = pymupdf.Rect(c["bbox"]) * M
+                    cb = pymupdf.Rect(c["bbox"])
+                    if any(k.contains(pymupdf.Point((cb.x0 + cb.x1) / 2, (cb.y0 + cb.y1) / 2)) for k in skip): continue
+                    r = cb * M
                     o = pymupdf.Point(c["origin"]) * M
                     chars.append([round(r.x0,2), round(r.y0,2), round(r.x1,2), round(r.y1,2), round(o.x,2), round(o.y,2), ord(c["c"]) if c["c"] else 32, round(s["size"],2), bold, s["font"], li, round(v.x,3), round(v.y,3)])
             li += 1
