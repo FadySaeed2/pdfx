@@ -1085,6 +1085,39 @@ class PdfSession private constructor(
         (0 until pageCount).any { i -> runCatching { !d.findPage(i).get("CropBox").isNull }.getOrDefault(false) }
     }
 
+    /** Pages that are pictures only, with no words MuPDF can find: the ones worth reading. */
+    suspend fun pagesWithoutText(): List<Int> = onDoc {
+        (0 until pageCount).filter { i -> runCatching { !TextLayer.hasText(page(i)) }.getOrDefault(false) }
+    }
+
+    /**
+     * Draws a page for reading its words (see Reading.scaleFor).
+     * Returns the picture and how many pixels make one point, to bring word boxes back to the page.
+     */
+    suspend fun renderForReading(index: Int): Pair<Bitmap, Float> = onDoc {
+        val s = sizeNow(index)
+        val scale = Reading.scaleFor(s.width, s.height)
+        AndroidDrawDevice.drawPage(page(index), Matrix(scale)) to scale
+    }
+
+    /** Lays words read off pictures over their pages as invisible text, as one step that can be undone. */
+    suspend fun addReadText(words: Map<Int, List<ReadWord>>): Int = onDoc {
+        val d = pdf ?: return@onDoc 0
+        var n = 0
+        d.beginOperation("Make searchable")
+        try {
+            for ((i, ws) in words) n += TextLayer.add(d, pdfPage(i), ws)
+            d.endOperation()
+        } catch (t: Throwable) {
+            runCatching { d.abandonOperation() }
+            throw t
+        }
+        dropPages()
+        refreshFlags()
+        if (n > 0) dirty = true
+        n
+    }
+
     /** Whether changes can be appended to the original; asked on the document's own thread. */
     suspend fun canSaveIncrementally(): Boolean = onDoc { runCatching { pdf?.canBeSavedIncrementally() ?: false }.getOrDefault(false) }
 

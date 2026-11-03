@@ -214,6 +214,9 @@ fun ViewerScreen(
     var trimBusy by remember(request) { mutableStateOf(false) }
     var trimNote by remember(request) { mutableStateOf<String?>(null) }
     var hasTrims by remember(request) { mutableStateOf(false) }
+    /** Reading the words on pages that are pictures: busy, and what it is doing or found. */
+    var readBusy by remember(request) { mutableStateOf(false) }
+    var readNote by remember(request) { mutableStateOf<String?>(null) }
     var organizing by remember(request) { mutableStateOf(false) }
     var leavePages by remember(request) { mutableStateOf(false) }
     var signedPages by remember(request) { mutableStateOf(false) }
@@ -389,6 +392,39 @@ fun ViewerScreen(
                     if (ok) saveAndReopen("Whole pages shown again.")
                 }
             }
+            fun readWords() {
+                if (readBusy) return
+                readBusy = true
+                scope.launch {
+                    readNote = "Looking for pages that are pictures…"
+                    val todo = runCatching { session.pagesWithoutText() }.getOrDefault(emptyList())
+                    if (todo.isEmpty()) { readBusy = false; readNote = "Every page already has words you can search and copy."; return@launch }
+                    val found = HashMap<Int, List<com.fadysaeed.pdfx.engine.ReadWord>>()
+                    var failed: Throwable? = null
+                    for ((k, i) in todo.withIndex()) {
+                        readNote = if (todo.size == 1) "Reading page ${i + 1}…" else "Reading page ${i + 1} (${k + 1} of ${todo.size})…"
+                        runCatching {
+                            val (bmp, scale) = session.renderForReading(i)
+                            val ws = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                try { com.fadysaeed.pdfx.engine.Reading.words(bmp) } finally { bmp.recycle() }
+                            }
+                            if (ws.isNotEmpty()) found[i] = com.fadysaeed.pdfx.engine.Reading.toPage(ws, scale)
+                        }.onFailure { failed = it }
+                    }
+                    if (found.isEmpty()) {
+                        readBusy = false
+                        readNote = if (failed != null) "The words could not be read: ${failed?.message ?: "the reader did not start"}." else "No words could be found on these pages."
+                        return@launch
+                    }
+                    val ok = runCatching { session.addReadText(found) > 0 }.getOrDefault(false)
+                    readBusy = false
+                    if (!ok) { readNote = "The words were read but could not be added to the file."; return@launch }
+                    tool = null
+                    readNote = null
+                    val n = found.size
+                    saveAndReopen(if (n == 1) "Words read on 1 page: you can search, copy and highlight them now." else "Words read on $n pages: you can search, copy and highlight them now.")
+                }
+            }
             fun closePages() {
                 organizer?.close(); organizer = null
                 leavePages = false
@@ -483,6 +519,7 @@ fun ViewerScreen(
             )
             when (tool) {
                 "trim" -> com.fadysaeed.pdfx.ui.tools.TrimDialog(hasTrims, trimBusy, trimNote, onDismiss = { tool = null }, onTrim = ::trim, onRestore = ::untrim)
+                "read" -> com.fadysaeed.pdfx.ui.tools.ReadDialog(readBusy, readNote, onDismiss = { if (!readBusy) { tool = null; readNote = null } }, onRead = ::readWords)
                 "split" -> doc?.let { d ->
                     com.fadysaeed.pdfx.ui.tools.SplitDialog(d, onDismiss = { tool = null }) { made ->
                         tool = null
@@ -895,6 +932,7 @@ fun ViewerContent(
                         SheetRow(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS })
                         if (reader.canMark && !reader.reflow) SheetRow(Glyph.GRID, "Pages", { then { reader.openPages?.invoke() } }, note = "Put them in order, turn, add or take out, or save some as a new file")
                         if (reader.canMark && !reader.reflow) SheetRow(Glyph.PAGE, "Trim white margins", { then { reader.openTool?.invoke("trim") } }, note = "Bigger words on a phone; whole pages can come back")
+                        if (reader.canMark && !reader.reflow) SheetRow(Glyph.SEARCH, "Make searchable", { then { reader.openTool?.invoke("read") } }, note = "Reads the words on scanned pages, on the phone")
                         if (reader.canMark) SheetRow(Glyph.GRID, "Split into files…", { then { reader.openTool?.invoke("split") } })
                         if (reader.canMark) SheetRow(Glyph.PLUS, "Merge with other files…", { then { reader.openTool?.invoke("merge") } })
                         SheetRow(Glyph.MOON, "Page colours and reading mode", { sheet = ViewerSheet.DISPLAY })

@@ -368,3 +368,28 @@ fun TrimDialog(hasTrims: Boolean, busy: Boolean, progress: String?, onDismiss: (
         dismissButton = { GhostButton("Cancel", { if (!busy) onDismiss() }, minHeight = 52.dp) },
     )
 }
+
+@Composable
+fun ReadDialog(busy: Boolean, progress: String?, onDismiss: () -> Unit, onRead: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text("Make searchable", style = Type.title) },
+        text = {
+            Column {
+                Text(
+                    "Pages that are only pictures, like scans and photos, get their words read and laid invisibly over them. The pages look the same; you can then search, copy and highlight. Pages that already have words are left as they are.",
+                    style = Type.note,
+                )
+                Text(
+                    progress ?: "English. It is all done on the phone; nothing leaves it.",
+                    style = Type.small,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
+        },
+        confirmButton = { AmberButton(if (busy) "Reading…" else "Read the words", onRead, enabled = !busy) },
+        dismissButton = { GhostButton(if (busy) "Wait" else "Cancel", onDismiss, minHeight = 52.dp) },
+    )
+}

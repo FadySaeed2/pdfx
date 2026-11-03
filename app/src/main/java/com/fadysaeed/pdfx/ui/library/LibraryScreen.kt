@@ -97,17 +97,40 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     /** The file tools: merging (with the file to start from) and splitting a file. */
     var merging by remember { mutableStateOf<Doc?>(null) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    // Scanned pages become a new file in Documents/PDFx/Scans, which opens at once.
+    // Scanned pages become a new file in Documents/PDFx/Scans, with their words read so it can be
+    // searched and copied from, and it opens at once.
+    var scanNote by remember { mutableStateOf<String?>(null) }
     val scan = com.fadysaeed.pdfx.ui.tools.rememberScanner(
         onPages = { files ->
             scope.launch {
+                scanNote = "Saving the scan…"
                 val name = "Scan " + java.text.SimpleDateFormat("yyyy-MM-dd HH.mm", java.util.Locale.getDefault()).format(java.util.Date())
+                var read = 0
                 val r = app.saver.create(null, name, into = File(app.library.homeDir, "Scans")) { out ->
-                    com.fadysaeed.pdfx.engine.Arranger.fromPictures(files.map { it.absolutePath }, out.absolutePath)
+                    val pictures = File(app.cacheDir, "scan-pictures-${System.nanoTime()}.pdf")
+                    try {
+                        val n = com.fadysaeed.pdfx.engine.Arranger.fromPictures(files.map { it.absolutePath }, pictures.absolutePath)
+                        // Reading the words is a bonus: if it fails, the scan is kept as pictures.
+                        runCatching {
+                            read = com.fadysaeed.pdfx.engine.Reading.makeSearchable(pictures.absolutePath, out.absolutePath) { k, all ->
+                                scanNote = if (all == 1) "Reading the words…" else "Reading the words on page $k of $all…"
+                            }
+                        }.onFailure { pictures.copyTo(out, overwrite = true) }
+                        n
+                    } finally {
+                        pictures.delete()
+                    }
                 }
+                scanNote = null
                 files.firstOrNull()?.parentFile?.deleteRecursively()
                 r.fold(
-                    { d -> vm.notice.value = Notice("Saved as ${LibraryModel.display(d)} in Documents/PDFx/Scans."); onOpen(d, 0) },
+                    { d ->
+                        vm.notice.value = Notice(
+                            "Saved as ${LibraryModel.display(d)} in Documents/PDFx/Scans." +
+                                if (read > 0) " Its words can be searched and copied." else ""
+                        )
+                        onOpen(d, 0)
+                    },
                     { vm.notice.value = Notice(it.message ?: "The scan could not be saved.") },
                 )
             }
@@ -154,6 +177,11 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             merging = null
             vm.notice.value = Notice("Merged into ${LibraryModel.display(made)}, beside ${LibraryModel.display(start)}.")
             onOpen(made, 0)
+        }
+    }
+    scanNote?.let { note ->
+        Box(Modifier.fillMaxSize().background(Ink.Black.copy(alpha = 0.75f)).clickable(enabled = true) {}, contentAlignment = Alignment.Center) {
+            Text(note, style = Type.title)
         }
     }
     }

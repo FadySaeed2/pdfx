@@ -73,7 +73,11 @@ class OcrEvalOnDeviceTest {
                 val mlMs = (System.nanoTime() - t0) / 1e6
                 val mlWords = ml.textBlocks.flatMap { b -> b.lines.flatMap { l -> l.elements.map { it.text } } }
                 val (r1, p1) = score(words, mlWords)
-                report.append(String.format("ML Kit          recall %.3f  precision %.3f  %6.0f ms\n", r1, p1, mlMs))
+                // Once more on the same page: the time a page takes once the reader is warm.
+                val t1 = System.nanoTime()
+                Tasks.await(recognizer.process(InputImage.fromBitmap(bmp, 0)))
+                val warm = (System.nanoTime() - t1) / 1e6
+                report.append(String.format("ML Kit          recall %.3f  precision %.3f  %6.0f ms (again: %.0f ms)\n", r1, p1, mlMs, warm))
                 totals.getOrPut("ML Kit") { DoubleArray(3) }.let { it[0] += r1; it[1] += p1; it[2] += mlMs }
             }.onFailure { report.append("ML Kit: $it\n") }
 

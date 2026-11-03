@@ -110,6 +110,9 @@ dependencies {
     // The document scanner (edges, straightening, clean-up) runs inside Google Play services;
     // PDFx itself still has no internet permission.
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
+    // Reading words on scanned pages: Google's text reader with its model inside the app, so it
+    // works offline from the first use (chosen over Tesseract by OcrEvalOnDeviceTest).
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
@@ -125,9 +128,6 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     // Two OCR engines side by side on the same scanned pages, to choose the one that reads best.
-    androidTestImplementation("com.google.mlkit:text-recognition:16.0.1")
-    // ML Kit starts itself from the app's manifest, so for the comparison it rides in the debug build only.
-    debugImplementation("com.google.mlkit:text-recognition:16.0.1")
     androidTestImplementation("cz.adaptech.tesseract4android:tesseract4android:4.9.0")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
