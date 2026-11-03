@@ -88,7 +88,7 @@ received files.
 Thumbnail grid with drag to reorder, rotate, delete, extract, duplicate; insert blank pages, pages
 from other PDFs or images; merge many files; split by ranges or size; crop margins.
 
-### Phase 6 — scanner and OCR
+### Phase 6 — scanner and OCR (done, 0.3.82)
 ML Kit document scanner (edge detection, deskew, clean-up; runs on the phone through Play services),
 multi-page scans to PDF, and English OCR at the highest quality available on-device, written as an
 invisible text layer so scans become searchable and copyable.
@@ -220,3 +220,13 @@ signatures, and a full pass on every screen for clarity.
   tools and page colours moved under one More button, so the file's name has room (Fady).
   Found: opening a screen in the same moment a sheet is removed upset Compose (slot table out of
   step), so sheet actions now wait for the sheet to close. Phase 5 done; next is phase 6.
+- 2026-11-03: phase 6. Scan button in the library (ML Kit document scanner through Play services;
+  pages become a file in Documents/PDFx/Scans) and Scan pages in the Pages screen. OCR engine chosen
+  by measurement (OcrEvalOnDeviceTest, four degraded pages: book, photographed book, two-column
+  paper, table): ML Kit recall 0.973 / precision 0.934, Tesseract fast 0.975 / 0.909, Tesseract
+  best 0.973 / 0.896; ML Kit clearly better on the photo and the table, so ML Kit with its model in
+  the app (APK 22.6 → 35.5 MB). Words are laid over pages as invisible Helvetica text (render mode
+  3), boxes matched to MuPDF's own font metrics so selection covers the word; scans are read as
+  they are saved, and More → Make searchable reads picture pages of any file as one undoable step.
+  Picture pages are read at the picture's own sharpness (upscaling a photo cost about 6% of words).
+  Emulator speed is no guide for ML Kit (about 10 s a page there); to check on the phone.
