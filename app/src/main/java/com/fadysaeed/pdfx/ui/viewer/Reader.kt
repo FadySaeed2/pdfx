@@ -49,10 +49,13 @@ enum class Tool(val label: String) {
     SELECT("Select"), HIGHLIGHT("Highlight"), UNDERLINE("Underline"), STRIKE("Strike"), PEN("Pen"), MARKER("Marker"),
     SHAPE("Shapes"), TEXT("Text"), NOTE("Note"),
     SIGN("Sign"), STAMP("Stamp"), TICK("Tick"), CROSS("Cross"), DOT("Dot"), DATE("Date"),
-    ERASER("Eraser"),
+    REDACT("Black out"), ERASER("Eraser"),
 }
 
 /** Tools that drop one thing where you tap: a tap next to a mark must not pick that mark. */
+/** The outline of a place marked to be blacked out, as MuPDF draws it. */
+val RedactRed = 0xFFE0303A.toInt()
+
 val PlacingTools = setOf(Tool.SIGN, Tool.STAMP, Tool.TICK, Tool.CROSS, Tool.DOT, Tool.DATE)
 
 /** Sizes for ticks, crosses and dots, in points. */
@@ -747,6 +750,21 @@ class Reader(
     fun stopMarking() { marking = false; draft = null; selectedMark = null }
     fun pickTool(t: Tool) { tool = t; prefs?.edit()?.putString("tool", t.name)?.apply() }
     fun pickShape(k: ShapeKind) { shape = k }
+    /** Black out: words (snapping to them, like a highlight) or any area drawn as a box. */
+    var redactArea by mutableStateOf(false)
+    /** Places marked to be blacked out in the whole file. */
+    var redactions by mutableStateOf(0)
+    /** Marks every place [text] is found to be blacked out; [done] hears (places, pages). */
+    fun markAllToRedact(text: String, done: (Pair<Int, Int>) -> Unit) {
+        val s = session ?: return
+        var found = 0 to 0
+        change(null, after = { countRedactions(); done(found) }) {
+            found = s.markAllToRedact(text)
+            if (found.first == 0) done(found)
+            found.first > 0
+        }
+    }
+    fun countRedactions() { val s = session ?: return; scope.launch { redactions = runCatching { s.redactionCount() }.getOrDefault(redactions) } }
     fun pickColor(c: Int) {
         if (usesPenColors(tool)) { penColor = c; prefs?.edit()?.putInt("pen_color", c)?.apply() }
         else { markColor = c; prefs?.edit()?.putInt("mark_color", c)?.apply() }
@@ -903,6 +921,16 @@ class Reader(
         when (gestureTool) {
             Tool.PEN, Tool.MARKER -> (draft as? Draft.Ink)?.let { draft = it.copy(points = it.points + points) }
             Tool.SHAPE -> draft = Draft.Shape(page, shape, a.first, a.second, last.first, last.second, penColor, PenWidths[widthStep])
+            Tool.REDACT -> if (redactArea) {
+                draft = Draft.Shape(page, ShapeKind.RECT, a.first, a.second, last.first, last.second, RedactRed, 1.5f)
+            } else {
+                val s = session ?: return
+                selectJob?.cancel()
+                selectJob = scope.launch {
+                    val sel = runCatching { s.select(page, a.first, a.second, last.first, last.second) }.getOrNull()
+                    if (sel != null && gesturePage == page) draft = Draft.Words(page, sel.boxes, RedactRed)
+                }
+            }
             Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKE -> {
                 val s = session ?: return
                 selectJob?.cancel()
@@ -961,6 +989,21 @@ class Reader(
                     if (boxes.isNullOrEmpty()) { draft = null; return@change false }
                     draft = Draft.Words(page, boxes, color)
                     s?.addTextMark(page, kind, boxes, color, if (kind == MarkKind.HIGHLIGHT) HighlightStrengths[strength] else 1f) ?: false
+                }
+            }
+            Tool.REDACT -> if (redactArea) {
+                val d = draft as? Draft.Shape
+                if (!moved || d == null) { draft = null; return }
+                change(page, after = { countRedactions() }) { s?.addRedaction(page, listOf(Box(d.x0, d.y0, d.x1, d.y1)), words = false) ?: false }
+            } else {
+                val pending = selectJob
+                change(page, after = { countRedactions() }) {
+                    pending?.join()
+                    val boxes = (draft as? Draft.Words)?.boxes?.takeIf { moved }
+                        ?: s?.selectWord(page, a.first, a.second)?.boxes
+                    if (boxes.isNullOrEmpty()) { draft = null; return@change false }
+                    draft = Draft.Words(page, boxes, RedactRed)
+                    s?.addRedaction(page, boxes, words = true) ?: false
                 }
             }
             Tool.PEN, Tool.MARKER -> {
@@ -1165,6 +1208,7 @@ class Reader(
                     editingField?.let { f -> if (s != null && (page == null || f.page == page)) editingField = runCatching { s.fields(f.page) }.getOrNull()?.firstOrNull { it.index == f.index } ?: f }
                 }
                 if (allMarks != null) loadAllMarks()
+                if (redactions > 0 || tool == Tool.REDACT) countRedactions()
                 after?.invoke()
                 if (page != null) pages?.awaitRedraw(page, before)
             }

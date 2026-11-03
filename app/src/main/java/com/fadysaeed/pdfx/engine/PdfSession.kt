@@ -46,7 +46,7 @@ data class Selection(val page: Int, val ax: Float, val ay: Float, val bx: Float,
 enum class MarkKind(val label: String) {
     HIGHLIGHT("Highlight"), UNDERLINE("Underline"), STRIKE("Strikethrough"), SQUIGGLY("Squiggle"),
     INK("Drawing"), SQUARE("Rectangle"), CIRCLE("Ellipse"), LINE("Line"), ARROW("Arrow"),
-    TEXT("Text box"), NOTE("Note"), STAMP("Stamp"), OTHER("Mark"),
+    TEXT("Text box"), NOTE("Note"), STAMP("Stamp"), REDACT("To black out"), OTHER("Mark"),
 }
 
 /**
@@ -701,6 +701,7 @@ class PdfSession private constructor(
         PDFAnnotation.TYPE_FREE_TEXT -> MarkKind.TEXT
         PDFAnnotation.TYPE_TEXT -> MarkKind.NOTE
         PDFAnnotation.TYPE_STAMP -> MarkKind.STAMP
+        PDFAnnotation.TYPE_REDACT -> MarkKind.REDACT
         else -> MarkKind.OTHER
     }
 
@@ -757,6 +758,121 @@ class PdfSession private constructor(
         a.color = rgb(color)
         if (opacity < 1f) a.opacity = opacity.coerceIn(0.1f, 1f)
         a.update()
+    }
+
+    /**
+     * Marks words ([words], one box per line piece) or an area to be blacked out. Nothing goes until
+     * [applyRedactions]; till then it is a red outline that can be moved, removed or undone.
+     */
+    suspend fun addRedaction(index: Int, boxes: List<Box>, words: Boolean) = edit("Mark to black out", index) {
+        if (boxes.isEmpty()) return@edit
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_REDACT)
+        if (words) a.setQuadPoints(boxes.map { Quad(Rect(it.x0, it.y0, it.x1, it.y1)) }.toTypedArray())
+        else boxes[0].let { a.rect = Rect(minOf(it.x0, it.x1), minOf(it.y0, it.y1), maxOf(it.x0, it.x1), maxOf(it.y0, it.y1)) }
+        a.update()
+    }
+
+    /** Marks every place [needle] is found, on every page, as one step. Returns how many places and on how many pages. */
+    suspend fun markAllToRedact(needle: String): Pair<Int, Int> = onDoc {
+        val d = pdf ?: return@onDoc 0 to 0
+        var places = 0
+        var pages = 0
+        d.beginOperation("Mark to black out")
+        try {
+            for (i in 0 until pageCount) {
+                val hits = findOnPage(i, needle)
+                if (hits.isEmpty()) continue
+                pages++
+                val p = pdfPage(i)
+                for (h in hits) {
+                    val a = p.createAnnotation(PDFAnnotation.TYPE_REDACT)
+                    a.setQuadPoints(h.boxes.map { Quad(Rect(it.x0, it.y0, it.x1, it.y1)) }.toTypedArray())
+                    a.update()
+                    places++
+                }
+            }
+            d.endOperation()
+        } catch (t: Throwable) {
+            runCatching { d.abandonOperation() }
+            throw t
+        }
+        if (places > 0) { dropPages(); refreshFlags(); dirty = true }
+        places to pages
+    }
+
+    /** How many places are marked to be blacked out, in the whole file. */
+    suspend fun redactionCount(): Int = onDoc {
+        if (pdf == null) return@onDoc 0
+        val d = pdf!!
+        // Straight from the page objects, so a long book is not loaded page by page to count.
+        (0 until pageCount).sumOf { i ->
+            runCatching {
+                val annots = d.findPage(i).get("Annots")
+                (0 until annots.size()).count { k -> annots.get(k).get("Subtype").asName() == "Redact" }
+            }.getOrDefault(0)
+        }
+    }
+
+    /** Set once something is blacked out: the file must then be written afresh, never appended to. */
+    @Volatile private var rewriteOnly = false
+
+    /**
+     * Blacks out every marked place for good: the words, pictures (their pixels) and drawings under
+     * each mark are taken out of the page itself and a black box is drawn in their place. Marks
+     * (highlights, notes, drawings) over those places go too, and form fields there are emptied, so
+     * nothing of what was there stays in the file. Returns how many places were blacked out.
+     */
+    suspend fun applyRedactions(): Int = onDoc {
+        val d = pdf ?: return@onDoc 0
+        var n = 0
+        d.beginOperation("Black out")
+        try {
+            for (i in 0 until pageCount) {
+                val p = pdfPage(i)
+                val redacts = p.annotations?.filter { it.type == PDFAnnotation.TYPE_REDACT }.orEmpty()
+                if (redacts.isEmpty()) continue
+                val areas = redacts.flatMap { a ->
+                    val q = runCatching { a.quadPoints }.getOrNull()
+                    if (q != null && q.isNotEmpty()) q.map { it.toRect() } else listOf(a.rect)
+                }
+                fun hit(r: Rect) = areas.any { it.x0 < r.x1 && r.x0 < it.x1 && it.y0 < r.y1 && r.y0 < it.y1 }
+                // Other marks over a blacked-out place would still say what was there.
+                p.annotations?.filter { it.type != PDFAnnotation.TYPE_REDACT && it.type != PDFAnnotation.TYPE_LINK && hit(it.bounds) }
+                    ?.forEach { p.deleteAnnotation(it) }
+                p.widgets?.filter { hit(it.bounds) }?.forEach { w ->
+                    runCatching { if (w.fieldType == com.artifex.mupdf.fitz.PDFWidget.TYPE_TEXT) { w.setTextValue(""); w.update() } }
+                }
+                n += redacts.size
+                p.applyRedactions(true, PDFPage.REDACT_IMAGE_PIXELS, PDFPage.REDACT_LINE_ART_REMOVE_IF_COVERED, PDFPage.REDACT_TEXT_REMOVE)
+            }
+            d.endOperation()
+        } catch (t: Throwable) {
+            runCatching { d.abandonOperation() }
+            throw t
+        }
+        if (n > 0) {
+            rewriteOnly = true
+            dropPages()
+            sizes.clear()
+            refreshFlags()
+            dirty = true
+        }
+        n
+    }
+
+    /** Takes out the details the file carries about itself (see Secure.scrub), as one step. */
+    suspend fun scrubDetails() = onDoc {
+        val d = pdf ?: return@onDoc
+        d.beginOperation("Remove hidden details")
+        try {
+            Secure.scrub(d)
+            d.endOperation()
+        } catch (t: Throwable) {
+            runCatching { d.abandonOperation() }
+            throw t
+        }
+        refreshFlags()
+        dirty = true
     }
 
     /** Freehand ink. [opacity] below 1 makes a marker. */
@@ -1119,7 +1235,7 @@ class PdfSession private constructor(
     }
 
     /** Whether changes can be appended to the original; asked on the document's own thread. */
-    suspend fun canSaveIncrementally(): Boolean = onDoc { runCatching { pdf?.canBeSavedIncrementally() ?: false }.getOrDefault(false) }
+    suspend fun canSaveIncrementally(): Boolean = onDoc { !rewriteOnly && runCatching { pdf?.canBeSavedIncrementally() ?: false }.getOrDefault(false) }
 
     /**
      * Writes the document to [path]. Incremental saving appends only the changes, so [path] must

@@ -521,6 +521,32 @@ fun ViewerScreen(
                     com.fadysaeed.pdfx.engine.Secure.scrub(base, out.absolutePath, pw)
                 }
             }
+            fun findToRedact(text: String) {
+                if (toolBusy || text.isBlank()) return
+                toolBusy = true
+                toolNote = null
+                reader.markAllToRedact(text.trim()) { (places, pages) ->
+                    toolBusy = false
+                    toolNote = when {
+                        places == 0 -> "\"${text.trim()}\" is not in the file's words. Pages that are only pictures need Make searchable first."
+                        else -> "Marked ${if (places == 1) "1 place" else "$places places"} on ${if (pages == 1) "1 page" else "$pages pages"}. They show as red boxes: look them over, then black them out."
+                    }
+                }
+            }
+            fun applyRedactions(scrub: Boolean) {
+                if (toolBusy) return
+                toolBusy = true
+                toolNote = null
+                scope.launch {
+                    val n = runCatching { session.applyRedactions() }.getOrElse { toolBusy = false; toolNote = it.message ?: "They could not be blacked out."; return@launch }
+                    if (scrub) runCatching { session.scrubDetails() }
+                    toolBusy = false
+                    if (n == 0) { toolNote = "Nothing is marked yet."; return@launch }
+                    tool = null
+                    reader.redactions = 0
+                    saveAndReopen(if (n == 1) "Blacked out for good. What was under it is gone from the file." else "Blacked out for good in $n places. What was under them is gone from the file.")
+                }
+            }
             fun closePages() {
                 organizer?.close(); organizer = null
                 leavePages = false
@@ -594,6 +620,7 @@ fun ViewerScreen(
                 if (listState.firstVisibleItemIndex != i || listState.firstVisibleItemScrollOffset != o) listState.scrollToItem(i, o)
             }
             LaunchedEffect(reader) { notice?.let { reader.problem = it; notice = null } }
+            LaunchedEffect(reader) { reader.countRedactions() }
             LaunchedEffect(reader) { if (wantPages) { wantPages = false; openPages() } }
             LaunchedEffect(reader) { wantTool?.let { wantTool = null; openTool(it) } }
             LaunchedEffect(tool) { if (tool == "trim") hasTrims = runCatching { session.hasCrops() }.getOrDefault(false) }
@@ -637,6 +664,15 @@ fun ViewerScreen(
                         }.getOrElse { toolNote = it.message ?: "The file could not be read."; emptyList() }
                     }
                     com.fadysaeed.pdfx.ui.tools.DetailsDialog(details, toolBusy, toolNote, onRemove = ::scrubDetails, onDismiss = { tool = null })
+                }
+                "redact" -> {
+                    LaunchedEffect(Unit) { reader.countRedactions() }
+                    com.fadysaeed.pdfx.ui.tools.RedactDialog(
+                        marked = reader.redactions, busy = toolBusy, note = toolNote, signed = reader.docSignatures.isNotEmpty(),
+                        onFind = ::findToRedact, onApply = ::applyRedactions,
+                        onByHand = { tool = null; reader.pickTool(Tool.REDACT); reader.startMarking() },
+                        onDismiss = { if (!toolBusy) tool = null },
+                    )
                 }
                 "read" -> com.fadysaeed.pdfx.ui.tools.ReadDialog(readBusy, readNote, onDismiss = { if (!readBusy) { tool = null; readNote = null } }, onRead = ::readWords)
                 "split" -> doc?.let { d ->
@@ -1057,6 +1093,7 @@ fun ViewerContent(
                         if (!reader.reflow) SheetRow(Glyph.SEARCH, "Make searchable", { then { reader.openTool?.invoke("read") } }, note = "Reads the words on scanned pages, on the phone")
                         SheetRow(Glyph.DOWN, "Make smaller", { then { reader.openTool?.invoke("shrink") } }, note = "Shows the size before and after")
                         SheetRow(Glyph.LOCK, if (reader.hasPassword) "Password" else "Lock with a password", { then { reader.openTool?.invoke("password") } }, note = if (reader.hasPassword) "Change it or take it off" else "AES-256; it opens only with the password")
+                        SheetRow(Glyph.PEN, "Black out (redact)", { then { reader.openTool?.invoke("redact") } }, note = if (reader.redactions > 0) "${reader.redactions} marked; black them out for good" else "Names, numbers or areas, taken out of the file for good")
                         SheetRow(Glyph.TRASH, "Remove hidden details", { then { reader.openTool?.invoke("details") } }, note = "Author, programs, dates and editing history")
                         if (!reader.reflow) SheetRow(Glyph.PAGE, "Trim white margins", { then { reader.openTool?.invoke("trim") } }, note = "Bigger words on a phone; whole pages can come back")
                         SheetRow(Glyph.GRID, "Split into files…", { then { reader.openTool?.invoke("split") } })
@@ -1573,6 +1610,14 @@ private fun MarkupBar(reader: Reader) {
                         if (reader.signWithDate) DateStyleChips(reader)
                     }
                 }
+                Tool.REDACT -> {
+                    Chip("Words", { reader.redactArea = false }, selected = !reader.redactArea)
+                    Chip("Area", { reader.redactArea = true }, selected = reader.redactArea)
+                    if (reader.redactions > 0) {
+                        Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
+                        Chip("Black out ${reader.redactions} now", { reader.openTool?.invoke("redact") })
+                    }
+                }
                 Tool.STAMP -> {
                     (StandardStamps + reader.customStamps).forEach { k -> StampChip(k, reader.stamp == k) { reader.pickStamp(k) } }
                     Chip("New stamp", { reader.stampAsk = true })
@@ -1630,6 +1675,7 @@ private fun MarkupBar(reader: Reader) {
             Tool.DOT -> "Tap to put a dot."
             Tool.DATE -> "Tap where today's date goes."
             Tool.NOTE -> "Tap where the note should sit."
+            Tool.REDACT -> if (reader.redactArea) "Drag a box over what must go: a photo, a signature, a stamp, anything." else "Drag across the words that must go, or tap one word. Nothing goes until you black them out."
             Tool.ERASER -> null
         }
         if (hint != null) Text(hint, style = Type.small, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp))

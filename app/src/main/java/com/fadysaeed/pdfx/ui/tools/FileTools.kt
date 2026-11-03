@@ -541,3 +541,58 @@ fun DetailsDialog(details: List<Pair<String, String>>?, busy: Boolean, note: Str
         dismissButton = { if (!details.isNullOrEmpty()) GhostButton("Cancel", { if (!busy) onDismiss() }, minHeight = 52.dp) },
     )
 }
+
+@Composable
+fun RedactDialog(
+    marked: Int, busy: Boolean, note: String?, signed: Boolean,
+    onFind: (String) -> Unit, onApply: (scrub: Boolean) -> Unit, onByHand: () -> Unit, onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    var scrub by remember { mutableStateOf(true) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text("Black out", style = Type.title) },
+        text = { RedactBody(text, { text = it }, marked, busy, note, signed, scrub, { scrub = it }, onFind, onByHand) },
+        confirmButton = {
+            if (marked > 0) AmberButton(if (busy) "Working…" else "Black out $marked", { onApply(scrub) }, enabled = !busy)
+            else GhostButton("Close", onDismiss, minHeight = 52.dp)
+        },
+        dismissButton = { if (marked > 0) GhostButton("Not yet", { if (!busy) onDismiss() }, minHeight = 52.dp) },
+    )
+}
+
+@Composable
+internal fun RedactBody(
+    text: String, onText: (String) -> Unit, marked: Int, busy: Boolean, note: String?, signed: Boolean,
+    scrub: Boolean, onScrub: (Boolean) -> Unit, onFind: (String) -> Unit, onByHand: () -> Unit,
+) {
+    Column(Modifier.verticalScroll(rememberScrollState())) {
+        Text(
+            "Blacking out takes the words, pictures and drawings under each red box out of the file itself, and puts a black box where they were. Copying, searching or lifting the box shows nothing.",
+            style = Type.note,
+        )
+        InkField(text, onText, "A name, a number, an address…", modifier = Modifier.padding(top = 14.dp), label = "Find and mark everywhere", onDone = { onFind(text) })
+        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Chip(if (busy) "Looking…" else "Mark every one", { if (!busy && text.isNotBlank()) onFind(text) }, selected = false)
+            Chip("Mark by hand", { if (!busy) onByHand() })
+        }
+        note?.let { Text(it, style = Type.small, modifier = Modifier.padding(top = 10.dp)) }
+        if (marked > 0) {
+            Text(
+                if (marked == 1) "1 place is marked." else "$marked places are marked.",
+                style = Type.bodyStrong.copy(color = Ink.Amber),
+                modifier = Modifier.padding(top = 14.dp),
+            )
+            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Chip("Also remove hidden details", { onScrub(!scrub) }, selected = scrub)
+            }
+            Text(
+                "The blacked-out file has no way back. The version before stays private on this phone, under Earlier versions in the library, and never goes with the file.",
+                style = Type.small, modifier = Modifier.padding(top = 10.dp),
+            )
+        }
+        if (signed) Text("This file is signed: blacking out ends its signatures.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
+    }
+}

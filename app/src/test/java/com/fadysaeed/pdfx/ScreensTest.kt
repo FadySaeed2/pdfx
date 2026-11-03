@@ -518,6 +518,22 @@ class ScreensTest {
     }
 
     @Test
+    fun redactDialog() {
+        compose.setContent {
+            PdfxTheme {
+                androidx.compose.foundation.layout.Box(Modifier.background(Ink.Field).padding(24.dp)) {
+                    com.fadysaeed.pdfx.ui.tools.RedactBody(
+                        "Ann Example", {}, marked = 14, busy = false,
+                        note = "Marked 14 places on 6 pages. They show as red boxes: look them over, then black them out.",
+                        signed = false, scrub = true, onScrub = {}, onFind = {}, onByHand = {},
+                    )
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/44_redact.png")
+    }
+
+    @Test
     fun signaturesList() {
         compose.setContent {
             PdfxTheme {
