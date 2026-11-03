@@ -230,3 +230,13 @@ signatures, and a full pass on every screen for clarity.
   they are saved, and More → Make searchable reads picture pages of any file as one undoable step.
   Picture pages are read at the picture's own sharpness (upscaling a photo cost about 6% of words).
   Emulator speed is no guide for ML Kit (about 10 s a page there); to check on the phone.
+- 2026-11-03: phase 7, first two parts. File tools gathered under More → File tools. Make smaller
+  (tidy only / balanced 2200 px JPEG 75 / smallest 1500 px JPEG 60; sizes before and after; a heavy
+  6.8 MB scan → 0.67 / 0.19 MB), AES-256 password on, changed and off (commas in passwords quoted
+  for MuPDF's option parser), Remove hidden details (Info, XMP, PieceInfo; shown before removal).
+  Black out: a tool in the pen bar (words or area), Find and mark everywhere, then applying removes
+  text, image pixels and covered line art, deletes marks over the places and empties form fields
+  there; the file is then always rewritten whole (never appended), so nothing survives in an
+  earlier revision. Found and worked round a MuPDF 1.28 Java bug: PDFObject.push(PDFObject) drops
+  the item it adds while Java still owns it, so arrays pointed at freed memory after GC
+  (engine/PdfObjects.kt append); every push replaced.
