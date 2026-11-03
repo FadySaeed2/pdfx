@@ -412,7 +412,7 @@ fun DocLine(
                 Spacer(Modifier.height(3.dp))
                 Text(meta(d, now, showFolder, label), style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val progress = LibraryModel.progressOf(d)
-                if (progress > 0.01f && !d.inTrash) {
+                if (d.lastPage > 0 && progress > 0.01f && !d.inTrash) {
                     Spacer(Modifier.height(6.dp))
                     Box(Modifier.fillMaxWidth(0.6f).height(2.dp).background(Ink.Rule)) {
                         Box(Modifier.fillMaxWidth(progress.coerceAtMost(1f)).height(2.dp).background(if (d.reading == 2 || progress > 0.95f) Ink.Teal else Ink.Amber))

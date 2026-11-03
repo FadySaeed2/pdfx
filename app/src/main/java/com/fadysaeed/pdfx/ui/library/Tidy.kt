@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -79,10 +80,13 @@ private fun Card(title: String, count: Int, what: String, onOpen: () -> Unit) {
     val done = count == 0
     Column(Modifier.fillMaxWidth().clickable(enabled = !done, onClick = onOpen).padding(horizontal = 20.dp, vertical = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(22.dp).background(if (done) Ink.Teal else Ink.Field, RoundedCornerShape(50)), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.height(24.dp).widthIn(min = 24.dp).background(if (done) Ink.Teal else Ink.Field, RoundedCornerShape(50)).padding(horizontal = 7.dp),
+                contentAlignment = Alignment.Center,
+            ) {
                 if (done) GlyphIcon(Glyph.CHECK, Ink.Black, size = 14.dp) else Text(if (count > 0) "$count" else "·", style = Type.small.copy(color = Ink.Amber))
             }
-            Spacer(Modifier.width(14.dp))
+            Spacer(Modifier.width(12.dp))
             Text(title, style = Type.bodyStrong, modifier = Modifier.weight(1f))
             if (!done) Text("Review", style = Type.bodyStrong.copy(color = Ink.Amber))
         }
