@@ -222,6 +222,8 @@ fun ViewerScreen(
     var toolBusy by remember(request) { mutableStateOf(false) }
     var toolNote by remember(request) { mutableStateOf<String?>(null) }
     var details by remember(request) { mutableStateOf<List<Pair<String, String>>?>(null) }
+    /** Save as Word, Excel or text: the file made, to open or send. */
+    var exportMade by remember(request) { mutableStateOf<java.io.File?>(null) }
     var organizing by remember(request) { mutableStateOf(false) }
     var leavePages by remember(request) { mutableStateOf(false) }
     var signedPages by remember(request) { mutableStateOf(false) }
@@ -521,6 +523,69 @@ fun ViewerScreen(
                     com.fadysaeed.pdfx.engine.Secure.scrub(base, out.absolutePath, pw)
                 }
             }
+            /** Reads the words on [todo] (pages that are pictures) into the file; [say] hears what it is doing. Returns pages read. */
+            suspend fun readPictures(todo: List<Int>, say: (String) -> Unit): Int {
+                val found = HashMap<Int, List<com.fadysaeed.pdfx.engine.ReadWord>>()
+                for ((k, i) in todo.withIndex()) {
+                    say(if (todo.size == 1) "Reading the words on page ${i + 1}…" else "Reading the words on page ${i + 1} (${k + 1} of ${todo.size})…")
+                    runCatching {
+                        val (bmp, scale) = session.renderForReading(i)
+                        val ws = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                            try { com.fadysaeed.pdfx.engine.Reading.words(bmp) } finally { bmp.recycle() }
+                        }
+                        if (ws.isNotEmpty()) found[i] = com.fadysaeed.pdfx.engine.Reading.toPage(ws, scale)
+                    }
+                }
+                if (found.isNotEmpty()) runCatching { session.addReadText(found) }
+                return found.size
+            }
+            fun exportAs(kind: com.fadysaeed.pdfx.engine.ExportPages.Kind, pagesText: String) {
+                if (toolBusy) return
+                toolBusy = true
+                toolNote = null
+                exportMade = null
+                scope.launch {
+                    val (pages, why) = com.fadysaeed.pdfx.engine.ExportPages.pagesFrom(pagesText, session.pageCount)
+                    if (pages == null || pages.isEmpty()) { toolBusy = false; toolNote = why ?: "Pick at least one page."; return@launch }
+                    // Pages that are only pictures have no words to write: read them first.
+                    val bare = runCatching { session.pagesWithoutText() }.getOrDefault(emptyList()).filter { it in pages }
+                    val read = if (bare.isNotEmpty()) readPictures(bare) { toolNote = it } else 0
+                    val say: (Int, Int) -> Unit = { k, n -> toolNote = if (n == 1) "Working…" else "Going through page $k of $n…" }
+                    val result = runCatching {
+                        val dir = doc?.path?.let { java.io.File(it).parentFile }?.takeIf { it.isDirectory && it.canWrite() }
+                            ?: app.library.homeDir.also { it.mkdirs() }
+                        val out = com.fadysaeed.pdfx.data.Library.uniqueTarget(dir, "${name.removeSuffix(".pdf")}.${kind.ext}")
+                        val tmp = java.io.File(context.cacheDir, "export").also { it.deleteRecursively(); it.mkdirs() }
+                        when (kind) {
+                            com.fadysaeed.pdfx.engine.ExportPages.Kind.EXCEL -> {
+                                val tables = com.fadysaeed.pdfx.engine.ExportPages.tables(session, pages, say)
+                                if (tables.isEmpty()) return@runCatching null
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { out.outputStream().use { com.fadysaeed.pdfx.engine.XlsxExport.write(tables, it) } }
+                                out to tables.size
+                            }
+                            else -> {
+                                val blocks = com.fadysaeed.pdfx.engine.ExportPages.blocks(session, pages, tmp, withPictures = kind == com.fadysaeed.pdfx.engine.ExportPages.Kind.WORD, progress = say)
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    if (kind == com.fadysaeed.pdfx.engine.ExportPages.Kind.WORD) out.outputStream().use { com.fadysaeed.pdfx.engine.DocxExport.write(blocks, it, name.removeSuffix(".pdf")) }
+                                    else out.bufferedWriter().use { com.fadysaeed.pdfx.engine.TextExport.write(blocks, it) }
+                                }
+                                tmp.deleteRecursively()
+                                out to blocks.size
+                            }
+                        }
+                    }
+                    toolBusy = false
+                    result.fold({ made ->
+                        if (made == null) { toolNote = "No tables found on these pages, so there is nothing to put in Excel."; return@fold }
+                        val (f, count) = made
+                        android.media.MediaScannerConnection.scanFile(context, arrayOf(f.absolutePath), null, null)
+                        exportMade = f
+                        toolNote = "Saved as ${f.name} in ${f.parentFile?.name ?: "your files"}" +
+                            (if (kind == com.fadysaeed.pdfx.engine.ExportPages.Kind.EXCEL) ", ${if (count == 1) "1 table" else "$count tables"}, a sheet each." else ".") +
+                            (if (read > 0) " The words on ${if (read == 1) "1 scanned page" else "$read scanned pages"} were read first; save this file to keep them searchable too." else "")
+                    }) { toolNote = it.message ?: "The file could not be made." }
+                }
+            }
             fun findToRedact(text: String) {
                 if (toolBusy || text.isBlank()) return
                 toolBusy = true
@@ -674,6 +739,13 @@ fun ViewerScreen(
                         onDismiss = { if (!toolBusy) tool = null },
                     )
                 }
+                "export" -> com.fadysaeed.pdfx.ui.tools.ExportDialog(
+                    busy = toolBusy, note = toolNote, made = exportMade, pageCount = session.pageCount,
+                    onExport = ::exportAs,
+                    onOpen = { f -> com.fadysaeed.pdfx.ui.tools.openWith(context, f)?.let { toolNote = it } },
+                    onShare = { f -> com.fadysaeed.pdfx.ui.tools.shareFile(context, f) },
+                    onDismiss = { if (!toolBusy) { tool = null; exportMade = null; toolNote = null } },
+                )
                 "read" -> com.fadysaeed.pdfx.ui.tools.ReadDialog(readBusy, readNote, onDismiss = { if (!readBusy) { tool = null; readNote = null } }, onRead = ::readWords)
                 "split" -> doc?.let { d ->
                     com.fadysaeed.pdfx.ui.tools.SplitDialog(d, onDismiss = { tool = null }) { made ->
@@ -1091,6 +1163,7 @@ fun ViewerContent(
                     }
                     ViewerSheet.TOOLS -> {
                         if (!reader.reflow) SheetRow(Glyph.SEARCH, "Make searchable", { then { reader.openTool?.invoke("read") } }, note = "Reads the words on scanned pages, on the phone")
+                        SheetRow(Glyph.SHARE, "Save as Word, Excel or text", { then { reader.openTool?.invoke("export") } }, note = "Word to edit, the tables in Excel, or plain text")
                         SheetRow(Glyph.DOWN, "Make smaller", { then { reader.openTool?.invoke("shrink") } }, note = "Shows the size before and after")
                         SheetRow(Glyph.LOCK, if (reader.hasPassword) "Password" else "Lock with a password", { then { reader.openTool?.invoke("password") } }, note = if (reader.hasPassword) "Change it or take it off" else "AES-256; it opens only with the password")
                         SheetRow(Glyph.PEN, "Black out (redact)", { then { reader.openTool?.invoke("redact") } }, note = if (reader.redactions > 0) "${reader.redactions} marked; black them out for good" else "Names, numbers or areas, taken out of the file for good")

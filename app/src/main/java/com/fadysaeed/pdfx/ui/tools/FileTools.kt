@@ -596,3 +596,93 @@ internal fun RedactBody(
         if (signed) Text("This file is signed: blacking out ends its signatures.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
     }
 }
+
+/** Opens a file PDFx made in the app that reads its kind; the reason, when no app on the phone can. */
+fun openWith(context: Context, f: File): String? {
+    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", f)
+    val mime = mimeOf(f)
+    val view = android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mime)
+        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+    return try {
+        context.startActivity(view); null
+    } catch (e: android.content.ActivityNotFoundException) {
+        "No app on this phone opens .${f.extension} files. Word, Excel or Google's apps can; or send it."
+    }
+}
+
+/** Hands a file PDFx made to another app through Android's share sheet. */
+fun shareFile(context: Context, f: File) {
+    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", f)
+    val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType(mimeOf(f))
+        .putExtra(android.content.Intent.EXTRA_STREAM, uri)
+        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    runCatching { context.startActivity(android.content.Intent.createChooser(send, f.name).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+}
+
+private fun mimeOf(f: File): String = when (f.extension.lowercase()) {
+    "docx" -> com.fadysaeed.pdfx.engine.ExportPages.Kind.WORD.mime
+    "xlsx" -> com.fadysaeed.pdfx.engine.ExportPages.Kind.EXCEL.mime
+    "txt" -> "text/plain"
+    "png" -> "image/png"
+    "jpg", "jpeg" -> "image/jpeg"
+    "zip" -> "application/zip"
+    else -> "application/pdf"
+}
+
+@Composable
+fun ExportDialog(
+    busy: Boolean, note: String?, made: File?, pageCount: Int,
+    onExport: (com.fadysaeed.pdfx.engine.ExportPages.Kind, String) -> Unit,
+    onOpen: (File) -> Unit, onShare: (File) -> Unit, onDismiss: () -> Unit,
+) {
+    var kind by remember { mutableStateOf(com.fadysaeed.pdfx.engine.ExportPages.Kind.WORD) }
+    var some by remember { mutableStateOf(false) }
+    var pages by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text("Save as", style = Type.title) },
+        text = {
+            ExportBody(kind, { if (!busy) { kind = it } }, some, { if (!busy) some = it }, pages, { pages = it }, pageCount, busy, note, made)
+        },
+        confirmButton = {
+            if (made != null) AmberButton("Open", { onOpen(made) })
+            else AmberButton(if (busy) "Working…" else "Save as ${kind.label}", { onExport(kind, if (some) pages else "") }, enabled = !busy)
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (made != null) GhostButton("Send", { onShare(made) }, minHeight = 52.dp)
+                GhostButton(if (made != null) "Done" else "Cancel", { if (!busy) onDismiss() }, minHeight = 52.dp)
+            }
+        },
+    )
+}
+
+@Composable
+internal fun ExportBody(
+    kind: com.fadysaeed.pdfx.engine.ExportPages.Kind, onKind: (com.fadysaeed.pdfx.engine.ExportPages.Kind) -> Unit,
+    some: Boolean, onSome: (Boolean) -> Unit, pages: String, onPages: (String) -> Unit, pageCount: Int,
+    busy: Boolean, note: String?, made: File?,
+) {
+    Column(Modifier.verticalScroll(rememberScrollState())) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (k in com.fadysaeed.pdfx.engine.ExportPages.Kind.entries) Chip(k.label, { onKind(k) }, selected = kind == k)
+        }
+        Text(
+            when (kind) {
+                com.fadysaeed.pdfx.engine.ExportPages.Kind.WORD -> "A Word file to edit: the words flow as paragraphs, headings stay headings, tables become Word tables and pictures stay in their places. It is not a copy of how the pages look: columns become one, and boxes and decorations are left out."
+                com.fadysaeed.pdfx.engine.ExportPages.Kind.EXCEL -> "Every table found on the pages, a sheet each, named by page and table. Numbers go in as numbers, so they can be added up and sorted."
+                com.fadysaeed.pdfx.engine.ExportPages.Kind.TEXT -> "Plain words in reading order, a paragraph to a line. Table cells are split by tabs, so a table pasted into a sheet falls into its cells."
+            },
+            style = Type.note, modifier = Modifier.padding(top = 12.dp),
+        )
+        Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Chip(if (pageCount == 1) "The page" else "All $pageCount pages", { onSome(false) }, selected = !some)
+            if (pageCount > 1) Chip("Some pages", { onSome(true) }, selected = some)
+        }
+        if (some) InkField(pages, onPages, "Like 3-10, 12", modifier = Modifier.padding(top = 10.dp), label = "Pages")
+        note?.let { Text(it, style = if (made != null) Type.bodyStrong.copy(color = Ink.Amber) else Type.small, modifier = Modifier.padding(top = 12.dp)) }
+        if (busy && note == null) Text("Working…", style = Type.small, modifier = Modifier.padding(top = 12.dp))
+    }
+}
