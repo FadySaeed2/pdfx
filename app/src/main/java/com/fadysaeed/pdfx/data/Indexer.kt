@@ -42,22 +42,31 @@ class TextIndexer(private val context: Context, private val library: Library) {
                 markDone(d, pages = 0, locked = true)
                 return
             }
-            val rows = ArrayList<PageText>()
-            for (p in 0 until session.pageCount) {
-                val text = runCatching { session.text(p) }.getOrDefault("")
-                    .replace(Regex("\\s+"), " ").trim()
-                if (text.isNotEmpty()) rows += PageText(page = p, body = text.take(MAX_CHARS_PER_PAGE))
+            // The words of every page, unless they were read since the file last changed.
+            if (d.indexedAt != d.modified) {
+                val rows = ArrayList<PageText>()
+                for (p in 0 until session.pageCount) {
+                    val text = runCatching { session.text(p) }.getOrDefault("")
+                        .replace(Regex("\\s+"), " ").trim()
+                    if (text.isNotEmpty()) rows += PageText(page = p, body = text.take(MAX_CHARS_PER_PAGE))
+                }
+                withContext(Dispatchers.IO) { library.text.replace(d.id, rows) }
             }
-            withContext(Dispatchers.IO) { library.text.replace(d.id, rows) }
-            markDone(d, pages = session.pageCount, locked = false)
+            // Its real title, author and year.
+            val facts = runCatching {
+                com.fadysaeed.pdfx.engine.DocInfo.find(session.metadata() + ("File" to d.name), session.infoPages())
+            }.getOrNull()
+            markDone(d, pages = session.pageCount, locked = false, facts = facts)
         } finally {
             session.close()
         }
     }
 
-    private suspend fun markDone(d: Doc, pages: Int, locked: Boolean) {
+    private suspend fun markDone(d: Doc, pages: Int, locked: Boolean, facts: com.fadysaeed.pdfx.engine.DocFacts? = null) {
         val now = library.dao.byId(d.id) ?: return
-        library.dao.update(now.copy(indexedAt = d.modified, pages = if (pages > 0) pages else now.pages, locked = locked))
+        var next = now.copy(indexedAt = d.modified, infoAt = d.modified, pages = if (pages > 0) pages else now.pages, locked = locked)
+        if (facts != null) next = next.copy(title = facts.title, author = facts.author, year = facts.year, doi = facts.doi)
+        library.dao.update(next)
     }
 
     companion object {

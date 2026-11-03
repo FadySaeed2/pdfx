@@ -83,6 +83,7 @@ class LibraryActions(
     val newTag: () -> Unit = {},
     val undo: () -> Unit = {},
     val dismissNotice: () -> Unit = {},
+    val duplicates: () -> Unit = {},
 )
 
 @Composable
@@ -204,9 +205,26 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                     Box(Modifier.size(6.dp).background(Ink.Teal))
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        "Reading the words in ${ui.unindexed} ${if (ui.unindexed == 1) "file" else "files"} so search can find them.",
+                        "Reading ${ui.unindexed} ${if (ui.unindexed == 1) "file" else "files"} for search and their real titles.",
                         style = Type.small,
                     )
+                }
+            }
+        }
+        if (ui.duplicates.isNotEmpty() && p.section in setOf(Section.RECENT, Section.ALL)) {
+            item(key = "dups") {
+                val copies = ui.duplicates.sumOf { it.size - 1 }
+                Row(
+                    Modifier.fillMaxWidth().clickable(onClick = actions.duplicates).padding(horizontal = 20.dp).padding(bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(6.dp).background(Ink.Amber))
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "${ui.duplicates.size} ${if (ui.duplicates.size == 1) "file is" else "files are"} here more than once ($copies spare ${if (copies == 1) "copy" else "copies"}).",
+                        style = Type.small, modifier = Modifier.weight(1f),
+                    )
+                    Text("Review", style = Type.bodyStrong.copy(color = Ink.Amber))
                 }
             }
         }
@@ -305,7 +323,7 @@ fun DocLine(
             Thumb(d, image)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(LibraryModel.display(d), style = Type.body, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(LibraryModel.titleOf(d), style = Type.body, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(3.dp))
                 Text(meta(d, now, showFolder, label), style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (item.tags.isNotEmpty()) {
@@ -474,6 +492,7 @@ fun humanSize(bytes: Long): String = when {
 
 private fun meta(d: Doc, now: Long, showFolder: Boolean, label: (String?) -> String): String {
     val parts = mutableListOf<String>()
+    LibraryModel.byline(d).takeIf { it.isNotEmpty() }?.let { parts += it }
     if (d.pages > 0) parts += if (d.pages == 1) "1 page" else "${d.pages} pages"
     if (d.size >= 0) parts += humanSize(d.size)
     when {

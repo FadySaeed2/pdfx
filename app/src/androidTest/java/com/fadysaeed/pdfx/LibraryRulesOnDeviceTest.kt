@@ -170,6 +170,63 @@ class LibraryRulesOnDeviceTest {
         assertEquals(1, db.dao().all().size)
     }
 
+    private fun unique(rel: String, seed: Int, bytes: Int = 300_000): File =
+        File(root, rel).apply { parentFile?.mkdirs(); writeBytes(kotlin.random.Random(seed).nextBytes(bytes)) }
+
+    @Test
+    fun aFileMovedOrRenamedElsewhereKeepsItsTagsStarAndPlace() = runBlocking {
+        val a = unique("Download/s41380-023-02145-x.pdf", 1)
+        unique("Download/other.pdf", 2)
+        lib.scan()
+        val dao = db.dao()
+        val d = dao.byKey(a.absolutePath)!!
+        assertNotNull("a fingerprint is read on arrival", d.fingerprint)
+        val tag = lib.createTag("Bipolar", 1)
+        lib.setTag(d.id, tag, true)
+        lib.setStar(d, true)
+        lib.updatePage(d.id, 7)
+        lib.bookmarks.set(d.id, 3, true)
+        // Moved and renamed by another app (Files, a sync app).
+        val moved = File(root, "Documents/Papers/Lithium review.pdf").apply { parentFile?.mkdirs() }
+        assertTrue(a.renameTo(moved))
+        val r = lib.scan()
+        assertEquals("known again, not added", 1, r.moved)
+        assertEquals(0, r.added)
+        assertEquals(0, r.removed)
+        val now = dao.byKey(moved.absolutePath)!!
+        assertEquals("the same document", d.id, now.id)
+        assertEquals("Lithium review.pdf", now.name)
+        assertTrue(now.starred)
+        assertEquals(7, now.lastPage)
+        assertEquals(listOf(3), lib.bookmarks.pages(now.id))
+        assertEquals(listOf(tag), dao.tagIdsOf(now.id))
+    }
+
+    @Test
+    fun copiesOfOneFileMergeIntoOne() = runBlocking {
+        val a = unique("Documents/guideline.pdf", 5)
+        val b = File(root, "Download/guideline (1).pdf").apply { parentFile?.mkdirs(); writeBytes(a.readBytes()) }
+        val c = File(root, "WhatsApp Documents/guideline.pdf").apply { parentFile?.mkdirs(); writeBytes(a.readBytes()) }
+        lib.scan()
+        val dao = db.dao()
+        val docs = listOf(a, b, c).map { dao.byKey(it.absolutePath)!! }
+        assertEquals("one fingerprint", 1, docs.map { it.fingerprint }.toSet().size)
+        val t1 = lib.createTag("Clozapine", 2)
+        val t2 = lib.createTag("Guidelines", 3)
+        lib.setTag(docs[1].id, t1, true)
+        lib.setTag(docs[2].id, t2, true)
+        lib.setStar(docs[2], true)
+        lib.bookmarks.set(docs[1].id, 12, true)
+        assertEquals(2, lib.mergeDuplicates(docs[0], docs.drop(1)).getOrThrow())
+        val kept = dao.byId(docs[0].id)!!
+        assertTrue(kept.starred)
+        assertEquals(setOf(t1, t2), dao.tagIdsOf(kept.id).toSet())
+        assertEquals(listOf(12), lib.bookmarks.pages(kept.id))
+        assertTrue("the others are in the trash", docs.drop(1).all { dao.byId(it.id)!!.inTrash })
+        assertTrue(a.exists())
+        assertFalse(b.exists() || c.exists())
+    }
+
     @Test
     fun ftsQueryIsSafe() {
         assertEquals("lith* level*", ftsQuery("Lith  level"))

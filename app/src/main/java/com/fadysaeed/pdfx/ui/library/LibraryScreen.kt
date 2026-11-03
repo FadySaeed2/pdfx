@@ -121,6 +121,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
         onProblem = { vm.notice.value = Notice(it) },
     )
     var splitting by remember { mutableStateOf<Doc?>(null) }
+    var duplicatesOpen by remember { mutableStateOf(false) }
 
     BackHandler(enabled = ui.place != Place() || ui.query.isNotEmpty()) { vm.back() }
     LaunchedEffect(notice?.id) {
@@ -153,6 +154,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             newTag = { ask = Ask.NewTag(null) },
             undo = { notice?.undo?.invoke(); vm.dismissNotice() },
             dismissNotice = vm::dismissNotice,
+            duplicates = { duplicatesOpen = true },
         ),
     )
     merging?.let { start ->
@@ -161,6 +163,14 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             vm.notice.value = Notice("Merged into ${LibraryModel.display(made)}, beside ${LibraryModel.display(start)}.")
             onOpen(made, 0)
         }
+    }
+    if (duplicatesOpen && ui.duplicates.isNotEmpty()) {
+        DuplicatesScreen(
+            ui.duplicates, vm.library::folderLabel,
+            onKeep = { g, k -> vm.keepOne(g, k) },
+            onKeepAll = { gs -> vm.keepSuggested(gs); duplicatesOpen = false },
+            onClose = { duplicatesOpen = false },
+        )
     }
     scanNote?.let { note ->
         Box(Modifier.fillMaxSize().background(Ink.Black.copy(alpha = 0.75f)).clickable(enabled = true) {}, contentAlignment = Alignment.Center) {

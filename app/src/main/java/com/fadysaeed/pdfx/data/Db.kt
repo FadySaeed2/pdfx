@@ -1,6 +1,7 @@
 package com.fadysaeed.pdfx.data
 
 import android.content.Context
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Delete
@@ -13,13 +14,15 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /**
  * One PDF PDFx knows about. Files on the phone are keyed by their path; files handed over by
  * other apps that have no path (a WhatsApp share, a Drive file) are keyed by their Uri.
  */
-@Entity(tableName = "docs", indices = [Index(value = ["key"], unique = true), Index("folder")])
+@Entity(tableName = "docs", indices = [Index(value = ["key"], unique = true), Index("folder"), Index("fingerprint")])
 data class Doc(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val key: String,
@@ -43,6 +46,20 @@ data class Doc(
     val trashOrigin: String? = null,
     /** The [modified] value its text was read at; 0 means not read yet. */
     val indexedAt: Long = 0,
+    /**
+     * What the file is, whatever it is called and wherever it sits: its size and a hash of its
+     * beginning, middle and end. A file moved or renamed by another app is known again by it.
+     */
+    val fingerprint: String? = null,
+    /** Its real title, first author (with "et al." when there are more), year and DOI, read from the file. */
+    val title: String? = null,
+    val author: String? = null,
+    @ColumnInfo(defaultValue = "0") val year: Int = 0,
+    val doi: String? = null,
+    /** The [modified] value [title] and the rest were read at; 0 means not yet. */
+    @ColumnInfo(defaultValue = "0") val infoAt: Long = 0,
+    /** When PDFx first saw it. */
+    @ColumnInfo(defaultValue = "0") val addedAt: Long = 0,
 ) {
     val inTrash: Boolean get() = trashedAt > 0
     val isFile: Boolean get() = path != null
@@ -86,10 +103,16 @@ interface LibraryDao {
     @Delete
     suspend fun delete(doc: Doc)
 
-    @Query("SELECT * FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified) ORDER BY lastOpened DESC, size ASC LIMIT 1")
+    @Query("SELECT * FROM docs WHERE fingerprint = :fp")
+    suspend fun byFingerprint(fp: String): List<Doc>
+
+    @Query("SELECT * FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND fingerprint IS NULL LIMIT :n")
+    suspend fun withoutFingerprint(n: Int): List<Doc>
+
+    @Query("SELECT * FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified OR infoAt != modified) ORDER BY lastOpened DESC, size ASC LIMIT 1")
     suspend fun nextToIndex(): Doc?
 
-    @Query("SELECT COUNT(*) FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified)")
+    @Query("SELECT COUNT(*) FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified OR infoAt != modified)")
     fun observeUnindexed(): Flow<Int>
 
     // Tags
@@ -123,15 +146,36 @@ interface LibraryDao {
 
     @Query("DELETE FROM doc_tags WHERE docId = :docId")
     suspend fun untagDoc(docId: Long)
+
+    @Query("SELECT tagId FROM doc_tags WHERE docId = :docId")
+    suspend fun tagIdsOf(docId: Long): List<Long>
 }
 
-@Database(entities = [Doc::class, Tag::class, DocTag::class], version = 1, exportSchema = true)
+@Database(entities = [Doc::class, Tag::class, DocTag::class], version = 2, exportSchema = true)
 abstract class LibraryDb : RoomDatabase() {
     abstract fun dao(): LibraryDao
 
     companion object {
-        fun open(context: Context): LibraryDb =
-            Room.databaseBuilder(context, LibraryDb::class.java, "library.db").addCallback(TextIndex.Setup).build()
+        /** Version 2: each file's fingerprint, real title, author, year and DOI, and when it was first seen. */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE docs ADD COLUMN fingerprint TEXT")
+                db.execSQL("ALTER TABLE docs ADD COLUMN title TEXT")
+                db.execSQL("ALTER TABLE docs ADD COLUMN author TEXT")
+                db.execSQL("ALTER TABLE docs ADD COLUMN year INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE docs ADD COLUMN doi TEXT")
+                db.execSQL("ALTER TABLE docs ADD COLUMN infoAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE docs ADD COLUMN addedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_docs_fingerprint ON docs(fingerprint)")
+                // Files already known count as added when they last changed.
+                db.execSQL("UPDATE docs SET addedAt = modified")
+            }
+        }
+
+        fun open(context: Context): LibraryDb = open(context, "library.db")
+
+        fun open(context: Context, name: String): LibraryDb =
+            Room.databaseBuilder(context, LibraryDb::class.java, name).addMigrations(MIGRATION_1_2).addCallback(TextIndex.Setup).build()
 
         fun inMemory(context: Context): LibraryDb =
             Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).addCallback(TextIndex.Setup).allowMainThreadQueries().build()

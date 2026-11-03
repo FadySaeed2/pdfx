@@ -29,6 +29,27 @@ class PdfxApp : Application() {
         com.fadysaeed.pdfx.data.CrashReports.install(this)
         // Arabic and other scripts in books and in PDFs that carry no font for them.
         runCatching { com.fadysaeed.pdfx.engine.Books.installSystemFonts() }
+        watchStorage()
+    }
+
+    private var settle: kotlinx.coroutines.Job? = null
+
+    /**
+     * Android tells PDFx when files appear, change or go anywhere on the phone (a WhatsApp
+     * download, a file moved in Files). A few seconds after things settle, the library looks again,
+     * so new files show up and moved ones keep their tags without reopening the app.
+     */
+    private fun watchStorage() {
+        val watcher = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                settle?.cancel()
+                settle = scope.launch {
+                    kotlinx.coroutines.delay(4000)
+                    if (library.hasAllFilesAccess()) refresh(force = true)
+                }
+            }
+        }
+        runCatching { contentResolver.registerContentObserver(android.provider.MediaStore.Files.getContentUri("external"), true, watcher) }
     }
     private var prepared = false
     @Volatile private var lastScan = 0L

@@ -59,6 +59,8 @@ data class LibraryUi(
     val hasAccess: Boolean = true,
     val unindexed: Int = 0,
     val loaded: Boolean = false,
+    /** The same file more than once (by fingerprint), each group its copies; the one to keep first. */
+    val duplicates: List<List<Doc>> = emptyList(),
 )
 
 data class Notice(val text: String, val undo: (() -> Unit)? = null, val id: Long = System.nanoTime())
@@ -212,7 +214,11 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         val docs = library.dao.all().filter { !it.inTrash }
         val byId = docs.associateBy { it.id }
         val words = q.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
-        val nameHits = docs.filter { d -> words.all { d.name.lowercase().contains(it) } }.map { it.id }.toSet()
+        // The name, and the real title, author, year and DOI read from the file.
+        val nameHits = docs.filter { d ->
+            val about = listOfNotNull(d.name, d.title, d.author, d.doi, d.year.takeIf { it > 0 }?.toString()).joinToString(" ").lowercase()
+            words.all { about.contains(it) }
+        }.map { it.id }.toSet()
         val text = library.searchText(q).filter { it.docId in byId }.groupBy { it.docId }
         val ids = (nameHits + text.keys)
         return ids.mapNotNull { id ->
@@ -256,13 +262,14 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             hasAccess = access,
             unindexed = r.unindexed,
             loaded = true,
+            duplicates = duplicatesOf(live),
         )
     }
 
     private fun sorted(list: List<Doc>, s: Sort, section: Section): List<Doc> {
         val c: Comparator<Doc> = when {
             section == Section.TRASH -> compareBy { it.trashedAt }
-            s.by == SortBy.NAME -> compareBy { it.name.lowercase() }
+            s.by == SortBy.NAME -> compareBy { titleOf(it).lowercase() }
             s.by == SortBy.MODIFIED -> compareBy { it.modified }
             s.by == SortBy.SIZE -> compareBy { it.size }
             else -> compareBy { it.lastOpened }
@@ -281,7 +288,42 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         sec to Sort(by, v.substringAfter(':').toBoolean())
     }.toMap()
 
+    /**
+     * Files that are the same file (the same fingerprint) more than once, the copy to keep first:
+     * the one opened most recently, then the one not in Received or WhatsApp, then the oldest.
+     */
+    private fun duplicatesOf(live: List<Doc>): List<List<Doc>> =
+        live.filter { it.isFile && it.fingerprint != null }.groupBy { it.fingerprint }.values.filter { it.size > 1 }
+            .map { g -> g.sortedWith(compareByDescending<Doc> { it.lastOpened }.thenBy { inside(it) }.thenBy { it.addedAt.takeIf { a -> a > 0 } ?: it.modified }) }
+            .sortedByDescending { it.first().size }
+
+    private fun inside(d: Doc): Int {
+        val f = d.folder.orEmpty()
+        return if (f.contains("/WhatsApp/") || f.endsWith("/Received") || f.contains("/Download")) 1 else 0
+    }
+
+    /** Keeps the first of a group and moves the rest to the trash, the kept one taking their tags, stars and bookmarks. */
+    fun keepOne(group: List<Doc>, keep: Doc) = launch {
+        library.mergeDuplicates(keep, group.filter { it.id != keep.id }).fold(
+            { n -> say(if (n == 1) "1 copy moved to the trash; ${titleOf(keep)} keeps its tags and bookmarks." else "$n copies moved to the trash; ${titleOf(keep)} keeps their tags and bookmarks.") },
+            ::fail,
+        )
+    }
+
+    /** Every group at once, keeping the suggested copy of each. */
+    fun keepSuggested(groups: List<List<Doc>>) = launch {
+        var n = 0
+        for (g in groups) library.mergeDuplicates(g.first(), g.drop(1)).onSuccess { n += it }
+        say(if (n == 1) "1 copy moved to the trash." else "$n copies moved to the trash. The trash keeps them 30 days.")
+    }
+
     companion object {
         fun display(d: Doc) = d.name.removeSuffix(".pdf").removeSuffix(".PDF")
+
+        /** What a file is called in lists: its real title when one was read from it, else its name. */
+        fun titleOf(d: Doc) = d.title?.takeIf { it.isNotBlank() } ?: display(d)
+
+        /** "Malhi et al. · 2023". */
+        fun byline(d: Doc): String = listOfNotNull(d.author?.takeIf { it.isNotBlank() }, d.year.takeIf { it > 0 }?.toString()).joinToString(" · ")
     }
 }

@@ -65,37 +65,69 @@ class Library(
 
     // ---------------------------------------------------------------- finding files
 
-    data class ScanResult(val found: Int, val added: Int, val removed: Int)
+    data class ScanResult(val found: Int, val added: Int, val removed: Int, val moved: Int = 0)
 
-    /** Walks shared storage for PDFs and brings the library in line with what is on disk. */
+    /**
+     * Walks shared storage for PDFs and brings the library in line with what is on disk. A file
+     * that went from one place and turned up in another (moved or renamed by another app) is the
+     * same document: it keeps its tags, star, bookmarks and reading place. It is matched by its
+     * fingerprint, or, for one known before fingerprints, by its name and size.
+     */
     suspend fun scan(roots: List<File> = listOf(root)): ScanResult = withContext(Dispatchers.IO) {
         if (!hasAllFilesAccess()) return@withContext ScanResult(0, 0, 0)
         val files = HashMap<String, File>()
         roots.forEach { walk(it, files) }
+        val rootPaths = roots.map { it.absolutePath }
+        val known = dao.all()
+        val byKey = known.associateBy { it.key }
+        // Gone from where they were: maybe moved, maybe deleted.
+        val gone = known.filter { d -> val p = d.path; p != null && !d.inTrash && rootPaths.any { p.startsWith(it) } && p !in files }.toMutableList()
+        val fresh = files.filterKeys { it !in byKey }
+        // Fingerprints of the new arrivals, read before the transaction (they read files).
+        val prints = if (fresh.isEmpty()) emptyMap() else fresh.mapValues { (_, f) -> Fingerprint.of(f) }
         var added = 0
         var removed = 0
+        var moved = 0
         db.withTransaction {
-            val known = dao.all()
-            val byKey = known.associateBy { it.key }
-            for ((path, f) in files) {
-                val d = byKey[path]
-                if (d == null) {
-                    insertFile(f); added++
-                } else if (d.size != f.length() || d.modified != f.lastModified() || d.name != f.name) {
-                    dao.update(d.copy(size = f.length(), modified = f.lastModified(), name = f.name, folder = f.parent))
+            for ((path, f) in fresh) {
+                val fp = prints[path]
+                val was = gone.firstOrNull { fp != null && it.fingerprint == fp }
+                    ?: gone.firstOrNull { it.fingerprint == null && it.name == f.name && it.size == f.length() }
+                if (was != null) {
+                    gone.remove(was)
+                    dao.update(was.copy(
+                        key = f.absolutePath, path = f.absolutePath, uri = Uri.fromFile(f).toString(), name = f.name,
+                        folder = f.parent, size = f.length(), modified = f.lastModified(), fingerprint = fp ?: was.fingerprint,
+                    ))
+                    moved++
+                } else {
+                    insertFile(f, fp); added++
                 }
             }
-            val rootPaths = roots.map { it.absolutePath }
+            for ((path, f) in files) {
+                val d = byKey[path] ?: continue
+                if (d.size != f.length() || d.modified != f.lastModified() || d.name != f.name) {
+                    // Changed inside: its fingerprint is read again later.
+                    dao.update(d.copy(size = f.length(), modified = f.lastModified(), name = f.name, folder = f.parent, fingerprint = if (d.size != f.length() || d.modified != f.lastModified()) null else d.fingerprint))
+                }
+            }
             for (d in known) {
                 val p = d.path ?: continue
-                if (d.inTrash) {
-                    if (!File(p).exists()) { forgetNow(d); removed++ }
-                } else if (rootPaths.any { p.startsWith(it) } && p !in files) {
-                    forgetNow(d); removed++
-                }
+                if (d.inTrash && !File(p).exists()) { forgetNow(d); removed++ }
             }
+            for (d in gone) { forgetNow(d); removed++ }
         }
-        ScanResult(files.size, added, removed)
+        fillFingerprints()
+        ScanResult(files.size, added, removed, moved)
+    }
+
+    /** Reads the fingerprints of files known without one (from before fingerprints, or changed since), a batch at a time. */
+    suspend fun fillFingerprints(batch: Int = 400) = withContext(Dispatchers.IO) {
+        for (d in dao.withoutFingerprint(batch)) {
+            val f = File(d.path ?: continue)
+            val fp = Fingerprint.of(f) ?: continue
+            dao.byId(d.id)?.let { now -> if (now.path == d.path) dao.update(now.copy(fingerprint = fp)) }
+        }
     }
 
     private fun walk(start: File, out: MutableMap<String, File>) {
@@ -116,10 +148,11 @@ class Library(
         }
     }
 
-    private suspend fun insertFile(f: File): Doc {
+    private suspend fun insertFile(f: File, fingerprint: String? = Fingerprint.of(f)): Doc {
         val d = Doc(
             key = f.absolutePath, path = f.absolutePath, uri = Uri.fromFile(f).toString(), name = f.name,
-            folder = f.parent, size = f.length(), modified = f.lastModified(),
+            folder = f.parent, size = f.length(), modified = f.lastModified(), fingerprint = fingerprint,
+            addedAt = System.currentTimeMillis(),
         )
         return d.copy(id = dao.insert(d))
     }
@@ -232,6 +265,34 @@ class Library(
     // ---------------------------------------------------------------- changes on disk
 
     suspend fun setStar(d: Doc, on: Boolean) = dao.update(d.copy(starred = on))
+
+    /**
+     * Copies of one file: [keep] stays and takes the others' tags, star, bookmarks and the furthest
+     * reading place; the others go to the trash (for 30 days). Returns how many went.
+     */
+    suspend fun mergeDuplicates(keep: Doc, others: List<Doc>): Result<Int> = runCatching {
+        var k = dao.byId(keep.id) ?: error("That file is gone.")
+        var n = 0
+        for (o0 in others) {
+            val o = dao.byId(o0.id) ?: continue
+            if (o.id == k.id || o.inTrash) continue
+            withContext(Dispatchers.IO) {
+                db.withTransaction {
+                    dao.tagIdsOf(o.id).forEach { dao.tag(DocTag(k.id, it)) }
+                }
+                bookmarks.pages(o.id).forEach { bookmarks.set(k.id, it, true) }
+            }
+            k = k.copy(
+                starred = k.starred || o.starred,
+                lastOpened = maxOf(k.lastOpened, o.lastOpened),
+                lastPage = if (o.lastOpened > k.lastOpened) o.lastPage else k.lastPage,
+            )
+            dao.update(k)
+            trash(o).getOrThrow()
+            n++
+        }
+        n
+    }
 
     suspend fun rename(d: Doc, newName: String): Result<Doc> = io {
         val src = fileOf(d)

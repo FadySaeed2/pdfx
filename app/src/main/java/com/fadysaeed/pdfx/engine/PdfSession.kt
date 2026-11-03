@@ -1300,6 +1300,24 @@ class PdfSession private constructor(
         page(index).search(needle)?.size ?: 0
     }
 
+    /** The first pages' lines with their type sizes, to find the file's real title and authors. */
+    suspend fun infoPages(n: Int = 2): List<InfoPage> = onDoc {
+        (0 until minOf(n, pageCount)).map { i ->
+            val w = FlowWalker()
+            val st = page(i).toStructuredText()
+            try { st.walk(w) } finally { runCatching { st.destroy() } }
+            val lines = w.blocks.flatMap { b -> b.lines.map { l -> InfoLine(l.text, l.size, l.y0, l.y1, l.bold.count { it } * 2 > l.bold.size) } }
+            InfoPage(sizeNow(i).height, lines, lines.joinToString("\n") { it.text })
+        }
+    }
+
+    /** What the file says about itself: Title, Author, CreationDate (empty ones left out). */
+    suspend fun metadata(): Map<String, String> = onDoc {
+        listOf("Title", "Author", "CreationDate").mapNotNull { k ->
+            runCatching { doc.getMetaData("info:$k") }.getOrNull()?.takeIf { it.isNotBlank() }?.let { k to it }
+        }.toMap()
+    }
+
     suspend fun title(): String? = onDoc {
         doc.getMetaData(Document.META_INFO_TITLE)?.takeIf { it.isNotBlank() }
     }
