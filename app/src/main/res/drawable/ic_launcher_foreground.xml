@@ -1,17 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- A cream page with a folded corner and a signature on it, a second page fanned out behind:
+     reading, signing and putting pages together, in one mark. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- A bone-coloured page with a folded corner, three text lines, and one amber
-         highlight across the middle line: reading and marking up, in one mark. -->
-    <path android:fillColor="#ECE4D3"
-        android:pathData="M38,30h22l10,10v38h-32z" />
-    <path android:fillColor="#A0978A"
-        android:pathData="M60,30v10h10z" />
-    <path android:fillColor="#3A352D" android:pathData="M43,48h20v2.4h-20z" />
-    <path android:fillColor="#E0A43B" android:pathData="M42,55h24v6h-24z" />
-    <path android:fillColor="#3A352D" android:pathData="M43,57h18v2.2h-18z" />
-    <path android:fillColor="#3A352D" android:pathData="M43,66h15v2.4h-15z" />
+    <group android:scaleX="0.94" android:scaleY="0.94" android:pivotX="55" android:pivotY="55">
+        <!-- the page behind -->
+        <group android:rotation="-11" android:pivotX="54" android:pivotY="56">
+            <group android:translateX="-5" android:translateY="1">
+                <path android:fillColor="#FFFFFF" android:fillAlpha="0.30"
+                    android:pathData="M41,30q0,-3 3,-3h21l12,12v40q0,3 -3,3h-30q-3,0 -3,-3z" />
+            </group>
+        </group>
+        <!-- its shadow and the page -->
+        <group android:translateX="1.2" android:translateY="2.4">
+            <path android:fillColor="#7A3A0C" android:fillAlpha="0.22"
+                android:pathData="M41,30q0,-3 3,-3h21l12,12v40q0,3 -3,3h-30q-3,0 -3,-3z" />
+        </group>
+        <path android:pathData="M41,30q0,-3 3,-3h21l12,12v40q0,3 -3,3h-30q-3,0 -3,-3z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="0" android:startY="27" android:endX="0" android:endY="82">
+                    <item android:offset="0" android:color="#FFFFFDF8" />
+                    <item android:offset="1" android:color="#FFF3EADA" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:fillColor="#E6D3AE" android:pathData="M65,27v9q0,3 3,3h9z" />
+        <!-- two lines of text, the signature, and an amber line under it -->
+        <path android:strokeColor="#3A2A18" android:strokeAlpha="0.28" android:strokeWidth="2.2" android:strokeLineCap="round"
+            android:pathData="M47,44h13M47,50h22" />
+        <path android:strokeColor="#1E140A" android:strokeWidth="2.3" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M47.5,67c2.5,-6 5,-11 7,-11c2,0 -0.5,9 1.5,9.5c2,0.5 3.5,-5.5 5.5,-5.5c1.8,0 0.8,4.5 2.8,4.5c2,0 3.5,-2.5 6,-3" />
+        <path android:strokeColor="#D5681C" android:strokeWidth="2.2" android:strokeLineCap="round"
+            android:pathData="M47,73h23" />
+    </group>
 </vector>

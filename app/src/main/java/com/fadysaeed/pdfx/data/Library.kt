@@ -129,6 +129,78 @@ class Library(
      * it runs within a Room transaction, and touching the database from another thread there
      * would wait for the transaction forever.
      */
+    /** Where files handed over by other apps (Gmail, WhatsApp, Drive) are kept as real files. */
+    val receivedDir: File get() = File(homeDir, "Received")
+
+    /**
+     * A file another app hands over, made a real file on the phone at once: Gmail, WhatsApp and the
+     * like let PDFx read their files only for a while, and a file PDFx cannot read later cannot be
+     * merged, split, or saved in place. Returns the file to open: the same file when it is already
+     * on the phone (WhatsApp keeps one in WhatsApp Documents; the same name and size), a copy in
+     * Documents/PDFx/Received otherwise (the same copy again when the same file comes twice). Null
+     * when it cannot be copied (no access to the phone's files): the file is then opened as before.
+     */
+    suspend fun receive(uri: Uri): Doc? = withContext(Dispatchers.IO) {
+        pathFor(uri)?.let { p -> return@withContext dao.byKey(p) ?: insertFile(File(p)) }
+        if (!hasAllFilesAccess()) return@withContext null
+        val (described, size) = describe(uri)
+        val name = described.replace('/', '_').let { if (it.endsWith(".pdf", true)) it else "$it.pdf" }
+        val old = dao.byKey(uri.toString())
+        if (size > 0) {
+            dao.all().firstOrNull { d -> d.path != null && !d.inTrash && d.name == name && d.size == size && File(d.path).isFile }
+                ?.let { same -> return@withContext adoptCopy(File(same.path!!), old) }
+        }
+        val target = copyIn(name) { out -> context.contentResolver.openInputStream(uri)?.use { it.copyTo(out) } != null }
+            ?: return@withContext null
+        adoptCopy(target, old)
+    }
+
+    /**
+     * Files the library still knows only through another app: each becomes a real file where
+     * possible (the same file already on the phone, the copy PDFx kept, or a fresh copy while the
+     * other app still allows it). Those that cannot be read any more stay as they are.
+     */
+    suspend fun adoptShared() = withContext(Dispatchers.IO) {
+        if (!hasAllFilesAccess()) return@withContext
+        val all = dao.all()
+        for (d in all) {
+            if (d.isFile || d.inTrash) continue
+            runCatching {
+                val same = all.firstOrNull { f -> f.path != null && !f.inTrash && f.name == d.name && f.size == d.size && d.size > 0 && File(f.path).isFile }
+                if (same != null) { adoptCopy(File(same.path!!), d); return@runCatching }
+                val kept = keptCopy(d)
+                val name = d.name.replace('/', '_').let { if (it.endsWith(".pdf", true)) it else "$it.pdf" }
+                val target = if (kept.isFile && kept.length() > 0) copyIn(name) { out -> kept.inputStream().use { it.copyTo(out) }; true }
+                else copyIn(name) { out -> context.contentResolver.openInputStream(Uri.parse(d.uri))?.use { it.copyTo(out) } != null }
+                if (target != null) { adoptCopy(target, d); kept.delete() }
+            }
+        }
+    }
+
+    /**
+     * Writes a file into Documents/PDFx/Received under [name], through [write]; when a file of that
+     * name is already there with exactly the same bytes, that one is used and nothing is added.
+     */
+    private fun copyIn(name: String, write: (java.io.OutputStream) -> Boolean): File? {
+        val dir = receivedDir.also { it.mkdirs() }
+        val tmp = File(dir, ".$name.receiving")
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val ok = runCatching { java.security.DigestOutputStream(tmp.outputStream(), digest).use { write(it) } }.getOrDefault(false)
+        if (!ok || tmp.length() == 0L) { tmp.delete(); return null }
+        val hash = digest.digest()
+        fun sha(f: File): ByteArray {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            f.inputStream().use { i -> val b = ByteArray(1 shl 16); while (true) { val n = i.read(b); if (n < 0) break; md.update(b, 0, n) } }
+            return md.digest()
+        }
+        val here = File(dir, name)
+        if (here.isFile && here.length() == tmp.length() && sha(here).contentEquals(hash)) { tmp.delete(); return here }
+        val target = uniqueTarget(dir, name)
+        if (!tmp.renameTo(target)) { tmp.copyTo(target, overwrite = true); tmp.delete() }
+        scanMedia(target)
+        return target
+    }
+
     /**
      * The app's own copy of a file shared from another app (Gmail, WhatsApp). Those apps let PDFx
      * read the file only for a while; the copy, made while it can, keeps the file usable after.

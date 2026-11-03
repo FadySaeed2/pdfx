@@ -54,6 +54,9 @@ import com.fadysaeed.pdfx.ui.viewer.BoxStyleFields
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.ui.draw.clip
 import com.fadysaeed.pdfx.ui.viewer.movedBox
 import com.fadysaeed.pdfx.ui.viewer.resizedBox
 import com.fadysaeed.pdfx.ui.viewer.isArabic
@@ -546,6 +549,28 @@ class ScreensTest {
     @Test fun tableWideGrid() = tableShot("38_table_wide_grid.png", "gpm", 65, PaperMode.NIGHT)
 
     @Test fun tableRuledGrid() = tableShot("39_table_ruled_grid.png", "grid", 1)
+
+    /** The app's icon as launchers cut it: a circle and a rounded square, and the one-colour version. */
+    @Test
+    fun appIcon() {
+        compose.setContent {
+            androidx.compose.foundation.layout.Row(Modifier.background(androidx.compose.ui.graphics.Color(0xFF141414)).padding(24.dp)) {
+                for (shape in listOf(androidx.compose.foundation.shape.CircleShape, androidx.compose.foundation.shape.RoundedCornerShape(40.dp))) {
+                    androidx.compose.foundation.layout.Box(Modifier.padding(12.dp).size(160.dp).clip(shape), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                        androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(R.drawable.ic_launcher_background), null, Modifier.requiredSize(240.dp))
+                        androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(R.drawable.ic_launcher_foreground), null, Modifier.requiredSize(240.dp))
+                    }
+                }
+                androidx.compose.foundation.layout.Box(Modifier.padding(12.dp).size(160.dp).clip(androidx.compose.foundation.shape.CircleShape).background(androidx.compose.ui.graphics.Color(0xFF3B3226)), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                    androidx.compose.foundation.Image(
+                        androidx.compose.ui.res.painterResource(R.drawable.ic_launcher_monochrome), null, Modifier.requiredSize(240.dp),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(androidx.compose.ui.graphics.Color(0xFFF2D9A6)),
+                    )
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/00_app_icon.png")
+    }
 
     /** The pages screen with six pages: two picked, one moved, one turned, a blank page added. */
     private fun pagesShot(file: String, setup: (com.fadysaeed.pdfx.ui.viewer.Organizer) -> Unit) {

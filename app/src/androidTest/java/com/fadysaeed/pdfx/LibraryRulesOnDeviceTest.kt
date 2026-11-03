@@ -185,4 +185,41 @@ class LibraryRulesOnDeviceTest {
         assertEquals("a (3).pdf", Library.uniqueTarget(dir, "a.pdf").name)
         assertNotNull(Library.uniqueTarget(dir, "b.pdf"))
     }
+
+    /** A file as another app (Gmail, WhatsApp) hands it over: a content Uri that is not a path PDFx knows. */
+    private fun shared(name: String, bytes: Int): android.net.Uri {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val f = File(ctx.cacheDir, "outside-${System.nanoTime()}/$name").apply { parentFile?.mkdirs(); writeBytes(ByteArray(bytes) { ((it * 7) % 253).toByte() }) }
+        return androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+    }
+
+    @Test
+    fun filesFromOtherAppsBecomeRealFiles() = runBlocking {
+        // Handed over: kept as a real file in Documents/PDFx/Received, with its own name.
+        val uri = shared("Referral.pdf", 5000)
+        val d = lib.receive(uri)!!
+        val received = File(root, "Documents/PDFx/Received")
+        assertEquals(File(received, "Referral.pdf").absolutePath, d.path)
+        assertEquals(5000L, File(d.path!!).length())
+        // The same file handed over again is the same copy, not a second one.
+        assertEquals(d.path, lib.receive(uri)!!.path)
+        assertEquals(1, received.listFiles()!!.count { it.name.endsWith(".pdf") })
+        // A different file with the same name gets a name of its own.
+        val other = lib.receive(shared("Referral.pdf", 6000))!!
+        assertEquals(File(received, "Referral (2).pdf").absolutePath, other.path)
+
+        // Already on the phone (WhatsApp keeps a copy in WhatsApp Documents): that file is used as it is.
+        pdf("Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents/Plan.pdf", 3000)
+        lib.scan()
+        val plan = lib.receive(shared("Plan.pdf", 3000))!!
+        assertTrue(plan.path!!.contains("WhatsApp Documents"))
+
+        // Known only through another app: becomes a real file while that app still allows reading it.
+        val letter = lib.resolve(shared("Letter.pdf", 4000))
+        assertNull(letter.path)
+        lib.adoptShared()
+        val all = db.dao().all()
+        assertTrue("nothing left that only another app can read: ${all.map { it.name to it.path }}", all.none { it.path == null })
+        assertTrue(all.any { it.path == File(received, "Letter.pdf").absolutePath })
+    }
 }

@@ -47,6 +47,8 @@ class PdfxApp : Application() {
                     prepared = true
                 }
                 runCatching { library.scan() }
+                // Files known only through another app become real files while that app still allows it.
+                runCatching { library.adoptShared() }
                 TextIndexer.schedule(this@PdfxApp)
             }
         }

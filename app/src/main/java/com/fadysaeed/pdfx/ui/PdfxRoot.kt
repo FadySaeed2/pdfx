@@ -1,6 +1,9 @@
 package com.fadysaeed.pdfx.ui
 
 import android.net.Uri
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
+import kotlinx.coroutines.launch
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -14,6 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.fadysaeed.pdfx.PdfxApp
 import com.fadysaeed.pdfx.ui.library.LibraryModel
 import com.fadysaeed.pdfx.ui.library.LibraryScreen
 import com.fadysaeed.pdfx.ui.library.Notice
@@ -60,16 +64,31 @@ fun PdfxRoot(incoming: Uri?, onIncomingHandled: () -> Unit) {
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
     }
 
+    val app = context.applicationContext as PdfxApp
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var receiving by remember { mutableStateOf(false) }
+    /**
+     * A file from another app (Gmail, WhatsApp, Drive) becomes a real file on the phone before it
+     * opens, so it can still be read, merged, split and saved in place after that app stops
+     * letting PDFx read it. When that cannot be done, it opens straight from the other app as before.
+     */
+    suspend fun openFromApp(uri: Uri) {
+        keep(uri)
+        receiving = true
+        val d = runCatching { app.library.receive(uri) }.getOrNull()
+        receiving = false
+        open = OpenRequest(d?.path?.let { Uri.fromFile(java.io.File(it)) } ?: uri)
+    }
+
     LaunchedEffect(incoming) {
         if (incoming != null) {
-            keep(incoming)
-            open = OpenRequest(incoming)
             onIncomingHandled()
+            openFromApp(incoming)
         }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) { keep(uri); open = OpenRequest(uri) }
+        if (uri != null) scope.launch { openFromApp(uri) }
     }
 
     val current = open
@@ -87,9 +106,17 @@ fun PdfxRoot(incoming: Uri?, onIncomingHandled: () -> Unit) {
             onPick = { picker.launch(arrayOf("application/pdf")) },
         )
     } else {
-        ViewerScreen(current) { message ->
+        ViewerScreen(current, onOpenOther = { open = OpenRequest(it) }) { message ->
             if (message != null) vm.notice.value = Notice(message)
             open = null
+        }
+    }
+    if (receiving) {
+        androidx.compose.foundation.layout.Box(
+            androidx.compose.ui.Modifier.fillMaxSize().background(com.fadysaeed.pdfx.ui.theme.Ink.Black.copy(alpha = 0.7f)),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
+            androidx.compose.material3.Text("Opening…", style = com.fadysaeed.pdfx.ui.theme.Type.title)
         }
     }
 }

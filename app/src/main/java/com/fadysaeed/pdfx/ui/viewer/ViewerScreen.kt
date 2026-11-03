@@ -188,6 +188,8 @@ fun ViewerScreen(
     request: OpenRequest,
     /** For tests: the reader in use (a new one after each save and reopen), and the page in the middle of the screen. */
     onReader: ((Reader, () -> Int) -> Unit)? = null,
+    /** Opens another file in place of this one (a file just made by merging). */
+    onOpenOther: (Uri) -> Unit = {},
     onClose: (message: String?) -> Unit,
 ) {
     val context = LocalContext.current
@@ -490,7 +492,10 @@ fun ViewerScreen(
                 "merge" -> doc?.let { d ->
                     com.fadysaeed.pdfx.ui.tools.MergeScreen(d, onClose = { tool = null }) { made ->
                         tool = null
-                        reader.problem = "Merged into ${made.name.removeSuffix(".pdf")}, beside this file. It is in your library."
+                        // Straight into the new file; this one is already saved.
+                        val path = made.path
+                        if (path != null) onOpenOther(Uri.fromFile(java.io.File(path)))
+                        else reader.problem = "Merged into ${made.name.removeSuffix(".pdf")}. It is in your library."
                     }
                 }
             }
