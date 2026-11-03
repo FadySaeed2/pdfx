@@ -212,3 +212,11 @@ signatures, and a full pass on every screen for clarity.
   proof). Signed files offer to save the new order as a new file. Found: the bindings' addObject
   returns the dictionary, not its reference, so copied marks use createObject + writeObject.
   Shipped as 0.3.73. Next, 5b: merge files, split by ranges or size, crop margins.
+- 2026-11-03 — Phase 5b (0.3.75): merge files (pick from the library, order with arrows; the first
+  keeps its contents list and form, the new file gets a contents entry per file), split (every few
+  pages, written ranges like 1-3, 4-10, 11-, or under a size measured by writing), trim white
+  margins (CropBox from each page's ink, same on every page or each its own; whole pages can come
+  back). The viewer's top bar keeps search, reflow and pen; bookmark, contents, pages, the file
+  tools and page colours moved under one More button, so the file's name has room (Fady).
+  Found: opening a screen in the same moment a sheet is removed upset Compose (slot table out of
+  step), so sheet actions now wait for the sheet to close. Phase 5 done; next is phase 6.
