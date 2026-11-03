@@ -200,7 +200,7 @@ object Arranger {
             if (page !in 0 until d.countPages()) continue
             val item = d.createObject()
             val dest = d.newArray().apply {
-                push(d.findPage(page)); push(d.newName("XYZ")); push(d.newNull()); push(d.newNull()); push(d.newNull())
+                append(d.findPage(page)); append(d.newName("XYZ")); append(d.newNull()); append(d.newNull()); append(d.newNull())
             }
             item.writeObject(d.newDictionary().apply {
                 put("Title", title)

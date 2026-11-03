@@ -224,6 +224,7 @@ fun ViewerScreen(
     var details by remember(request) { mutableStateOf<List<Pair<String, String>>?>(null) }
     /** Save as Word, Excel or text: the file made, to open or send. */
     var exportMade by remember(request) { mutableStateOf<java.io.File?>(null) }
+    var picturesMade by remember(request) { mutableStateOf<List<java.io.File>>(emptyList()) }
     var organizing by remember(request) { mutableStateOf(false) }
     var leavePages by remember(request) { mutableStateOf(false) }
     var signedPages by remember(request) { mutableStateOf(false) }
@@ -586,6 +587,34 @@ fun ViewerScreen(
                     }) { toolNote = it.message ?: "The file could not be made." }
                 }
             }
+            fun savePictures(format: com.fadysaeed.pdfx.engine.PagePictures.Format, dpi: Int, pagesText: String) {
+                if (toolBusy) return
+                toolBusy = true
+                toolNote = null
+                picturesMade = emptyList()
+                scope.launch {
+                    val (pages, why) = com.fadysaeed.pdfx.engine.ExportPages.pagesFrom(pagesText, session.pageCount)
+                    if (pages == null || pages.isEmpty()) { toolBusy = false; toolNote = why ?: "Pick at least one page."; return@launch }
+                    val r = runCatching {
+                        val base = name.removeSuffix(".pdf")
+                        val parent = doc?.path?.let { java.io.File(it).parentFile }?.takeIf { it.isDirectory && it.canWrite() }
+                            ?: app.library.homeDir.also { it.mkdirs() }
+                        var dir = java.io.File(parent, "$base pages")
+                        var n = 2
+                        while (dir.exists()) { dir = java.io.File(parent, "$base pages ($n)"); n++ }
+                        val files = com.fadysaeed.pdfx.engine.PagePictures.write(session, pages, dir, base, format, dpi) { k, all ->
+                            toolNote = if (all == 1) "Drawing the page…" else "Drawing page $k of $all…"
+                        }
+                        android.media.MediaScannerConnection.scanFile(context, files.map { it.absolutePath }.toTypedArray(), null, null)
+                        files
+                    }
+                    toolBusy = false
+                    r.fold({ files ->
+                        picturesMade = files
+                        toolNote = "Saved ${if (files.size == 1) "1 picture" else "${files.size} pictures"} in the folder ${files.first().parentFile?.name}, beside the file."
+                    }) { toolNote = it.message ?: "The pictures could not be made." }
+                }
+            }
             fun findToRedact(text: String) {
                 if (toolBusy || text.isBlank()) return
                 toolBusy = true
@@ -745,6 +774,12 @@ fun ViewerScreen(
                     onOpen = { f -> com.fadysaeed.pdfx.ui.tools.openWith(context, f)?.let { toolNote = it } },
                     onShare = { f -> com.fadysaeed.pdfx.ui.tools.shareFile(context, f) },
                     onDismiss = { if (!toolBusy) { tool = null; exportMade = null; toolNote = null } },
+                )
+                "pictures" -> com.fadysaeed.pdfx.ui.tools.PicturesDialog(
+                    busy = toolBusy, note = toolNote, made = picturesMade, pageCount = session.pageCount,
+                    onMake = ::savePictures,
+                    onShare = { com.fadysaeed.pdfx.ui.tools.shareFiles(context, it) },
+                    onDismiss = { if (!toolBusy) { tool = null; picturesMade = emptyList(); toolNote = null } },
                 )
                 "read" -> com.fadysaeed.pdfx.ui.tools.ReadDialog(readBusy, readNote, onDismiss = { if (!readBusy) { tool = null; readNote = null } }, onRead = ::readWords)
                 "split" -> doc?.let { d ->
@@ -1164,6 +1199,7 @@ fun ViewerContent(
                     ViewerSheet.TOOLS -> {
                         if (!reader.reflow) SheetRow(Glyph.SEARCH, "Make searchable", { then { reader.openTool?.invoke("read") } }, note = "Reads the words on scanned pages, on the phone")
                         SheetRow(Glyph.SHARE, "Save as Word, Excel or text", { then { reader.openTool?.invoke("export") } }, note = "Word to edit, the tables in Excel, or plain text")
+                        SheetRow(Glyph.PAGE, "Save pages as pictures", { then { reader.openTool?.invoke("pictures") } }, note = "PNG or JPEG, one a page")
                         SheetRow(Glyph.DOWN, "Make smaller", { then { reader.openTool?.invoke("shrink") } }, note = "Shows the size before and after")
                         SheetRow(Glyph.LOCK, if (reader.hasPassword) "Password" else "Lock with a password", { then { reader.openTool?.invoke("password") } }, note = if (reader.hasPassword) "Change it or take it off" else "AES-256; it opens only with the password")
                         SheetRow(Glyph.PEN, "Black out (redact)", { then { reader.openTool?.invoke("redact") } }, note = if (reader.redactions > 0) "${reader.redactions} marked; black them out for good" else "Names, numbers or areas, taken out of the file for good")

@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.dp
 
 /** The library and an open document. A file handed over by another app opens straight away. */
 @Composable
-fun PdfxRoot(incoming: Uri?, onIncomingHandled: () -> Unit) {
+fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit) {
     val context = LocalContext.current
     val vm: LibraryModel = viewModel()
     // Kept across the app being recreated, so an open file stays open.
@@ -80,15 +80,78 @@ fun PdfxRoot(incoming: Uri?, onIncomingHandled: () -> Unit) {
         open = OpenRequest(d?.path?.let { Uri.fromFile(java.io.File(it)) } ?: uri)
     }
 
-    LaunchedEffect(incoming) {
-        if (incoming != null) {
-            onIncomingHandled()
-            openFromApp(incoming)
+    /** What is being made (a book or pictures into a PDF), shown over everything. */
+    var making by remember { mutableStateOf<String?>(null) }
+    /** A book waiting for its page size and type size. */
+    var book by remember { mutableStateOf<Uri?>(null) }
+
+    suspend fun picturesToPdf(uris: List<Uri>) {
+        making = "Getting the pictures…"
+        val dir = java.io.File(context.cacheDir, "import-${System.nanoTime()}").apply { mkdirs() }
+        val files = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            uris.mapIndexedNotNull { i, u -> com.fadysaeed.pdfx.data.Pictures.prepare(context, u, java.io.File(dir, "p%03d.jpg".format(i))) }
+        }
+        if (files.isEmpty()) { making = null; dir.deleteRecursively(); vm.notice.value = Notice("Those pictures could not be read."); return }
+        val r = com.fadysaeed.pdfx.ui.tools.Making.picturesToPdf(app, files, "Pictures") { making = it }
+        dir.deleteRecursively()
+        making = null
+        r.fold(
+            { (d, read) ->
+                vm.notice.value = Notice("${if (files.size == 1) "The picture is" else "${files.size} pictures are"} now ${LibraryModel.display(d)}, in Documents/PDFx/Scans." + if (read > 0) " Its words can be searched and copied." else "")
+                open = OpenRequest(Uri.parse(d.uri))
+            },
+            { vm.notice.value = Notice(it.message ?: "The pictures could not be made into a PDF.") },
+        )
+    }
+
+    fun bookToPdf(uri: Uri, size: com.fadysaeed.pdfx.engine.Books.Size, fontSize: Float) {
+        scope.launch {
+            making = "Opening the book…"
+            val name = app.library.describe(uri).first
+            val ext = name.substringAfterLast('.', "epub").lowercase()
+            val copy = java.io.File(context.cacheDir, "book-${System.nanoTime()}.$ext")
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { context.contentResolver.openInputStream(uri)?.use { i -> copy.outputStream().use { i.copyTo(it) } } != null }.getOrDefault(false)
+            }
+            if (!ok) { making = null; vm.notice.value = Notice("The book could not be read."); return@launch }
+            val r = com.fadysaeed.pdfx.ui.tools.Making.bookToPdf(app, copy, name, size, fontSize) { making = it }
+            copy.delete()
+            making = null
+            r.fold(
+                { d -> vm.notice.value = Notice("${LibraryModel.display(d)} is now a PDF, in Documents/PDFx/Books."); open = OpenRequest(Uri.parse(d.uri)) },
+                { vm.notice.value = Notice(it.message ?: "The book could not be made into a PDF.") },
+            )
         }
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) scope.launch { openFromApp(uri) }
+    /** Files picked or handed over: a PDF opens; a book asks how to lay it out; pictures become a PDF. */
+    suspend fun handle(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val kinds = uris.map { u ->
+            val mime = runCatching { context.contentResolver.getType(u) }.getOrNull().orEmpty()
+            val name = runCatching { app.library.describe(u).first }.getOrDefault("")
+            when {
+                mime.startsWith("image/") -> "picture"
+                com.fadysaeed.pdfx.engine.Books.isBook(name) || mime == "application/epub+zip" || mime.contains("mobipocket") || mime.contains("fictionbook") || mime.contains("comicbook") || mime.contains("xps") -> "book"
+                else -> "pdf"
+            }
+        }
+        when {
+            kinds.all { it == "picture" } -> picturesToPdf(uris)
+            kinds.first() == "book" -> { uris.forEach(::keep); book = uris.first() }
+            else -> openFromApp(uris[kinds.indexOf("pdf").coerceAtLeast(0)])
+        }
+    }
+
+    LaunchedEffect(incoming) {
+        if (incoming != null) {
+            onIncomingHandled()
+            handle(incoming)
+        }
+    }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) scope.launch { handle(uris) }
     }
 
     val current = open
@@ -103,12 +166,34 @@ fun PdfxRoot(incoming: Uri?, onIncomingHandled: () -> Unit) {
                 val q = vm.ui.value.query.trim().takeIf { it.isNotEmpty() && page != null }
                 open = OpenRequest(Uri.parse(d.uri), page, q)
             },
-            onPick = { picker.launch(arrayOf("application/pdf")) },
+            onPick = {
+                picker.launch(arrayOf(
+                    "application/pdf", "application/epub+zip", "application/x-mobipocket-ebook", "application/x-fictionbook+xml",
+                    "application/vnd.comicbook+zip", "application/oxps", "application/vnd.ms-xpsdocument", "image/*",
+                    // Books often come without a proper type.
+                    "application/octet-stream",
+                ))
+            },
         )
     } else {
         ViewerScreen(current, onOpenOther = { open = OpenRequest(it) }) { message ->
             if (message != null) vm.notice.value = Notice(message)
             open = null
+        }
+    }
+    book?.let { u ->
+        com.fadysaeed.pdfx.ui.tools.BookDialog(
+            name = remember(u) { runCatching { app.library.describe(u).first }.getOrDefault("Book") },
+            onMake = { size, font -> book = null; bookToPdf(u, size, font) },
+            onDismiss = { book = null },
+        )
+    }
+    making?.let { note ->
+        androidx.compose.foundation.layout.Box(
+            androidx.compose.ui.Modifier.fillMaxSize().background(com.fadysaeed.pdfx.ui.theme.Ink.Black.copy(alpha = 0.8f)),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
+            androidx.compose.material3.Text(note, style = com.fadysaeed.pdfx.ui.theme.Type.title)
         }
     }
     if (receiving) {

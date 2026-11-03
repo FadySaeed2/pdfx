@@ -103,28 +103,11 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     val scan = com.fadysaeed.pdfx.ui.tools.rememberScanner(
         onPages = { files ->
             scope.launch {
-                scanNote = "Saving the scan…"
-                val name = "Scan " + java.text.SimpleDateFormat("yyyy-MM-dd HH.mm", java.util.Locale.getDefault()).format(java.util.Date())
-                var read = 0
-                val r = app.saver.create(null, name, into = File(app.library.homeDir, "Scans")) { out ->
-                    val pictures = File(app.cacheDir, "scan-pictures-${System.nanoTime()}.pdf")
-                    try {
-                        val n = com.fadysaeed.pdfx.engine.Arranger.fromPictures(files.map { it.absolutePath }, pictures.absolutePath)
-                        // Reading the words is a bonus: if it fails, the scan is kept as pictures.
-                        runCatching {
-                            read = com.fadysaeed.pdfx.engine.Reading.makeSearchable(pictures.absolutePath, out.absolutePath) { k, all ->
-                                scanNote = if (all == 1) "Reading the words…" else "Reading the words on page $k of $all…"
-                            }
-                        }.onFailure { pictures.copyTo(out, overwrite = true) }
-                        n
-                    } finally {
-                        pictures.delete()
-                    }
-                }
+                val r = com.fadysaeed.pdfx.ui.tools.Making.picturesToPdf(app, files, "Scan") { scanNote = it }
                 scanNote = null
                 files.firstOrNull()?.parentFile?.deleteRecursively()
                 r.fold(
-                    { d ->
+                    { (d, read) ->
                         vm.notice.value = Notice(
                             "Saved as ${LibraryModel.display(d)} in Documents/PDFx/Scans." +
                                 if (read > 0) " Its words can be searched and copied." else ""

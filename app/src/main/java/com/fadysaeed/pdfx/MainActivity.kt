@@ -14,7 +14,7 @@ import com.fadysaeed.pdfx.ui.PdfxRoot
 import com.fadysaeed.pdfx.ui.theme.PdfxTheme
 
 class MainActivity : ComponentActivity() {
-    private val incoming = mutableStateOf<Uri?>(null)
+    private val incoming = mutableStateOf<List<Uri>?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -35,11 +35,15 @@ class MainActivity : ComponentActivity() {
         documentFrom(intent)?.let { incoming.value = it }
     }
 
-    private fun documentFrom(intent: Intent?): Uri? = when (intent?.action) {
-        Intent.ACTION_VIEW -> intent.data
+    /** What another app hands over: a PDF, a book, or one or more pictures to make into a PDF. */
+    private fun documentFrom(intent: Intent?): List<Uri>? = when (intent?.action) {
+        Intent.ACTION_VIEW -> intent.data?.let { listOf(it) }
         Intent.ACTION_SEND ->
-            if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-            else @Suppress("DEPRECATION") intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            (if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            else @Suppress("DEPRECATION") intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { listOf(it) }
+        Intent.ACTION_SEND_MULTIPLE ->
+            (if (Build.VERSION.SDK_INT >= 33) intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            else @Suppress("DEPRECATION") intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM))?.toList()?.takeIf { it.isNotEmpty() }
         else -> null
     }
 }

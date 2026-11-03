@@ -124,7 +124,7 @@ fun LibraryContent(
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 AmberButton("Scan", actions.scan, Modifier.weight(1f))
-                GhostButton("Open a PDF", actions.pick, Modifier.weight(1f), minHeight = 52.dp)
+                GhostButton("Open a file", actions.pick, Modifier.weight(1f), minHeight = 52.dp)
             }
         }
     }

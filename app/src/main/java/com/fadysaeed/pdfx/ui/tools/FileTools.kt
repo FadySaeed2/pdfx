@@ -686,3 +686,100 @@ internal fun ExportBody(
         if (busy && note == null) Text("Working…", style = Type.small, modifier = Modifier.padding(top = 12.dp))
     }
 }
+
+/** How a book is laid out as PDF pages: the page size, and the size of its type. */
+@Composable
+fun BookDialog(name: String, onMake: (com.fadysaeed.pdfx.engine.Books.Size, Float) -> Unit, onDismiss: () -> Unit) {
+    var size by remember { mutableStateOf(com.fadysaeed.pdfx.engine.Books.Size.PHONE) }
+    var type by remember { mutableStateOf(1) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text("Make a PDF of the book", style = Type.title) },
+        text = { BookBody(name, size, { size = it }, type, { type = it }) },
+        confirmButton = { AmberButton("Make the PDF", { onMake(size, bookType(size, type)) }) },
+        dismissButton = { GhostButton("Cancel", onDismiss, minHeight = 52.dp) },
+    )
+}
+
+/** Type size in points: on a phone page, about the size of a phone's own reading text. */
+private fun bookType(size: com.fadysaeed.pdfx.engine.Books.Size, step: Int): Float = when (size) {
+    com.fadysaeed.pdfx.engine.Books.Size.PHONE -> listOf(10.5f, 12f, 14f)
+    com.fadysaeed.pdfx.engine.Books.Size.A5 -> listOf(9.5f, 11f, 13f)
+    com.fadysaeed.pdfx.engine.Books.Size.A4 -> listOf(10f, 12f, 14f)
+}[step]
+
+@Composable
+internal fun BookBody(name: String, size: com.fadysaeed.pdfx.engine.Books.Size, onSize: (com.fadysaeed.pdfx.engine.Books.Size) -> Unit, type: Int, onType: (Int) -> Unit) {
+    Column(Modifier.verticalScroll(rememberScrollState())) {
+        Text(name, style = Type.bodyStrong, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text("Pages", style = Type.small, modifier = Modifier.padding(top = 14.dp))
+        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (s in com.fadysaeed.pdfx.engine.Books.Size.entries) Chip(s.label, { onSize(s) }, selected = size == s)
+        }
+        Text(
+            when (size) {
+                com.fadysaeed.pdfx.engine.Books.Size.PHONE -> "Long, narrow pages that fill a phone's screen: read without zooming."
+                com.fadysaeed.pdfx.engine.Books.Size.A5 -> "The size of a paperback: good on a tablet, and prints two to a sheet."
+                com.fadysaeed.pdfx.engine.Books.Size.A4 -> "Full sheets of paper, for printing."
+            },
+            style = Type.note, modifier = Modifier.padding(top = 8.dp),
+        )
+        Text("Type", style = Type.small, modifier = Modifier.padding(top = 14.dp))
+        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("Smaller", "Normal", "Larger").forEachIndexed { i, l -> Chip(l, { onType(i) }, selected = type == i) }
+        }
+        Text("The words stay words: they can be searched, copied and highlighted. The book's chapters become the contents list. Books locked by a shop (Kindle, Google Play, Apple) cannot be opened.", style = Type.small, modifier = Modifier.padding(top = 14.dp))
+    }
+}
+
+/** Hands several files to another app at once (pictures of pages, say). */
+fun shareFiles(context: Context, files: List<File>) {
+    if (files.size == 1) { shareFile(context, files[0]); return }
+    val uris = ArrayList(files.map { androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", it) })
+    val send = android.content.Intent(android.content.Intent.ACTION_SEND_MULTIPLE).setType(mimeOf(files[0]))
+        .putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, uris)
+        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    runCatching { context.startActivity(android.content.Intent.createChooser(send, "${files.size} pictures").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+}
+
+@Composable
+fun PicturesDialog(
+    busy: Boolean, note: String?, made: List<File>, pageCount: Int,
+    onMake: (com.fadysaeed.pdfx.engine.PagePictures.Format, Int, String) -> Unit, onShare: (List<File>) -> Unit, onDismiss: () -> Unit,
+) {
+    var format by remember { mutableStateOf(com.fadysaeed.pdfx.engine.PagePictures.Format.PNG) }
+    var sharp by remember { mutableStateOf(com.fadysaeed.pdfx.engine.PagePictures.Sharpness.SHARP) }
+    var some by remember { mutableStateOf(false) }
+    var pages by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text("Save pages as pictures", style = Type.title) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (f in com.fadysaeed.pdfx.engine.PagePictures.Format.entries) Chip(f.label, { if (!busy) format = f }, selected = format == f)
+                }
+                Text(if (format == com.fadysaeed.pdfx.engine.PagePictures.Format.PNG) "Exact, for text and drawings; bigger files." else "Smaller files, for photos and scans.", style = Type.note, modifier = Modifier.padding(top = 8.dp))
+                Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (s in com.fadysaeed.pdfx.engine.PagePictures.Sharpness.entries) Chip(s.label, { if (!busy) sharp = s }, selected = sharp == s)
+                }
+                Text("${sharp.dpi} dots per inch.", style = Type.note, modifier = Modifier.padding(top = 8.dp))
+                Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Chip(if (pageCount == 1) "The page" else "All $pageCount pages", { some = false }, selected = !some)
+                    if (pageCount > 1) Chip("Some pages", { some = true }, selected = some)
+                }
+                if (some) InkField(pages, { pages = it }, "Like 3-10, 12", modifier = Modifier.padding(top = 10.dp), label = "Pages")
+                note?.let { Text(it, style = if (made.isNotEmpty()) Type.bodyStrong.copy(color = Ink.Amber) else Type.small, modifier = Modifier.padding(top = 12.dp)) }
+            }
+        },
+        confirmButton = {
+            if (made.isNotEmpty()) AmberButton("Send", { onShare(made) })
+            else AmberButton(if (busy) "Working…" else "Save pictures", { onMake(format, sharp.dpi, if (some) pages else "") }, enabled = !busy)
+        },
+        dismissButton = { GhostButton(if (made.isNotEmpty()) "Done" else "Cancel", { if (!busy) onDismiss() }, minHeight = 52.dp) },
+    )
+}

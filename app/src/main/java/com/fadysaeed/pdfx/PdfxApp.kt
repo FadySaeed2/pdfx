@@ -27,6 +27,8 @@ class PdfxApp : Application() {
     override fun onCreate() {
         super.onCreate()
         com.fadysaeed.pdfx.data.CrashReports.install(this)
+        // Arabic and other scripts in books and in PDFs that carry no font for them.
+        runCatching { com.fadysaeed.pdfx.engine.Books.installSystemFonts() }
     }
     private var prepared = false
     @Volatile private var lastScan = 0L
