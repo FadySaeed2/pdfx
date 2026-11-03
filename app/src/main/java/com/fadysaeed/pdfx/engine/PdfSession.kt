@@ -1096,7 +1096,7 @@ class PdfSession private constructor(
      */
     suspend fun renderForReading(index: Int): Pair<Bitmap, Float> = onDoc {
         val s = sizeNow(index)
-        val scale = Reading.scaleFor(s.width, s.height)
+        val scale = Reading.scaleFor(s.width, s.height, (page(index) as? PDFPage)?.let(Reading::pictureScale))
         AndroidDrawDevice.drawPage(page(index), Matrix(scale)) to scale
     }
 

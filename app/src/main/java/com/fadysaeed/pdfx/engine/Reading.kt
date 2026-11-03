@@ -35,8 +35,33 @@ object Reading {
     fun toPage(words: List<ReadWord>, scale: Float): List<ReadWord> =
         words.map { ReadWord(it.text, it.left / scale, it.top / scale, it.right / scale, it.bottom / scale) }
 
-    /** Pixels per point for reading: about 300 dots per inch, no side over [maxSide] pixels. */
-    fun scaleFor(width: Float, height: Float, maxSide: Int = 3300): Float = minOf(300f / 72f, maxSide / maxOf(width, height))
+    /**
+     * Pixels per point for reading a page of [width] × [height] points. A page that is a picture is
+     * drawn at the picture's own sharpness ([pictureScale]): blowing a phone photo up to 300 dots
+     * per inch made the reader miss about one word in ten. Otherwise about 300 dots per inch. Never
+     * under 2 (small print needs the pixels) and no side over [maxSide] pixels.
+     */
+    fun scaleFor(width: Float, height: Float, pictureScale: Float? = null, maxSide: Int = 3300): Float {
+        val want = pictureScale?.coerceIn(2f, 300f / 72f) ?: (300f / 72f)
+        return minOf(want, maxSide / maxOf(width, height))
+    }
+
+    /** Pixels of the biggest picture on the page per point of the page, or null when it has none. */
+    fun pictureScale(page: PDFPage): Float? = runCatching {
+        val b = page.bounds
+        val side = maxOf(b.x1 - b.x0, b.y1 - b.y0)
+        val xo = page.getObject().getInheritable("Resources").get("XObject")
+        var best = 0
+        var bestSide = 0
+        for (key in xo) {
+            val o = xo.get(key)
+            if (o.get("Subtype").asName() != "Image") continue
+            val w = o.get("Width").asInteger()
+            val h = o.get("Height").asInteger()
+            if (w * h > best) { best = w * h; bestSide = maxOf(w, h) }
+        }
+        if (bestSide == 0 || side <= 0f) null else bestSide / side
+    }.getOrNull()
 
     /**
      * Reads every page of [path] that is only a picture and writes the file again to [out] with the
@@ -56,7 +81,7 @@ object Reading {
                 val p = doc.loadPage(i) as PDFPage
                 try {
                     val b = p.bounds
-                    val scale = scaleFor(b.x1 - b.x0, b.y1 - b.y0)
+                    val scale = scaleFor(b.x1 - b.x0, b.y1 - b.y0, pictureScale(p))
                     val bmp = AndroidDrawDevice.drawPage(p, Matrix(scale))
                     val ws = try { words(bmp) } finally { bmp.recycle() }
                     if (TextLayer.add(doc, p, toPage(ws, scale)) > 0) done++

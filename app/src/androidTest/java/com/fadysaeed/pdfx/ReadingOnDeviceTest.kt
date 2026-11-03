@@ -63,16 +63,23 @@ class ReadingOnDeviceTest {
         val d = Document.openDocument(out.absolutePath)
         try {
             val report = StringBuilder()
+            val recalls = HashMap<String, Double>()
             for ((i, name) in listOf(0 to "book-photo", 1 to "table")) {
                 val p = d.loadPage(i)
                 val st = p.toStructuredText()
                 val text = st.asText()
                 st.destroy()
-                val r = recall(truth(name), text)
-                report.append("$name: recall %.3f\n".format(r))
-                assertTrue("$name: words read and in reading order, recall $r", r > 0.9)
+                recalls[name] = recall(truth(name), text)
+                report.append("== $name: recall ").append("%.3f".format(recalls[name])).append('\n').append(text).append('\n')
+                p.destroy()
+            }
+            File(shots, "reading.txt").writeText(report.toString())
+            for ((i, name) in listOf(0 to "book-photo", 1 to "table")) {
+                val r = recalls[name]!!
+                assertTrue("$name: words read, recall $r", r > 0.9)
+                val p = d.loadPage(i)
                 // The longest word on the page is found, inside the page.
-                val longest = truth(name).map(::norm).maxBy { it.length }
+                val longest = truth(name).map(::norm).filter { w -> w.all { it.isLetter() } }.maxBy { it.length }
                 val hits = p.search(longest)
                 assertTrue("\"$longest\" is found", hits != null && hits.isNotEmpty())
                 val b = p.bounds
@@ -80,7 +87,6 @@ class ReadingOnDeviceTest {
                 assertTrue(q.ul_x >= b.x0 - 1 && q.lr_x <= b.x1 + 1 && q.ul_y >= b.y0 - 1 && q.lr_y <= b.y1 + 1)
                 p.destroy()
             }
-            File(shots, "reading.txt").writeText(report.toString())
         } finally {
             d.destroy()
         }
@@ -97,7 +103,8 @@ class ReadingOnDeviceTest {
         try {
             assertEquals(listOf(0), s.pagesWithoutText())
             val (bmp, scale) = s.renderForReading(0)
-            assertTrue("drawn at about 300 dpi, A4 capped at 3300 pixels", scale > 3.5f)
+            // The page is the photo: drawn at the photo's own sharpness (1822 pixels over 842 points).
+            assertEquals(1822f / 842f, scale, 0.05f)
             val words = try { Reading.words(bmp) } finally { bmp.recycle() }
             assertTrue(words.size > 150)
             assertTrue(s.addReadText(mapOf(0 to Reading.toPage(words, scale))) > 150)
