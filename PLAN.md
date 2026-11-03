@@ -240,3 +240,11 @@ signatures, and a full pass on every screen for clarity.
   earlier revision. Found and worked round a MuPDF 1.28 Java bug: PDFObject.push(PDFObject) drops
   the item it adds while Java still owns it, so arrays pointed at freed memory after GC
   (engine/PdfObjects.kt append); every push replaced.
+- 2026-11-03: phase 7, conversions. MuPDF's own Word writer (extract) was tried on GPM and
+  rejected (every line kept broken, letters spaced out); Word, Excel and text are written by PDFx
+  from the reflow paragraphs and the table engine (engine/Export.kt, hand-written OOXML: headings as
+  Word headings, real tables with repeating header rows, figures as PNGs with captions; one sheet
+  per table, numbers as numbers). Books (EPUB, MOBI, FB2, CBZ, XPS) to PDF at phone / A5 / A4 with
+  contents and links; the Android MuPDF build has no Noto fonts, so a font loader lends MuPDF the
+  phone's /system/fonts for Arabic and other scripts. Pictures to PDF from the picker or Share;
+  pages to PNG/JPEG. Office files to PDF left out unless Fady asks (MuPDF's rendering is basic).
