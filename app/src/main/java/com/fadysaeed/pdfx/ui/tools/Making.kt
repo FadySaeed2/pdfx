@@ -10,7 +10,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** New PDFs made from other things: pictures (scans, photos) and books. */
+/** New PDFs made from other things: pictures (scans, photos), books, and Word and Excel files. */
 object Making {
     fun stamp(): String = SimpleDateFormat("yyyy-MM-dd HH.mm", Locale.getDefault()).format(Date())
 
@@ -52,5 +52,23 @@ object Making {
         return app.saver.create(null, title, into = File(app.library.homeDir, "Books")) { out ->
             Books.toPdf(book.absolutePath, out.absolutePath, size, fontSize) { k, n -> say("Writing page $k of $n…") }.pages
         }
+    }
+
+    /** A Word file, spreadsheet or CSV as a PDF in Documents/PDFx/Converted, named as the file was. Returns it and anything left out. */
+    suspend fun officeToPdf(app: PdfxApp, file: File, name: String, say: (String) -> Unit): Result<Pair<Doc, String?>> {
+        say("Reading ${name.substringAfterLast('.').uppercase()}…")
+        var note: String? = null
+        val base = name.substringBeforeLast('.').replace(Regex("""[\\/:*?"<>|]"""), " ").trim().take(100).ifBlank { "Document" }
+        val r = app.saver.create(null, base, into = File(app.library.homeDir, "Converted")) { out ->
+            val work = File(app.cacheDir, "office-${System.nanoTime()}")
+            try {
+                val res = com.fadysaeed.pdfx.engine.OfficePdf.toPdf(file.absolutePath, name, out.absolutePath, work) { k, _ -> say("Laying out page $k…") }
+                note = res.note
+                res.pages
+            } finally {
+                work.deleteRecursively()
+            }
+        }
+        return r.map { it to note }
     }
 }

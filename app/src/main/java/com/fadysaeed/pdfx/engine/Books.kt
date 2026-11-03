@@ -63,7 +63,7 @@ object Books {
         }
     }
 
-    private class Entry(val title: String, val page: Int, val kids: List<Entry>)
+    internal class Entry(val title: String, val page: Int, val kids: List<Entry>)
 
     /** The book's links and its contents list, carried over to the written PDF. */
     private fun addLinksAndContents(book: Document, out: String, title: String) {
@@ -105,7 +105,7 @@ object Books {
         }
     }
 
-    private fun writeOutline(d: PDFDocument, entries: List<Entry>) {
+    internal fun writeOutline(d: PDFDocument, entries: List<Entry>) {
         if (entries.isEmpty()) return
         val root = d.trailer.get("Root")
         val top = d.createObject()

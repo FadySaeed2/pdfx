@@ -124,7 +124,32 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit) {
         }
     }
 
-    /** Files picked or handed over: a PDF opens; a book asks how to lay it out; pictures become a PDF. */
+    fun officeToPdf(uri: Uri) {
+        scope.launch {
+            making = "Opening the file…"
+            val name = runCatching { app.library.describe(uri).first }.getOrDefault("Document.docx")
+            val ext = name.substringAfterLast('.', "docx").lowercase()
+            val copy = java.io.File(context.cacheDir, "office-${System.nanoTime()}.$ext")
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { context.contentResolver.openInputStream(uri)?.use { i -> copy.outputStream().use { i.copyTo(it) } } != null }.getOrDefault(false)
+            }
+            if (!ok) { making = null; vm.notice.value = Notice("The file could not be read."); return@launch }
+            val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                com.fadysaeed.pdfx.ui.tools.Making.officeToPdf(app, copy, name) { making = it }
+            }
+            copy.delete()
+            making = null
+            r.fold(
+                { (d, note) ->
+                    vm.notice.value = Notice("${LibraryModel.display(d)} is now a PDF, in Documents/PDFx/Converted." + (note?.let { " $it" } ?: ""))
+                    open = OpenRequest(Uri.parse(d.uri))
+                },
+                { vm.notice.value = Notice(it.message ?: "The file could not be made into a PDF.") },
+            )
+        }
+    }
+
+    /** Files picked or handed over: a PDF opens; a book asks how to lay it out; pictures, Word and Excel files become PDFs. */
     suspend fun handle(uris: List<Uri>) {
         if (uris.isEmpty()) return
         val kinds = uris.map { u ->
@@ -132,6 +157,8 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit) {
             val name = runCatching { app.library.describe(u).first }.getOrDefault("")
             when {
                 mime.startsWith("image/") -> "picture"
+                com.fadysaeed.pdfx.engine.Office.isOffice(name) || (mime.contains("officedocument") && !mime.contains("presentation")) || mime.contains("macroEnabled") || mime == "text/csv" || mime == "text/comma-separated-values" || mime == "text/tab-separated-values" -> "office"
+                name.substringAfterLast('.', "").lowercase() in com.fadysaeed.pdfx.engine.Office.oldExtensions || mime == "application/msword" || mime == "application/vnd.ms-excel" -> "old"
                 com.fadysaeed.pdfx.engine.Books.isBook(name) || mime == "application/epub+zip" || mime.contains("mobipocket") || mime.contains("fictionbook") || mime.contains("comicbook") || mime.contains("xps") -> "book"
                 else -> "pdf"
             }
@@ -139,6 +166,8 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit) {
         when {
             kinds.all { it == "picture" } -> picturesToPdf(uris)
             kinds.first() == "book" -> { uris.forEach(::keep); book = uris.first() }
+            kinds.first() == "office" -> officeToPdf(uris.first())
+            kinds.first() == "old" -> vm.notice.value = Notice("That is an older Word or Excel file (.doc, .xls). Open it in Word, Excel or Google Docs, save it as .docx or .xlsx, and PDFx can make it a PDF.")
             else -> openFromApp(uris[kinds.indexOf("pdf").coerceAtLeast(0)])
         }
     }
@@ -170,6 +199,9 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit) {
                 picker.launch(arrayOf(
                     "application/pdf", "application/epub+zip", "application/x-mobipocket-ebook", "application/x-fictionbook+xml",
                     "application/vnd.comicbook+zip", "application/oxps", "application/vnd.ms-xpsdocument", "image/*",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-word.document.macroEnabled.12",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel.sheet.macroEnabled.12",
+                    "text/csv", "text/comma-separated-values", "text/tab-separated-values",
                     // Books often come without a proper type.
                     "application/octet-stream",
                 ))
