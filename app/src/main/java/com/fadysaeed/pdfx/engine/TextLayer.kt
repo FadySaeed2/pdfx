@@ -76,6 +76,45 @@ object TextLayer {
         }
     }
 
+    /**
+     * Whether a page's words should be read off its picture: it has no words MuPDF can find, or only
+     * a few (a scanner app's stamp, a page number) over a picture that covers most of it. Never a
+     * page PDFx has read before, so reading a file twice adds nothing twice.
+     */
+    fun needsReading(page: PDFPage): Boolean {
+        val fonts = page.getObject().getInheritable("Resources").get("Font")
+        if (!fonts.isNull && !fonts.get(FONT_KEY).isNull) return false
+        val b = page.bounds
+        val pageArea = ((b.x1 - b.x0) * (b.y1 - b.y0)).coerceAtLeast(1f)
+        var letters = 0
+        var picture = 0f
+        val st = page.toStructuredText("preserve-images")
+        try {
+            st.walk(object : com.artifex.mupdf.fitz.StructuredTextWalker {
+                override fun onImageBlock(bbox: com.artifex.mupdf.fitz.Rect, transform: Matrix, image: com.artifex.mupdf.fitz.Image) {
+                    picture = maxOf(picture, (bbox.x1 - bbox.x0) * (bbox.y1 - bbox.y0))
+                }
+                override fun beginTextBlock(bbox: com.artifex.mupdf.fitz.Rect, bidi: Int) {}
+                override fun endTextBlock() {}
+                override fun beginLine(bbox: com.artifex.mupdf.fitz.Rect, wmode: Int, dir: com.artifex.mupdf.fitz.Point) {}
+                override fun endLine() {}
+                override fun onChar(c: Int, origin: com.artifex.mupdf.fitz.Point, font: Font, size: Float, quad: com.artifex.mupdf.fitz.Quad, argb: Int, flags: Int, bidi: Int) {
+                    if (Character.isLetterOrDigit(c)) letters++
+                }
+                override fun beginStruct(standard: String?, raw: String?, index: Int) {}
+                override fun endStruct() {}
+                override fun onVector(bbox: com.artifex.mupdf.fitz.Rect, info: com.artifex.mupdf.fitz.StructuredTextWalker.VectorInfo, argb: Int) {}
+            })
+        } finally {
+            st.destroy()
+        }
+        if (letters == 0) return true
+        return letters < SCANNER_STAMP && picture >= pageArea * 0.5f
+    }
+
+    /** Fewer letters than this over a full-page picture is a stamp or a page number, not the page's words. */
+    private const val SCANNER_STAMP = 150
+
     /** True when MuPDF already finds words on the page: no need to read it again. */
     fun hasText(page: com.artifex.mupdf.fitz.Page): Boolean {
         val st = page.toStructuredText()

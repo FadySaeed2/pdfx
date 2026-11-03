@@ -160,15 +160,32 @@ object Topics {
         Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(t) + "(s|es)?(?![\\p{L}\\p{N}])", if (t.length <= 4 && t.uppercase() == t) setOf() else setOf(RegexOption.IGNORE_CASE)).containsMatchIn(title)
     }
 
-    suspend fun suggest(lib: Library, existing: Set<String>): List<TopicGroup> = withContext(Dispatchers.IO) {
+    /** Pages per file for each topic, kept until any file's words change ([TextIndex.version]). */
+    private var cache: Triple<TextIndex, Long, Map<String, Map<Long, Int>>>? = null
+
+    /**
+     * [progress]: how far it is (0 to 1) and what it is doing, for a big library where this takes a
+     * while the first time. Asked again before any file's words change, it answers at once.
+     */
+    suspend fun suggest(lib: Library, existing: Set<String>, progress: (Float, String) -> Unit = { _, _ -> }): List<TopicGroup> = withContext(Dispatchers.IO) {
         val docs = lib.dao.all().filter { !it.inTrash && it.isFile }
         if (docs.isEmpty()) return@withContext emptyList()
+        // An index from an earlier PDFx is moved over first, once: it answers far faster after.
+        lib.text.upgrade { p -> progress(p * 0.5f, "Getting the words of your files ready") }
         val byId = docs.associateBy { it.id }
         val have = existing.map { it.lowercase() }.toSet()
+        val v = lib.text.version
+        val known = cache?.takeIf { it.first === lib.text && it.second == v }?.third
+        val hits = HashMap<String, Map<Long, Int>>()
+        for ((k, c) in Concepts.all.withIndex()) {
+            progress(0.5f + 0.5f * k / Concepts.all.size, c.name)
+            hits[c.name] = known?.get(c.name) ?: lib.text.pagesMatching(ftsQuery(c.terms), raw = true)
+        }
+        cache = Triple(lib.text, v, hits)
         // How strongly each file is about each topic.
         val strength = HashMap<Long, MutableList<Pair<Concept, Double>>>()
         for (c in Concepts.all) {
-            val pages = lib.text.pagesMatching(ftsQuery(c.terms), raw = true)
+            val pages = hits[c.name].orEmpty()
             for (d in docs) {
                 val title = d.title ?: d.name.removeSuffix(".pdf")
                 val inTitle = titleHas(title, c.terms)

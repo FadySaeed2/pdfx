@@ -1201,9 +1201,11 @@ class PdfSession private constructor(
         (0 until pageCount).any { i -> runCatching { !d.findPage(i).get("CropBox").isNull }.getOrDefault(false) }
     }
 
-    /** Pages that are pictures only, with no words MuPDF can find: the ones worth reading. */
+    /** Pages that are pictures with no words MuPDF can find (or only a scanner's stamp): the ones worth reading. */
     suspend fun pagesWithoutText(): List<Int> = onDoc {
-        (0 until pageCount).filter { i -> runCatching { !TextLayer.hasText(page(i)) }.getOrDefault(false) }
+        (0 until pageCount).filter { i ->
+            runCatching { (page(i) as? com.artifex.mupdf.fitz.PDFPage)?.let { TextLayer.needsReading(it) } ?: !TextLayer.hasText(page(i)) }.getOrDefault(false)
+        }
     }
 
     /**

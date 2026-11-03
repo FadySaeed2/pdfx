@@ -116,6 +116,8 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     private val pins = MutableStateFlow(prefs.getStringSet("pinned_folders", emptySet()).orEmpty().toSet())
     private val access = MutableStateFlow(library.hasAllFilesAccess())
     val notice = MutableStateFlow<Notice?>(null)
+    /** Goes up when something the list depends on changed outside the database (names left as they are). */
+    private val bump = MutableStateFlow(0)
 
     private val raw = combine(
         library.dao.observeAll(), library.dao.observeDocTags(), library.dao.observeTags(),
@@ -125,7 +127,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     private val results = combine(query.debounce(180).distinctUntilChanged(), library.dao.observeUnindexed()) { q, _ -> q }
         .mapLatest { q -> if (q.isBlank()) null else search(q) }
 
-    val ui: StateFlow<LibraryUi> = combine(raw, place, sorts, query, combine(results, access, picks, pins) { r, a, pk, pn -> listOf(r, a, pk, pn) }) { r, p, s, q, extra ->
+    val ui: StateFlow<LibraryUi> = combine(raw, place, sorts, query, combine(results, access, picks, pins, bump) { r, a, pk, pn, _ -> listOf(r, a, pk, pn) }) { r, p, s, q, extra ->
         @Suppress("UNCHECKED_CAST")
         build(r, p, s[p.section] ?: defaultSort(p.section), q, extra[0] as List<DocResult>?, extra[1] as Boolean)
             .copy(picked = extra[2] as Set<Long>)
@@ -203,20 +205,41 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     // --------------------------------------------------------- the big tidy
 
     /** Files whose code names a real title would name better, with the name each would get. */
-    suspend fun renameSuggestions(): List<Pair<Doc, String>> {
+    suspend fun renameSuggestions(): List<Pair<Doc, String>> = renamesOf(library.dao.all())
+
+    /**
+     * The same list the tidy counts: files with code names that have a real title, less those left
+     * as they are before, and less any name two different files would get (a title read wrongly).
+     */
+    private fun renamesOf(docs: List<Doc>): List<Pair<Doc, String>> {
         val shared = library.sharedTitles()
-        val all = library.dao.all().filter { !it.inTrash && it.isFile && it.title?.let { t -> com.fadysaeed.pdfx.engine.DocInfo.key(t) !in shared } != false }
+        val kept = library.namesKept()
+        val all = docs.filter { !it.inTrash && it.isFile && it.id !in kept && it.title?.let { t -> com.fadysaeed.pdfx.engine.DocInfo.key(t) !in shared } != false }
             .mapNotNull { d -> library.betterName(d)?.let { d to it } }
-        // A name meant for two different files is a title read wrongly: neither gets it.
         return all.groupBy { it.second.lowercase() }.values
             .filter { g -> g.size == 1 || g.mapNotNull { it.first.fingerprint }.distinct().size == 1 }
             .flatten().sortedBy { it.second.lowercase() }
     }
 
-    fun applyRenames(list: List<Pair<Doc, String>>) = launch {
+    /** Renames the ticked files; the unticked ones keep their names and are not offered again. */
+    fun applyRenames(list: List<Pair<Doc, String>>, left: List<Doc> = emptyList()) = launch {
+        library.keepNames(left.map { it.id })
+        bump.value++
+        if (list.isEmpty()) { say(if (left.size == 1) "That file keeps its name." else "Those ${left.size} files keep their names."); return@launch }
         var ok = 0
-        for ((d, name) in list) library.dao.byId(d.id)?.let { now -> library.rename(now, name).onSuccess { ok++ } }
-        say(if (ok == 1) "1 file renamed." else "$ok files renamed." + if (ok < list.size) " ${list.size - ok} could not be (a file of that name may be there already)." else "")
+        var why: String? = null
+        for ((d, name) in list) {
+            val now = library.dao.byId(d.id) ?: continue
+            // A file of that name there already (often the same paper kept twice): "Name (2)".
+            val free = library.freeName(now, name)
+            library.rename(now, free).fold({ ok++ }, { if (why == null) why = it.message })
+        }
+        val failed = list.size - ok
+        say(
+            (if (ok == 1) "1 file renamed." else "$ok files renamed.") +
+                (if (failed > 0) " $failed could not be" + (why?.let { ": $it" } ?: ".") else "") +
+                (if (left.isNotEmpty()) " The ${left.size} left unticked keep their names." else ""),
+        )
     }
 
     /** Files lying in Downloads, WhatsApp and the like, by the shelf folder each would go to. */
@@ -246,7 +269,10 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         say(if (ok == 1) "1 file moved to the trash." else "$ok files moved to the trash. The trash keeps them 30 days.")
     }
 
-    suspend fun bareScans(): List<Doc> = library.dao.all().filter { !it.inTrash && it.isFile && it.kind == com.fadysaeed.pdfx.engine.DocKind.SCAN.name }
+    suspend fun bareScans(): List<Doc> {
+        val done = library.scansRead()
+        return library.dao.all().filter { !it.inTrash && it.isFile && it.kind == com.fadysaeed.pdfx.engine.DocKind.SCAN.name && it.id !in done && !it.locked }
+    }
 
     /** Starts reading the words on scans in the background (see [com.fadysaeed.pdfx.data.ScanReading]). */
     fun readScans(docs: List<Doc>) = pdfx.scanReading.start(docs.map { it.id })
@@ -510,10 +536,10 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         val files = live.filter { it.isFile }
         return TidyCounts(
             duplicates = duplicatesOf(live).size,
-            codeNames = files.mapNotNull { library.betterName(it) }.groupingBy { it.lowercase() }.eachCount().values.count { it == 1 },
+            codeNames = renamesOf(files).size,
             loose = files.count { library.isLoose(it.folder) && it.kind != null && it.kind != com.fadysaeed.pdfx.engine.DocKind.OTHER.name },
             broken = files.count { it.indexedAt == it.modified && it.indexedAt > 0 && it.pages == 0 && !it.locked },
-            bareScans = files.count { it.kind == com.fadysaeed.pdfx.engine.DocKind.SCAN.name },
+            bareScans = library.scansRead().let { done -> files.count { it.kind == com.fadysaeed.pdfx.engine.DocKind.SCAN.name && it.id !in done && !it.locked } },
         )
     }
 
@@ -533,8 +559,8 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Topics that run through the files, to become tags; worked out on asking (a few seconds for a big library). */
-    suspend fun topicSuggestions(): List<com.fadysaeed.pdfx.data.TopicGroup> =
-        com.fadysaeed.pdfx.data.Topics.suggest(library, ui.value.allTags.map { it.name.lowercase() }.toSet())
+    suspend fun topicSuggestions(progress: (Float, String) -> Unit = { _, _ -> }): List<com.fadysaeed.pdfx.data.TopicGroup> =
+        com.fadysaeed.pdfx.data.Topics.suggest(library, ui.value.allTags.map { it.name.lowercase() }.toSet(), progress)
 
     /** Makes the chosen tags (topics and whole areas) and puts each on its files. */
     fun addTopics(chosen: List<Pair<String, List<Long>>>) = launch {

@@ -34,6 +34,8 @@ class LibraryRulesOnDeviceTest {
     fun setUp() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         root = File(ctx.cacheDir, "pdfx-root-${System.nanoTime()}").apply { mkdirs() }
+        // What the library remembers outside its database (banner titles, names kept, scans read).
+        ctx.getSharedPreferences("library_titles", 0).edit().clear().commit()
         db = LibraryDb.inMemory(ctx)
         lib = Library(ctx, db, root, allFilesAccess = { true })
     }
@@ -299,6 +301,52 @@ class LibraryRulesOnDeviceTest {
         assertTrue(lib.isLoose(a.folder))
         assertFalse(lib.isLoose(b.folder))
         assertEquals(File(root, "Documents/Library/Papers"), lib.shelfDir("Papers"))
+    }
+
+    @Test
+    fun aNameTakenGetsANumberAndNamesLeftAloneAreNotOfferedAgain() = runBlocking {
+        val code = unique("Download/s41380-023-02145-x.pdf", 41)
+        unique("Download/Malhi 2023 - Lithium in bipolar disorder.pdf", 42)
+        val other = unique("Download/document(4).pdf", 43)
+        lib.scan()
+        val dao = db.dao()
+        val a = dao.byKey(code.absolutePath)!!.copy(title = "Lithium in bipolar disorder", author = "Malhi et al.", year = 2023)
+        dao.update(a)
+        val name = lib.betterName(a)!!
+        assertEquals("Malhi 2023 - Lithium in bipolar disorder", name)
+        // The same paper kept under its real name already: this one becomes "… (2)", not a failure.
+        assertEquals("$name (2)", lib.freeName(a, name))
+        assertEquals("Malhi 2023 - Lithium in bipolar disorder (2).pdf", lib.rename(a, lib.freeName(a, name)).getOrThrow().name)
+        val o = dao.byKey(other.absolutePath)!!
+        assertTrue(o.id !in lib.namesKept())
+        lib.keepNames(listOf(o.id))
+        assertTrue(o.id in lib.namesKept())
+    }
+
+    @Test
+    fun anOldWordsIndexMovesOverAndAnswersFromTheIndexAlone() = runBlocking {
+        val s = db.openHelper.writableDatabase
+        // The index as PDFx kept it before: file and page as columns.
+        s.execSQL("CREATE VIRTUAL TABLE page_text USING fts4(body, ref, page, tokenize=porter, notindexed=ref, notindexed=page)")
+        val rows = listOf(Triple(5L, 0, "lithium levels"), Triple(9L, 2, "lithium and the kidney"), Triple(9L, 7, "lithium toxicity"), Triple(9L, 8, "sleep"))
+        for ((ref, page, body) in rows) s.execSQL("INSERT INTO page_text(body, ref, page) VALUES (?, ?, ?)", arrayOf<Any>(body, ref, page))
+        // Found before the move as well.
+        assertEquals(mapOf(5L to 1, 9L to 2), lib.text.pagesMatching("lithium"))
+        val v = lib.text.version
+        var last = 0f
+        lib.text.upgrade { last = it }
+        assertEquals(1f, last, 0.001f)
+        assertTrue(lib.text.version > v)
+        assertFalse(s.query("SELECT 1 FROM sqlite_master WHERE name = 'page_text'").use { it.moveToFirst() })
+        assertEquals(mapOf(5L to 1, 9L to 2), lib.text.pagesMatching("lithium"))
+        assertEquals(listOf(9L to 7), lib.text.search("toxicity").map { it.docId to it.page })
+        assertEquals(3, lib.text.pagesIndexed(9))
+        lib.text.replace(9, listOf(PageText(1, "clozapine")))
+        assertEquals(mapOf(5L to 1), lib.text.pagesMatching("lithium"))
+        assertEquals(listOf(9L to 1), lib.text.search("clozapine").map { it.docId to it.page })
+        lib.text.clear(5)
+        assertTrue(lib.text.pagesMatching("lithium").isEmpty())
+        lib.text.upgrade()
     }
 
     @Test

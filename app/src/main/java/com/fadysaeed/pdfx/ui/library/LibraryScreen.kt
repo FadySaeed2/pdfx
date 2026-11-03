@@ -199,10 +199,13 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     val scanning by vm.scanProgress.collectAsState()
     val scanDone by vm.scanFinished.collectAsState()
     LaunchedEffect(scanDone) {
-        scanDone?.let { (read, all, stopped) ->
-            vm.notice.value = Notice(
-                (if (stopped) "Stopped. " else "") + (if (read == 1) "The words on 1 scan were read" else "The words on $read of $all scans were read") + "; they can be searched now.",
-            )
+        scanDone?.let { o ->
+            val parts = ArrayList<String>()
+            if (o.read > 0) parts += (if (o.read == 1) "The words on 1 scan were read" else "The words on ${o.read} scans were read") + "; search finds them now."
+            if (o.blank > 0) parts += if (o.blank == 1) "1 scan has no writing PDFx can read, such as a photo or a drawing." else "${o.blank} scans have no writing PDFx can read, such as photos or drawings."
+            if (o.failed > 0) parts += (if (o.failed == 1) "1 file could not be read" else "${o.failed} files could not be read") + (o.why?.let { ": $it" } ?: ".")
+            if (parts.isEmpty()) parts += "No scans were read."
+            vm.notice.value = Notice((if (o.stopped) "Stopped. " else "") + parts.joinToString(" "))
             vm.scanFinished.value = null
         }
     }
@@ -229,7 +232,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             onKeepAll = { gs -> vm.keepSuggested(gs); tidyStep = null },
             onClose = { tidyStep = null },
         )
-        TidyStep.NAMES -> RenameReview(load = vm::renameSuggestions, onApply = { vm.applyRenames(it); tidyStep = null }, onClose = { tidyStep = null })
+        TidyStep.NAMES -> RenameReview(load = vm::renameSuggestions, onApply = { go, left -> vm.applyRenames(go, left); tidyStep = null }, onClose = { tidyStep = null })
         TidyStep.SORT -> SortReview(load = vm::sortSuggestions, folderFor = vm::folderFor, onApply = { vm.applySort(it); tidyStep = null }, onClose = { tidyStep = null })
         TidyStep.BROKEN -> FilesReview(
             "Files that don't open", "PDFx could not open these: they are damaged, empty, or not really PDFs. They go to the trash, where they stay 30 days.",

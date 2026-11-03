@@ -127,14 +127,14 @@ private fun Bottom(text: String, enabled: Boolean = true, onClick: () -> Unit) {
 
 /** Old name → new name for each file with a code name; untick any to leave it. */
 @Composable
-fun RenameReview(load: suspend () -> List<Pair<Doc, String>>, onApply: (List<Pair<Doc, String>>) -> Unit, onClose: () -> Unit) {
+fun RenameReview(load: suspend () -> List<Pair<Doc, String>>, onApply: (List<Pair<Doc, String>>, List<Doc>) -> Unit, onClose: () -> Unit) {
     BackHandler(onBack = onClose)
     var list by remember { mutableStateOf<List<Pair<Doc, String>>?>(null) }
     val skip = remember { mutableStateListOf<Long>() }
     LaunchedEffect(Unit) { list = load() }
     Page("Name files by their titles", list?.let { "${it.size} files" }, onClose) {
         Text(
-            "Each file gets its first author, year and title as its name. Untick any you would rather leave as it is. Nothing else about the file changes.",
+            "Each file gets its first author, year and title as its name. Untick any you would rather leave as it is: it keeps its name and is not offered again. Nothing else about the file changes.",
             style = Type.note, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
         )
         val l = list
@@ -154,7 +154,9 @@ fun RenameReview(load: suspend () -> List<Pair<Doc, String>>, onApply: (List<Pai
         }
         if (!l.isNullOrEmpty()) {
             val n = l.count { it.first.id !in skip }
-            Bottom(if (n == 1) "Rename 1 file" else "Rename $n files", n > 0) { onApply(l.filter { it.first.id !in skip }) }
+            Bottom(if (n == 0) "Leave them all as they are" else if (n == 1) "Rename 1 file" else "Rename $n files") {
+                onApply(l.filter { it.first.id !in skip }, l.filter { it.first.id in skip }.map { it.first })
+            }
         }
     }
 }

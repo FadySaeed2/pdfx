@@ -72,8 +72,8 @@ object Reading {
         val doc = Document.openDocument(path) as PDFDocument
         try {
             val todo = (0 until doc.countPages()).filter { i ->
-                val p = doc.loadPage(i)
-                try { !TextLayer.hasText(p) } finally { p.destroy() }
+                val p = doc.loadPage(i) as PDFPage
+                try { TextLayer.needsReading(p) } finally { p.destroy() }
             }
             var done = 0
             for ((k, i) in todo.withIndex()) {

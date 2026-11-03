@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -46,11 +47,12 @@ import com.fadysaeed.pdfx.ui.theme.Type
  * ("Bipolar", "Lithium") with how many files and a few of them. Pick any mix, then add them at once.
  */
 @Composable
-fun TopicsScreen(load: suspend () -> List<TopicGroup>, onAdd: (List<Pair<String, List<Long>>>) -> Unit, onClose: () -> Unit) {
+fun TopicsScreen(load: suspend ((Float, String) -> Unit) -> List<TopicGroup>, onAdd: (List<Pair<String, List<Long>>>) -> Unit, onClose: () -> Unit) {
     BackHandler(onBack = onClose)
     var groups by remember { mutableStateOf<List<TopicGroup>?>(null) }
     val picked = remember { mutableStateListOf<String>() }
-    LaunchedEffect(Unit) { groups = runCatching { load() }.getOrDefault(emptyList()) }
+    var step by remember { mutableStateOf(0f to "") }
+    LaunchedEffect(Unit) { groups = runCatching { load { p, what -> step = p to what } }.getOrDefault(emptyList()) }
     Column(Modifier.fillMaxSize().background(Ink.Black).windowInsetsPadding(WindowInsets.statusBars)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(Glyph.BACK, "Back", onClose)
@@ -63,7 +65,13 @@ fun TopicsScreen(load: suspend () -> List<TopicGroup>, onAdd: (List<Pair<String,
         Hairline(Modifier.padding(horizontal = 20.dp), color = Ink.Rule)
         val list = groups
         when {
-            list == null -> Text("Reading through your files…", style = Type.note, modifier = Modifier.padding(20.dp))
+            list == null -> Column(Modifier.padding(20.dp)) {
+                Text(if (step.second.isEmpty()) "Starting…" else "Looking for ${step.second}…", style = Type.note, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(10.dp))
+                Box(Modifier.fillMaxWidth().height(3.dp).background(Ink.Field)) {
+                    Box(Modifier.fillMaxWidth(step.first.coerceIn(0.02f, 1f)).height(3.dp).background(Ink.Amber))
+                }
+            }
             list.isEmpty() -> Text("No topics found yet. PDFx needs to have read your files first; try again once the reading line at the top of the library is gone.", style = Type.note, modifier = Modifier.padding(20.dp))
             else -> LazyColumn(Modifier.weight(1f)) {
                 for (g in list) {

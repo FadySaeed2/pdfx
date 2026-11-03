@@ -98,6 +98,8 @@ class TextIndexer(private val context: Context, private val library: Library) {
 class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val app = applicationContext as PdfxApp
+        // An index from an earlier PDFx is moved to the faster one first, once.
+        runCatching { app.library.text.upgrade() }
         app.indexer.runAll(stopIf = { isStopped })
         return Result.success()
     }

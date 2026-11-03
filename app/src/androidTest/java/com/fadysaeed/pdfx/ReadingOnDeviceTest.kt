@@ -96,6 +96,46 @@ class ReadingOnDeviceTest {
     }
 
     @Test
+    fun aScanWithAScannerAppsStampIsStillRead() {
+        val pictures = File(ctx.cacheDir, "reading-stamped-bare.pdf")
+        Arranger.fromPictures(listOf(asset("ocr-table.jpg").absolutePath), pictures.absolutePath)
+        // As CamScanner and the like leave them: a line of real text at the foot of each picture.
+        val stamped = File(ctx.cacheDir, "reading-stamped.pdf")
+        val d = Document.openDocument(pictures.absolutePath) as com.artifex.mupdf.fitz.PDFDocument
+        try {
+            val page = d.findPage(0)
+            val res = page.get("Resources")
+            val fonts = d.newDictionary()
+            val font = com.artifex.mupdf.fitz.Font("Helvetica")
+            fonts.put("Stamp", d.addSimpleFont(font, 0))
+            font.destroy()
+            res.put("Font", fonts)
+            val contents = d.newArray()
+            val old = page.get("Contents")
+            if (old.isArray) for (i in 0 until old.size()) contents.put(contents.size(), old.get(i)) else contents.put(0, old)
+            contents.put(contents.size(), d.addStream("BT /Stamp 8 Tf 20 12 Td (Scanned with CamScanner) Tj ET"))
+            page.put("Contents", contents)
+            d.save(stamped.absolutePath, "")
+        } finally {
+            d.destroy()
+        }
+        val out = File(ctx.cacheDir, "reading-stamped-out.pdf")
+        assertEquals("the page is read in spite of the stamp", 1, Reading.makeSearchable(stamped.absolutePath, out.absolutePath))
+        val x = Document.openDocument(out.absolutePath)
+        try {
+            val p = x.loadPage(0)
+            val text = p.toStructuredText().let { st -> st.asText().also { st.destroy() } }
+            p.destroy()
+            assertTrue(recall(truth("table"), text) > 0.9)
+            assertTrue(text.contains("CamScanner"))
+        } finally {
+            x.destroy()
+        }
+        // Read once, never read again.
+        assertEquals(0, Reading.makeSearchable(out.absolutePath, File(ctx.cacheDir, "reading-stamped-again.pdf").absolutePath))
+    }
+
+    @Test
     fun anOpenFileGetsItsWordsAsOneUndoableStep() = runBlocking {
         val pictures = File(ctx.cacheDir, "reading-open.pdf")
         Arranger.fromPictures(listOf(asset("ocr-book.jpg").absolutePath), pictures.absolutePath)

@@ -305,6 +305,18 @@ class Library(
         moved(d, src, dst)
     }
 
+    /** [name], or "name (2)" and on when a file of that name is in the file's folder already. */
+    fun freeName(d: Doc, name: String): String {
+        val dir = d.path?.let { File(it).parentFile } ?: return name
+        val clean = name.trim().removeSuffix(".pdf").removeSuffix(".PDF").trim()
+        val self = d.path
+        fun taken(n: String) = File(dir, "$n.pdf").let { it.exists() && it.absolutePath != self }
+        if (!taken(clean)) return clean
+        var k = 2
+        while (taken("$clean ($k)")) k++
+        return "$clean ($k)"
+    }
+
     suspend fun move(d: Doc, dir: File): Result<Doc> = io {
         val src = fileOf(d)
         if (src.parentFile?.absolutePath == dir.absolutePath) return@io d
@@ -383,9 +395,10 @@ class Library(
     /** Brings the library's record in line with a file PDFx has just saved. */
     suspend fun afterSave(d: Doc, f: File): Doc {
         val now = dao.byId(d.id) ?: d
-        val wasRead = now.indexedAt == now.modified
-        val updated = now.copy(size = f.length(), modified = f.lastModified(), indexedAt = if (wasRead) f.lastModified() else now.indexedAt)
+        // Its words may have changed (read off a scan, blacked out), so search reads them again.
+        val updated = now.copy(size = f.length(), modified = f.lastModified())
         dao.update(updated)
+        runCatching { TextIndexer.schedule(context) }
         return updated
     }
 
@@ -519,6 +532,21 @@ class Library(
     }
 
     private val prefs = context.getSharedPreferences("library_titles", Context.MODE_PRIVATE)
+
+    /** Scans whose words PDFx has read already (or found none on), so they are not offered again. */
+    fun scansRead(): Set<Long> = prefs.getStringSet("scans_read", emptySet()).orEmpty().mapNotNull { it.toLongOrNull() }.toSet()
+
+    fun markScanRead(id: Long) {
+        prefs.edit().putStringSet("scans_read", prefs.getStringSet("scans_read", emptySet()).orEmpty() + id.toString()).apply()
+    }
+
+    /** Files whose code names are to stay as they are: offered once and left unticked. */
+    fun namesKept(): Set<Long> = prefs.getStringSet("names_kept", emptySet()).orEmpty().mapNotNull { it.toLongOrNull() }.toSet()
+
+    fun keepNames(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        prefs.edit().putStringSet("names_kept", prefs.getStringSet("names_kept", emptySet()).orEmpty() + ids.map { it.toString() }).apply()
+    }
 
     /** "Titles" found on several different files: a journal's or a website's name, never a file's own title. */
     fun sharedTitles(): Set<String> = prefs.getStringSet("shared", emptySet()).orEmpty().toSet()
