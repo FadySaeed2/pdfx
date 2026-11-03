@@ -30,16 +30,20 @@ object DocInfo {
     )
     private val doiRe = Regex("""\b(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)""")
     private val notTitle = Regex(
-        """(https?://|www\.|doi[:.]|©|\bissn\b|\bisbn\b|\bvol\.|\bpp\.|\bpage \d|downloaded from|all rights reserved|creative commons|licen[cs]e|received:|accepted:|published online|correspondence|e-?mail|copyright|^\d+$|^(abstract|background|introduction|contents|table of contents|preface|foreword)$)""",
+        """(https?://|www\.|doi[:.]|©|\bissn\b|\bisbn\b|\bvol\.|\bpp\.|\bpage \d|downloaded from|all rights reserved|creative commons|licen[cs]e|received:|accepted:|published online|correspondence|e-?mail|copyright|^\d+$|^(abstract|background|introduction|contents|table of contents|preface|foreword)$|available (at|online)|journal homepage|sciencedirect|springer ?link|wiley online|tandfonline|cambridge\.org|oup\.com|sagepub|elsevier|^\s*(original|research|review|brief|special|invited|clinical)?\s*(article|report|communication|paper|editorial|commentary|letter|perspective)s?\s*$|^\s*(the )?(british |american |australian |new zealand |international |european )?journal of|\bjournal\b.*\b(19|20)\d\d|^\s*(the )?lancet|^\s*(bmj|jama)\b|psychological medicine\s*$|^\s*research\s*$|^\s*open access\s*$)""",
         RegexOption.IGNORE_CASE,
     )
 
-    fun find(meta: Map<String, String>, pages: List<InfoPage>): DocFacts {
+    /**
+     * [avoid]: "titles" already found on several different files (a journal's name, a website's
+     * banner), never a file's own title.
+     */
+    fun find(meta: Map<String, String>, pages: List<InfoPage>, avoid: Set<String> = emptySet()): DocFacts {
         val text = pages.joinToString("\n") { it.text }
         val doi = doiRe.find(text)?.groupValues?.get(1)?.trimEnd('.', ',', ';', ')', ']')
         val fileName = meta["File"]?.substringBeforeLast('.')?.lowercase()
-        val metaTitle = meta["Title"]?.let(::clean)?.takeIf { goodTitle(it) && it.lowercase() != fileName }
-        val found = titleFromPages(pages)
+        val metaTitle = meta["Title"]?.let(::clean)?.takeIf { goodTitle(it) && it.lowercase() != fileName && key(it) !in avoid }
+        val found = titleFromPages(pages, avoid)
         val title = metaTitle ?: found?.first
         val author = meta["Author"]?.let(::clean)?.takeIf(::goodAuthor)?.let(::firstAuthorOf)
             ?: found?.second?.let(::firstAuthorOf)
@@ -67,11 +71,14 @@ object DocInfo {
             (a.contains(' ') || a.contains(',') || a.first().isUpperCase())
 
     /** The title (the biggest type high on the first pages, joined across its lines) and the line under it. */
-    private fun titleFromPages(pages: List<InfoPage>): Pair<String, String?>? {
+    /** How a title is compared with others: small letters, single spaces, no marks at the ends. */
+    fun key(title: String) = title.lowercase().replace(Regex("\\s+"), " ").trim().trim('.', ':', ',', ';', '-')
+
+    private fun titleFromPages(pages: List<InfoPage>, avoid: Set<String>): Pair<String, String?>? {
         for (p in pages.take(2)) {
             val body = p.lines.filter { it.text.length > 30 }.map { it.size }.sorted().let { if (it.isEmpty()) 0f else it[it.size / 2] }
             val cands = p.lines.filter { l ->
-                l.y0 < p.height * 0.65f && l.text.count { it.isLetter() } >= 4 && l.text.length <= 250 && !notTitle.containsMatchIn(l.text)
+                l.y0 < p.height * 0.65f && l.text.count { it.isLetter() } >= 4 && l.text.length <= 250 && !notTitle.containsMatchIn(l.text) && key(l.text) !in avoid
             }
             if (cands.isEmpty()) continue
             val top = cands.maxOf { it.size }
@@ -87,7 +94,7 @@ object DocInfo {
                 if (kotlin.math.abs(l.size - top) < 0.6f && gap < top * 1.2f && !notTitle.containsMatchIn(l.text)) { parts += l; k++ } else break
             }
             val title = clean(parts.joinToString(" ") { it.text.trim() }.replace(Regex("-\\s+(?=\\p{Ll})"), ""))
-            if (!goodTitle(title)) continue
+            if (!goodTitle(title) || key(title) in avoid) continue
             // The authors: the next line or two in smaller type that read as names.
             var author: String? = null
             for (l in sorted.drop(k).take(3)) {

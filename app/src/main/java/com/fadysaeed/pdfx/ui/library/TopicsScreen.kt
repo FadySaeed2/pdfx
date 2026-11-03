@@ -32,7 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.fadysaeed.pdfx.data.TopicSuggestion
+import com.fadysaeed.pdfx.data.TopicGroup
 import com.fadysaeed.pdfx.ui.components.AmberButton
 import com.fadysaeed.pdfx.ui.components.Glyph
 import com.fadysaeed.pdfx.ui.components.GlyphIcon
@@ -42,58 +42,87 @@ import com.fadysaeed.pdfx.ui.theme.Ink
 import com.fadysaeed.pdfx.ui.theme.Type
 
 /**
- * Topics found in the files, each with how many files it would tag and a few of them. Tap the ones
- * worth a tag, then add them all at once.
+ * Suggested tags by area: each area ("Mood disorders") can be a tag of its own, and each topic in it
+ * ("Bipolar", "Lithium") with how many files and a few of them. Pick any mix, then add them at once.
  */
 @Composable
-fun TopicsScreen(load: suspend () -> List<TopicSuggestion>, onAdd: (List<TopicSuggestion>) -> Unit, onClose: () -> Unit) {
+fun TopicsScreen(load: suspend () -> List<TopicGroup>, onAdd: (List<Pair<String, List<Long>>>) -> Unit, onClose: () -> Unit) {
     BackHandler(onBack = onClose)
-    var topics by remember { mutableStateOf<List<TopicSuggestion>?>(null) }
+    var groups by remember { mutableStateOf<List<TopicGroup>?>(null) }
     val picked = remember { mutableStateListOf<String>() }
-    LaunchedEffect(Unit) { topics = runCatching { load() }.getOrDefault(emptyList()) }
+    LaunchedEffect(Unit) { groups = runCatching { load() }.getOrDefault(emptyList()) }
     Column(Modifier.fillMaxSize().background(Ink.Black).windowInsetsPadding(WindowInsets.statusBars)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(Glyph.BACK, "Back", onClose)
             Text("Suggested tags", style = Type.title, modifier = Modifier.weight(1f))
         }
         Text(
-            "Topics that run through your files. A file counts when its title names the topic or it comes up on a good share of its pages, not for a passing mention. Pick the ones you want as tags.",
+            "Read from inside your files, not just their names: a file counts for a topic when its title says so or the topic's words and medicines come up on a good share of its pages. Each file gets its four strongest topics at most. Areas can be tags too.",
             style = Type.note, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
         )
         Hairline(Modifier.padding(horizontal = 20.dp), color = Ink.Rule)
-        val list = topics
+        val list = groups
         when {
-            list == null -> Text("Looking through your files…", style = Type.note, modifier = Modifier.padding(20.dp))
+            list == null -> Text("Reading through your files…", style = Type.note, modifier = Modifier.padding(20.dp))
             list.isEmpty() -> Text("No topics found yet. PDFx needs to have read your files first; try again once the reading line at the top of the library is gone.", style = Type.note, modifier = Modifier.padding(20.dp))
             else -> LazyColumn(Modifier.weight(1f)) {
-                items(list, key = { it.term }) { t ->
-                    val on = t.term in picked
-                    Row(
-                        Modifier.fillMaxWidth().clickable { if (on) picked.remove(t.term) else picked.add(t.term) }.padding(horizontal = 20.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier.size(22.dp).border(1.5.dp, if (on) Ink.Amber else Ink.Edge, RoundedCornerShape(4.dp)).background(if (on) Ink.Amber else Ink.Black, RoundedCornerShape(4.dp)),
-                            contentAlignment = Alignment.Center,
-                        ) { if (on) GlyphIcon(Glyph.CHECK, Ink.Black, size = 16.dp) }
-                        Spacer(Modifier.width(16.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(t.term, style = Type.bodyStrong)
-                            Text(t.examples.joinToString(" · "), style = Type.small, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                for (g in list) {
+                    item(key = "a:" + g.area) {
+                        val key = "area:" + g.area
+                        val on = key in picked
+                        Row(
+                            Modifier.fillMaxWidth().background(Ink.Field)
+                                .then(if (g.areaDocIds.isNotEmpty()) Modifier.clickable { if (on) picked.remove(key) else picked.add(key) } else Modifier)
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (g.areaDocIds.isNotEmpty()) { Tick(on); Spacer(Modifier.width(16.dp)) }
+                            Column(Modifier.weight(1f)) {
+                                Text(g.area.uppercase(), style = Type.eyebrow.copy(color = Ink.Sand))
+                                if (g.areaDocIds.isNotEmpty()) Text("The whole area as one tag", style = Type.small)
+                            }
+                            if (g.areaDocIds.isNotEmpty()) Text("${g.areaDocIds.size}", style = Type.figure)
                         }
-                        Spacer(Modifier.width(10.dp))
-                        Text("${t.docIds.size}", style = Type.figure)
                     }
+                    items(g.topics, key = { g.area + "/" + it.term }) { t ->
+                        val on = t.term in picked
+                        Row(
+                            Modifier.fillMaxWidth().clickable { if (on) picked.remove(t.term) else picked.add(t.term) }.padding(start = 36.dp, end = 20.dp, top = 11.dp, bottom = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Tick(on)
+                            Spacer(Modifier.width(16.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(t.term, style = Type.bodyStrong)
+                                Text(t.examples.joinToString(" · "), style = Type.small, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text("${t.docIds.size}", style = Type.figure)
+                        }
+                    }
+                    item(key = "h:" + g.area) { Hairline(color = Ink.Rule) }
                 }
             }
         }
         if (!list.isNullOrEmpty()) {
+            val chosen = list.flatMap { g ->
+                (if ("area:" + g.area in picked) listOf(g.area to g.areaDocIds) else emptyList()) +
+                    g.topics.filter { it.term in picked }.map { it.term to it.docIds }
+            }.distinctBy { it.first }
             Box(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.navigationBars).padding(16.dp)) {
                 AmberButton(
-                    if (picked.isEmpty()) "Pick topics to tag" else "Add ${picked.size} ${if (picked.size == 1) "tag" else "tags"}",
-                    { onAdd(list.filter { it.term in picked }) }, Modifier.fillMaxWidth(), enabled = picked.isNotEmpty(),
+                    if (chosen.isEmpty()) "Pick topics to tag" else "Add ${chosen.size} ${if (chosen.size == 1) "tag" else "tags"}",
+                    { onAdd(chosen) }, Modifier.fillMaxWidth(), enabled = chosen.isNotEmpty(),
                 )
             }
         }
     }
+}
+
+@Composable
+private fun Tick(on: Boolean) {
+    Box(
+        Modifier.size(22.dp).border(1.5.dp, if (on) Ink.Amber else Ink.Edge, RoundedCornerShape(4.dp)).background(if (on) Ink.Amber else Ink.Black, RoundedCornerShape(4.dp)),
+        contentAlignment = Alignment.Center,
+    ) { if (on) GlyphIcon(Glyph.CHECK, Ink.Black, size = 16.dp) }
 }

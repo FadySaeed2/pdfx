@@ -203,9 +203,15 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     // --------------------------------------------------------- the big tidy
 
     /** Files whose code names a real title would name better, with the name each would get. */
-    suspend fun renameSuggestions(): List<Pair<Doc, String>> =
-        library.dao.all().filter { !it.inTrash && it.isFile }.mapNotNull { d -> library.betterName(d)?.let { d to it } }
-            .sortedBy { it.second.lowercase() }
+    suspend fun renameSuggestions(): List<Pair<Doc, String>> {
+        val shared = library.sharedTitles()
+        val all = library.dao.all().filter { !it.inTrash && it.isFile && it.title?.let { t -> com.fadysaeed.pdfx.engine.DocInfo.key(t) !in shared } != false }
+            .mapNotNull { d -> library.betterName(d)?.let { d to it } }
+        // A name meant for two different files is a title read wrongly: neither gets it.
+        return all.groupBy { it.second.lowercase() }.values
+            .filter { g -> g.size == 1 || g.mapNotNull { it.first.fingerprint }.distinct().size == 1 }
+            .flatten().sortedBy { it.second.lowercase() }
+    }
 
     fun applyRenames(list: List<Pair<Doc, String>>) = launch {
         var ok = 0
@@ -242,23 +248,11 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun bareScans(): List<Doc> = library.dao.all().filter { !it.inTrash && it.isFile && it.kind == com.fadysaeed.pdfx.engine.DocKind.SCAN.name }
 
-    /** Reads the words on scans, each file in place (the version before stays in Earlier versions). [say] hears progress. */
-    suspend fun readScans(docs: List<Doc>, say: (String) -> Unit): Int {
-        var done = 0
-        for ((k, d) in docs.withIndex()) {
-            say("Reading the words in file ${k + 1} of ${docs.size}…")
-            val now = library.dao.byId(d.id) ?: continue
-            val path = now.path ?: continue
-            val r = pdfx.saver.replace(now, android.net.Uri.parse(now.uri)) { out ->
-                com.fadysaeed.pdfx.engine.Reading.makeSearchable(path, out.absolutePath)
-                com.artifex.mupdf.fitz.Document.openDocument(out.absolutePath).let { x -> x.countPages().also { x.destroy() } }
-            }
-            r.onSuccess { done++; library.dao.byId(d.id)?.let { library.dao.update(it.copy(kind = null)) } }
-        }
-        com.fadysaeed.pdfx.data.TextIndexer.schedule(pdfx)
-        this.say(if (done == 1) "The words on 1 scan were read." else "The words on $done scans were read; they can be searched now.")
-        return done
-    }
+    /** Starts reading the words on scans in the background (see [com.fadysaeed.pdfx.data.ScanReading]). */
+    fun readScans(docs: List<Doc>) = pdfx.scanReading.start(docs.map { it.id })
+    fun stopReadingScans() = pdfx.scanReading.stop()
+    val scanProgress get() = pdfx.scanReading.state
+    val scanFinished get() = pdfx.scanReading.finished
 
     // --------------------------------------------------------- folders
 
@@ -516,7 +510,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         val files = live.filter { it.isFile }
         return TidyCounts(
             duplicates = duplicatesOf(live).size,
-            codeNames = files.count { library.betterName(it) != null },
+            codeNames = files.mapNotNull { library.betterName(it) }.groupingBy { it.lowercase() }.eachCount().values.count { it == 1 },
             loose = files.count { library.isLoose(it.folder) && it.kind != null && it.kind != com.fadysaeed.pdfx.engine.DocKind.OTHER.name },
             broken = files.count { it.indexedAt == it.modified && it.indexedAt > 0 && it.pages == 0 && !it.locked },
             bareScans = files.count { it.kind == com.fadysaeed.pdfx.engine.DocKind.SCAN.name },
@@ -539,13 +533,14 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Topics that run through the files, to become tags; worked out on asking (a few seconds for a big library). */
-    suspend fun topicSuggestions(): List<com.fadysaeed.pdfx.data.TopicSuggestion> =
+    suspend fun topicSuggestions(): List<com.fadysaeed.pdfx.data.TopicGroup> =
         com.fadysaeed.pdfx.data.Topics.suggest(library, ui.value.allTags.map { it.name.lowercase() }.toSet())
 
-    fun addTopics(chosen: List<com.fadysaeed.pdfx.data.TopicSuggestion>) = launch {
-        var files = 0
-        for (t in chosen) files += library.applyTopic(t.term, t.docIds)
-        say(if (chosen.size == 1) "Tag ${chosen[0].term} put on ${chosen[0].docIds.size} files." else "${chosen.size} tags put on $files files in all.")
+    /** Makes the chosen tags (topics and whole areas) and puts each on its files. */
+    fun addTopics(chosen: List<Pair<String, List<Long>>>) = launch {
+        val files = HashSet<Long>()
+        for ((name, ids) in chosen) { library.applyTopic(name, ids); files += ids }
+        say(if (chosen.size == 1) "Tag ${chosen[0].first} put on ${chosen[0].second.size} files." else "${chosen.size} tags put on ${files.size} files.")
     }
 
     /**

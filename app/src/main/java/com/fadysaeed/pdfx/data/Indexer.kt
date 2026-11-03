@@ -23,9 +23,14 @@ class TextIndexer(private val context: Context, private val library: Library) {
     suspend fun runAll(stopIf: () -> Boolean = { false }): Int {
         var n = 0
         while (!stopIf()) {
-            val d = library.dao.nextToIndex() ?: break
+            val d = library.dao.nextToIndex()
+            if (d == null) {
+                // Once all are read: "titles" several files share are banners, not titles; read those again.
+                if (library.fixSharedTitles() == 0) break else continue
+            }
             index(d)
             n++
+            if (n % 50 == 0) library.fixSharedTitles()
         }
         return n
     }
@@ -55,7 +60,7 @@ class TextIndexer(private val context: Context, private val library: Library) {
             // Its real title, author and year, and its kind.
             val meta = runCatching { session.metadata() }.getOrDefault(emptyMap())
             val first = runCatching { session.infoPages(3) }.getOrDefault(emptyList())
-            val facts = runCatching { com.fadysaeed.pdfx.engine.DocInfo.find(meta + ("File" to d.name), first.take(2)) }.getOrNull()
+            val facts = runCatching { com.fadysaeed.pdfx.engine.DocInfo.find(meta + ("File" to d.name), first.take(2), library.sharedTitles()) }.getOrNull()
             val kind = runCatching {
                 val size = session.pageSize(0)
                 com.fadysaeed.pdfx.engine.Kinds.of(com.fadysaeed.pdfx.engine.KindClues(

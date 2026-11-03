@@ -518,6 +518,31 @@ class Library(
         return letters < 3
     }
 
+    private val prefs = context.getSharedPreferences("library_titles", Context.MODE_PRIVATE)
+
+    /** "Titles" found on several different files: a journal's or a website's name, never a file's own title. */
+    fun sharedTitles(): Set<String> = prefs.getStringSet("shared", emptySet()).orEmpty().toSet()
+
+    /**
+     * Finds "titles" that several different files were given (three or more files that are not the
+     * same file and not the same paper by DOI), remembers them so they are never taken as a title
+     * again, and has those files' titles read afresh. Returns how many files are read again.
+     */
+    suspend fun fixSharedTitles(): Int = withContext(Dispatchers.IO) {
+        val docs = dao.all().filter { !it.inTrash && !it.title.isNullOrBlank() }
+        val shared = docs.groupBy { com.fadysaeed.pdfx.engine.DocInfo.key(it.title!!) }.filter { (_, g) ->
+            g.mapNotNull { it.fingerprint ?: it.path }.distinct().size >= 3 && g.mapNotNull { it.doi }.distinct().size != 1
+        }.keys
+        if (shared.isEmpty()) return@withContext 0
+        val all = sharedTitles() + shared
+        prefs.edit().putStringSet("shared", all).apply()
+        var n = 0
+        for (d in docs) if (com.fadysaeed.pdfx.engine.DocInfo.key(d.title!!) in shared) {
+            dao.update(d.copy(title = null, author = null, infoAt = 0)); n++
+        }
+        n
+    }
+
     /** Folders that are a holding place rather than a home: Downloads, WhatsApp's, the received copies, the phone's top level. */
     fun isLoose(folder: String?): Boolean {
         val f = folder ?: return false

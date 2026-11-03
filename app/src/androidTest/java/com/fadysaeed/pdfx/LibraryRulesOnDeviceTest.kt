@@ -241,14 +241,15 @@ class LibraryRulesOnDeviceTest {
         lib.text.replace(docs[2].id, (0 until 4).map { com.fadysaeed.pdfx.data.PageText(it, "lithium levels and lithium dosing on page $it") })
         lib.text.replace(docs[3].id, listOf(com.fadysaeed.pdfx.data.PageText(0, "a passing mention of lithium")) + (1 until 10).map { com.fadysaeed.pdfx.data.PageText(it, "sleep hygiene") })
         val found = com.fadysaeed.pdfx.data.Topics.suggest(lib, emptySet())
-        val lithium = found.first { it.term == "Lithium" }
+        val lithium = found.flatMap { it.topics }.first { it.term == "Lithium" }
+        assertEquals("grouped under its area", "Mood disorders", found.first { g -> g.topics.any { it.term == "Lithium" } }.area)
         assertEquals(setOf(docs[0].id, docs[1].id, docs[2].id), lithium.docIds.toSet())
         assertEquals(3, lib.applyTopic("Lithium", lithium.docIds))
         val tag = dao.allTags().first { it.name == "Lithium" }
         assertEquals(listOf(tag.id), dao.tagIdsOf(docs[2].id))
         assertTrue(dao.tagIdsOf(docs[3].id).isEmpty())
         // A tag that exists is not suggested again.
-        assertTrue(com.fadysaeed.pdfx.data.Topics.suggest(lib, setOf("lithium")).none { it.term == "Lithium" })
+        assertTrue(com.fadysaeed.pdfx.data.Topics.suggest(lib, setOf("lithium")).flatMap { it.topics }.none { it.term == "Lithium" })
     }
 
     @Test
@@ -298,6 +299,20 @@ class LibraryRulesOnDeviceTest {
         assertTrue(lib.isLoose(a.folder))
         assertFalse(lib.isLoose(b.folder))
         assertEquals(File(root, "Documents/Library/Papers"), lib.shelfDir("Papers"))
+    }
+
+    @Test
+    fun aTitleSeveralFilesShareIsABannerAndIsReadAgain() = runBlocking {
+        val files = (1..4).map { unique("Download/paper$it.pdf", 300 + it) }
+        lib.scan()
+        val dao = db.dao()
+        val docs = files.map { dao.byKey(it.absolutePath)!! }
+        docs.take(3).forEach { dao.update(it.copy(title = "Journal of Affective Disorders", infoAt = it.modified)) }
+        dao.update(docs[3].copy(title = "Lithium and the kidney", infoAt = docs[3].modified))
+        assertEquals(3, lib.fixSharedTitles())
+        assertTrue("journal of affective disorders" in lib.sharedTitles())
+        docs.take(3).forEach { d -> val now = dao.byId(d.id)!!; assertNull(now.title); assertEquals("read again", 0L, now.infoAt) }
+        assertEquals("Lithium and the kidney", dao.byId(docs[3].id)!!.title)
     }
 
     @Test

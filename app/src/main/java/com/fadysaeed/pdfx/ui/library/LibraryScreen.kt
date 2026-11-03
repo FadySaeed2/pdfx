@@ -9,6 +9,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -195,6 +196,28 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             onOpen(made, 0)
         }
     }
+    val scanning by vm.scanProgress.collectAsState()
+    val scanDone by vm.scanFinished.collectAsState()
+    LaunchedEffect(scanDone) {
+        scanDone?.let { (read, all, stopped) ->
+            vm.notice.value = Notice(
+                (if (stopped) "Stopped. " else "") + (if (read == 1) "The words on 1 scan were read" else "The words on $read of $all scans were read") + "; they can be searched now.",
+            )
+            vm.scanFinished.value = null
+        }
+    }
+    scanning?.let { pr ->
+        Row(
+            Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.statusBars).fillMaxWidth().background(Ink.Field).padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Reading scans: file ${pr.file} of ${pr.files}" + (if (pr.pages > 0) ", page ${pr.page} of ${pr.pages}" else ""), style = Type.small.copy(color = Ink.Bone))
+                Text(pr.name, style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text("Stop", style = Type.bodyStrong.copy(color = Ink.Amber), modifier = Modifier.clickable { vm.stopReadingScans() }.padding(12.dp))
+        }
+    }
     if (tidyOpen && tidyStep == null) {
         TidyScreen(ui.tidy, ui.unindexed, onStep = { step -> if (step == TidyStep.TAGS) topicsOpen = true else tidyStep = step }, onClose = { tidyOpen = false })
     }
@@ -214,9 +237,9 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             run = { docs, _ -> vm.trashAll(docs) }, onClose = { tidyStep = null },
         )
         TidyStep.SCANS -> FilesReview(
-            "Scans with no words", "Each scan's words are read on the phone and laid invisibly over its pages, so search, copy and highlight work. Each file keeps its earlier version in Earlier versions.",
+            "Scans with no words", "Each scan's words are read on the phone and laid invisibly over its pages, so search, copy and highlight work. It runs in the background, a page at a time: you can leave this screen, and stop it from the library. Each file keeps its earlier version in Earlier versions.",
             "Read their words", load = vm::bareScans, label = vm.library::folderLabel,
-            run = { docs, say -> vm.readScans(docs, say) }, onClose = { tidyStep = null },
+            run = { docs, _ -> vm.readScans(docs); tidyStep = null; tidyOpen = false }, onClose = { tidyStep = null },
         )
         else -> Unit
     }

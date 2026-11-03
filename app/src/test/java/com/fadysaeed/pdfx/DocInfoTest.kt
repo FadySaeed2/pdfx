@@ -43,6 +43,22 @@ class DocInfoTest {
         assertNull(f.author)
     }
 
+    @Test fun aJournalsNameIsNeverTheTitle() {
+        val f = DocInfo.find(emptyMap(), listOf(page(
+            22f to "The British Journal of Psychiatry (2024)",
+            8f to "Original Article",
+            16f to "Pharmacological interventions for co-occurring psychopathology",
+            9f to "Background text that runs long enough to be the body of the paper and set its usual size.",
+            9f to "More of the body of the paper so that the middle size is the body size of this page here.",
+        )))
+        assertEquals("Pharmacological interventions for co-occurring psychopathology", f.title)
+    }
+
+    @Test fun aTitleToAvoidIsPassedOver() {
+        val f = DocInfo.find(mapOf("Title" to "ScienceDirect Full Text"), listOf(page(11f to "words")), avoid = setOf("sciencedirect full text"))
+        assertNull(f.title)
+    }
+
     @Test fun authorsWrittenTheJournalWay() {
         assertEquals("Smith et al.", DocInfo.firstAuthorOf("Smith J, Brown K, Lee T"))
         assertEquals("Malhi", DocInfo.firstAuthorOf("Malhi, Gin S."))

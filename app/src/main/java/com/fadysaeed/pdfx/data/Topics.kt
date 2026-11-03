@@ -138,61 +138,74 @@ object TopicMath {
     }
 }
 
+/** Suggestions in one broad area ("Mood disorders"), with the files of the whole area for an area tag. */
+class TopicGroup(val area: String, val areaDocIds: List<Long>, val topics: List<TopicSuggestion>)
+
 /**
- * Topics worth a tag, found in the files themselves: the subjects of a psychiatrist's reading (a
- * starting list) and topics that keep coming back in the files' titles (see [TopicMath]). A file
- * counts as being about a topic when its title names it, or when it comes up on a fair share of its
- * pages; a passing mention does not count.
+ * Topics worth a tag, read from the files themselves. Each file is scored against a vocabulary of
+ * topics with their words and medicine names ([Concepts]): a file is about a topic when its title
+ * names one of its words, or when those words come up on a good share of its pages (a fifth of a
+ * paper's pages, a tenth of a book's), never for a passing mention; and a file keeps only its four
+ * strongest topics. Topics the vocabulary does not know are found in the titles ([TopicMath]).
+ * Suggestions come grouped by area, each area also offered as a tag of its own.
  */
 object Topics {
-    private val seeds = listOf(
-        "ADHD", "Bipolar", "Lithium", "Clozapine", "Schizophrenia", "Psychosis", "Depression", "Anxiety", "PTSD", "Trauma",
-        "Autism", "Borderline personality", "Dementia", "Delirium", "Perinatal", "Pregnancy", "Eating disorders",
-        "Anorexia", "Substance use", "Alcohol", "Opioids", "Methamphetamine", "Cannabis", "Ketamine", "ECT", "Suicide",
-        "Self-harm", "Antipsychotics", "Antidepressants", "SSRIs", "Benzodiazepines", "CBT", "DBT", "Psychotherapy", "Sleep",
-        "OCD", "Catatonia", "Serotonin syndrome", "Neuroleptic malignant syndrome", "QTc", "Metabolic", "Child and adolescent",
-        "Older people", "Forensic", "Mental Health Act", "Capacity", "Agitation", "Long-acting injectables",
-        "Tardive dyskinesia", "Valproate", "Lamotrigine", "Psychopharmacology", "Supervision", "Stimulants", "Melatonin",
-    )
+    private const val MAX_PER_FILE = 4
 
-    /** A label's words as family keys, to tell a seed and a title topic apart or alike. */
-    private fun keysOf(label: String, keys: Map<String, String>) =
-        TopicMath.words(label).map { it.lowercase() }.filter { it !in TopicMath.stop }.map { keys[it] ?: it }.toSet()
+    private fun ftsQuery(terms: List<String>) = terms.map { t ->
+        "\"" + t.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotBlank() }.joinToString(" ") + "\""
+    }.filter { it.length > 2 }.distinct().joinToString(" OR ")
 
-    suspend fun suggest(lib: Library, existing: Set<String>, max: Int = 40): List<TopicSuggestion> = withContext(Dispatchers.IO) {
+    private fun titleHas(title: String, terms: List<String>): Boolean = terms.any { t ->
+        Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(t) + "(s|es)?(?![\\p{L}\\p{N}])", if (t.length <= 4 && t.uppercase() == t) setOf() else setOf(RegexOption.IGNORE_CASE)).containsMatchIn(title)
+    }
+
+    suspend fun suggest(lib: Library, existing: Set<String>): List<TopicGroup> = withContext(Dispatchers.IO) {
         val docs = lib.dao.all().filter { !it.inTrash && it.isFile }
         if (docs.isEmpty()) return@withContext emptyList()
         val byId = docs.associateBy { it.id }
-        val titles = docs.mapNotNull { d -> d.title?.let { d.id to it } }.toMap()
-        val fromTitles = TopicMath.fromTitles(titles).take(40)
-        val keys = TopicMath.familyKeys(TopicMath.words((seeds + titles.values + existing).joinToString(" ")))
-        val taken = existing.map { keysOf(it, keys) }.toMutableList()
-        // Seeds first (their spelling is the one people use), then title topics they do not already cover.
-        val labels = ArrayList<String>()
-        for (l in seeds + fromTitles.map { it.label }) {
-            val k = keysOf(l, keys)
-            if (k.isEmpty() || taken.any { it == k }) continue
-            taken += k
-            labels += l
-        }
-        val out = ArrayList<TopicSuggestion>()
-        for (label in labels) {
-            val k = keysOf(label, keys)
-            val pages = lib.text.pagesMatching(label)
-            val ids = docs.filter { d ->
+        val have = existing.map { it.lowercase() }.toSet()
+        // How strongly each file is about each topic.
+        val strength = HashMap<Long, MutableList<Pair<Concept, Double>>>()
+        for (c in Concepts.all) {
+            val pages = lib.text.pagesMatching(ftsQuery(c.terms), raw = true)
+            for (d in docs) {
                 val title = d.title ?: d.name.removeSuffix(".pdf")
-                val inTitle = keysOf(title, keys).containsAll(k)
+                val inTitle = titleHas(title, c.terms)
                 val hit = pages[d.id] ?: 0
-                inTitle || (d.pages in 1..3 && hit >= 1) || (hit >= 2 && hit >= d.pages * 0.15)
-            }.map { it.id }
-            // On almost every file, it describes the library, not a topic in it.
-            if (ids.size < 2 || (docs.size >= 20 && ids.size > docs.size * 0.4)) continue
-            out += TopicSuggestion(label, ids, ids.take(3).mapNotNull { id -> byId[id]?.let { it.title ?: it.name.removeSuffix(".pdf") } })
+                val n = d.pages.coerceAtLeast(1)
+                val share = hit.toDouble() / n
+                val enough = when {
+                    inTitle -> true
+                    n <= 3 -> hit >= 1
+                    n >= 80 -> hit >= 8 && share >= 0.1
+                    else -> hit >= 2 && share >= 0.2
+                }
+                if (enough) strength.getOrPut(d.id) { ArrayList() } += c to ((if (inTitle) 2.0 else 0.0) + share)
+            }
         }
-        // Two suggestions on the very same files say the same thing: the first (the bigger, or a seed) stays.
-        val sorted = out.sortedByDescending { it.docIds.size }
-        sorted.filterIndexed { i, t ->
-            sorted.take(i).none { big -> big.docIds.toSet() == t.docIds.toSet() }
-        }.take(max)
+        val members = HashMap<Concept, MutableList<Long>>()
+        for ((id, list) in strength) for ((c, _) in list.sortedByDescending { it.second }.take(MAX_PER_FILE)) members.getOrPut(c) { ArrayList() } += id
+        fun example(ids: List<Long>) = ids.sortedByDescending { byId[it]?.lastOpened ?: 0 }.take(3).mapNotNull { id -> byId[id]?.let { it.title ?: it.name.removeSuffix(".pdf") } }
+        val groups = ArrayList<TopicGroup>()
+        for ((area, concepts) in Concepts.all.groupBy { it.area }) {
+            val items = concepts.mapNotNull { c ->
+                val ids = members[c].orEmpty()
+                // Two files at least; and not on nearly every file, which says nothing.
+                if (ids.size < 2 || c.name.lowercase() in have || (docs.size >= 20 && ids.size > docs.size * 0.6)) null
+                else TopicSuggestion(c.name, ids, example(ids))
+            }.sortedByDescending { it.docIds.size }
+            if (items.isEmpty()) continue
+            val areaIds = items.flatMap { it.docIds }.distinct()
+            groups += TopicGroup(area, if (area.lowercase() in have) emptyList() else areaIds, items)
+        }
+        // Topics in the titles that the vocabulary does not cover.
+        val titles = docs.mapNotNull { d -> d.title?.let { d.id to it } }.toMap()
+        val known = Concepts.all.flatMap { c -> c.terms.map { it.lowercase() } }.toSet()
+        val extra = TopicMath.fromTitles(titles).filter { t ->
+            t.label.lowercase() !in have && t.label.lowercase() !in known && t.keys.none { k -> known.any { it.startsWith(k) || k.startsWith(it) } }
+        }.take(20).map { TopicSuggestion(it.label, it.docs.toList(), example(it.docs.toList())) }
+        if (extra.isNotEmpty()) groups += TopicGroup("Other topics in your titles", emptyList(), extra)
+        groups.sortedByDescending { g -> g.topics.sumOf { it.docIds.size } }.sortedBy { it.area == "Other topics in your titles" }
     }
 }
