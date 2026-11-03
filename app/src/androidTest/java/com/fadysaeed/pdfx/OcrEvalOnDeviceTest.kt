@@ -4,7 +4,6 @@ import android.graphics.BitmapFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.android.gms.tasks.Tasks
-import com.google.mlkit.common.sdkinternal.MlKitContext
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -58,9 +57,6 @@ class OcrEvalOnDeviceTest {
     fun compareEngines() {
         val truth = JSONArray(assets.open("ocr-truth.json").bufferedReader().readText())
         val report = StringBuilder()
-        // ML Kit finds its parts through the manifest of the package that carries it: here the test's.
-        runCatching { MlKitContext.initializeIfNeeded(InstrumentationRegistry.getInstrumentation().context) }
-            .onFailure { report.append("ML Kit init: $it\n") }
         val recognizer = runCatching { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
             .onFailure { report.append("ML Kit client: $it\n") }.getOrNull()
         val totals = LinkedHashMap<String, DoubleArray>() // recall, precision, ms
