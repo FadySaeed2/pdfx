@@ -50,6 +50,8 @@ class DocInfoTest {
             16f to "Pharmacological interventions for co-occurring psychopathology",
             9f to "Background text that runs long enough to be the body of the paper and set its usual size.",
             9f to "More of the body of the paper so that the middle size is the body size of this page here.",
+            9f to "A third line of the body of the paper, as a real page has many lines of body text on it.",
+            9f to "And a fourth one, so the size most lines are set in is the body's, as on any real page.",
         )))
         assertEquals("Pharmacological interventions for co-occurring psychopathology", f.title)
     }
