@@ -17,7 +17,7 @@ import java.io.File
 import java.util.zip.ZipFile
 
 /**
- * The GPM book's pages 19–21 (a table on each) and 52–53 (two figures) written out as Word, Excel
+ * The GPM book's pages 20–21 (a table on each) and 53–54 (two figures) written out as Word, Excel
  * and text: the tables arrive as tables, the figures as pictures with their captions, the words
  * as paragraphs. The files land in shots/ to be looked at.
  */
@@ -38,7 +38,7 @@ class ExportOnDeviceTest {
     fun aBookBecomesWordExcelAndText() = runBlocking {
         val s = PdfSession.openFile(asset("gpm.pdf").absolutePath)
         try {
-            val pages = listOf(19, 20, 51, 52)
+            val pages = listOf(19, 20, 52, 53)
             val heard = ArrayList<Int>()
             val blocks = ExportPages.blocks(s, pages, File(ctx.cacheDir, "export-tmp"), withPictures = true) { k, _ -> heard += k }
             assertEquals(listOf(1, 2, 3, 4), heard)
