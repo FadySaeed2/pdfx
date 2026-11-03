@@ -443,6 +443,92 @@ class Library(
 
     private suspend fun <T> io(block: suspend () -> T): Result<T> = withContext(Dispatchers.IO) { runCatching { block() } }
 
+    // ---------------------------------------------------------------- folders
+
+    /**
+     * Moves the folder [src], with everything in it, into [dstParent] under [newName] (a rename when
+     * the parent stays). Every file the library knows inside it follows, keeping its tags and place.
+     */
+    suspend fun moveFolder(src: File, dstParent: File, newName: String = src.name): Result<File> = io {
+        val clean = newName.trim()
+        require(clean.isNotEmpty() && !clean.contains('/') && !clean.startsWith(".")) { "That name can't be used." }
+        require(src.isDirectory) { "That folder is no longer there." }
+        val dst = File(dstParent, clean)
+        if (dst.absolutePath == src.absolutePath) return@io src
+        require(!dst.exists()) { "There is already a folder called $clean there." }
+        require(!(dst.absolutePath + "/").startsWith(src.absolutePath + "/")) { "A folder can't go inside itself." }
+        dstParent.mkdirs()
+        if (!src.renameTo(dst)) throw IOException("The folder could not be moved.")
+        val from = src.absolutePath
+        db.withTransaction {
+            for (d in dao.all()) {
+                val path = d.path ?: continue
+                if (path != from && !path.startsWith("$from/")) continue
+                val np = dst.absolutePath + path.removePrefix(from)
+                dao.update(d.copy(key = np, path = np, uri = Uri.fromFile(File(np)).toString(), folder = File(np).parent))
+            }
+        }
+        dst.walkTopDown().filter { it.isFile }.take(500).toList().let { if (it.isNotEmpty()) scanMedia(*it.toTypedArray()) }
+        dst
+    }
+
+    /** A new folder inside [parent]. */
+    suspend fun makeFolder(parent: File, name: String): Result<File> = io {
+        val clean = name.trim()
+        require(clean.isNotEmpty() && !clean.contains('/') && !clean.startsWith(".")) { "That name can't be used." }
+        val f = File(parent, clean)
+        require(!f.exists()) { "There is already a folder called $clean there." }
+        if (!f.mkdirs()) throw IOException("The folder could not be made.")
+        f
+    }
+
+    /** Deletes a folder that holds nothing (or only empty folders); anything with files in it stays. */
+    suspend fun deleteEmptyFolder(dir: File): Result<Unit> = io {
+        val files = dir.walkTopDown().filter { it.isFile && it.name != ".nomedia" }.count()
+        require(files == 0) { "It still has $files ${if (files == 1) "file" else "files"} in it. Move or trash them first." }
+        dir.walkBottomUp().forEach { it.delete() }
+    }
+
+    // ---------------------------------------------------------------- tidying
+
+    /**
+     * A clearer name for a file whose name is a code ("s41380-023-02145-x", "document(3)",
+     * "1-s2.0-S0165032721002123-main") when its real title is known: "Malhi 2023 - Lithium in the
+     * treatment of bipolar disorder". Null when the name is fine or no title was found.
+     */
+    fun betterName(d: Doc): String? {
+        val title = d.title?.takeIf { it.isNotBlank() } ?: return null
+        val base = d.name.substringBeforeLast('.')
+        if (!looksLikeCode(base)) return null
+        val who = d.author?.removeSuffix(" et al.")?.trim()?.takeIf { it.isNotBlank() }
+        val head = listOfNotNull(who, d.year.takeIf { it > 0 }?.toString()).joinToString(" ")
+        var name = (if (head.isNotEmpty()) "$head - " else "") + title.replace(Regex("\\s*:\\s*"), " - ")
+        name = name.replace(Regex("""[\\/:*?"<>|\u0000-\u001f]"""), " ").replace(Regex("\\s+"), " ").trim().trimEnd('.')
+        if (name.length > 120) name = name.take(120).substringBeforeLast(' ').trimEnd(',', ';', ':', '-', ' ')
+        return name.takeIf { it.isNotBlank() && it != base }
+    }
+
+    private fun looksLikeCode(base: String): Boolean {
+        val b = base.trim()
+        if (Regex("""(?i)^(document|doc|file|download|untitled|scan|print|pdf|attachment|image|img|new|untitled document)[ _-]*\(?\d*\)?$""").matches(b)) return true
+        val digits = b.count { it.isDigit() }
+        val letters = b.count { it.isLetter() }
+        if (b.length >= 6 && digits >= b.length * 0.3) return true
+        if (!b.contains(' ') && b.length >= 12 && (b.count { it == '-' || it == '_' || it == '.' } >= 2 || digits >= 3)) return true
+        return letters < 3
+    }
+
+    /** Folders that are a holding place rather than a home: Downloads, WhatsApp's, the received copies, the phone's top level. */
+    fun isLoose(folder: String?): Boolean {
+        val f = folder ?: return false
+        return f == root.absolutePath || f.startsWith(File(root, "Download").absolutePath) || f.contains("/WhatsApp/") ||
+            f == receivedDir.absolutePath || f.endsWith("/Telegram Documents") || f.contains("/Telegram/")
+    }
+
+    /** Where a file of a kind lives once sorted: Documents/Library/Papers and so on. */
+    fun shelfDir(shelf: String): File = File(root, "Documents/Library/$shelf")
+
+
     // ---------------------------------------------------------------- tags
 
     suspend fun createTag(name: String, color: Int): Long = dao.insertTag(Tag(name = name.trim(), color = color))

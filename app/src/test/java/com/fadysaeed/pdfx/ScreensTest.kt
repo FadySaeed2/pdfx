@@ -23,6 +23,7 @@ import com.fadysaeed.pdfx.ui.library.DocResult
 import com.fadysaeed.pdfx.ui.library.FolderRow
 import com.fadysaeed.pdfx.ui.library.Shelf
 import com.fadysaeed.pdfx.ui.library.ShelfRow
+import com.fadysaeed.pdfx.ui.library.TidyCounts
 import com.fadysaeed.pdfx.ui.library.Item
 import com.fadysaeed.pdfx.ui.library.LibraryActions
 import com.fadysaeed.pdfx.ui.library.LibraryContent
@@ -143,6 +144,24 @@ class ScreensTest {
     }
 
     @Test fun recent() = shot(base.copy(unindexed = 37), "01_recent.png")
+
+    @Test fun picking() = shot(base.copy(picked = setOf(docs[0].doc.id, docs[2].doc.id), tidy = TidyCounts(duplicates = 2, codeNames = 14, loose = 31)), "48_picking.png")
+
+    @Test fun folderInside() = shot(
+        base.copy(
+            place = Place(Section.FOLDERS, folder = "$root/Documents/Library", inFolder = true), title = "Library",
+            crumbs = listOf("Documents" to "$root/Documents", "Library" to "$root/Documents/Library"),
+            folders = listOf(FolderRow("$root/Documents/Library/Papers", "Papers", 318, pinned = true), FolderRow("$root/Documents/Library/Guidelines", "Guidelines", 44)),
+        ),
+        "49_folder_inside.png",
+    )
+
+    @Test fun tidy() {
+        compose.setContent {
+            PdfxTheme { com.fadysaeed.pdfx.ui.library.TidyScreen(TidyCounts(duplicates = 6, codeNames = 142, loose = 231, broken = 3, bareScans = 0), reading = 40, onStep = {}, onClose = {}) }
+        }
+        compose.onRoot().captureRoboImage("screenshots/50_tidy.png")
+    }
 
     @Test fun shelves() = shot(
         base.copy(

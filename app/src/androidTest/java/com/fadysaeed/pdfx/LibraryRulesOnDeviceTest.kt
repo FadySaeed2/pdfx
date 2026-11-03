@@ -252,6 +252,55 @@ class LibraryRulesOnDeviceTest {
     }
 
     @Test
+    fun foldersMoveAndRenameWithTheirFiles() = runBlocking {
+        val a = unique("Documents/Papers/Mood/a.pdf", 11)
+        unique("Documents/Papers/b.pdf", 12)
+        lib.scan()
+        val dao = db.dao()
+        val d = dao.byKey(a.absolutePath)!!
+        val tag = lib.createTag("Mood", 1)
+        lib.setTag(d.id, tag, true)
+        // Renamed in place.
+        val renamed = lib.moveFolder(File(root, "Documents/Papers"), File(root, "Documents"), "Reading").getOrThrow()
+        assertEquals("Reading", renamed.name)
+        val moved = dao.byId(d.id)!!
+        assertEquals(File(root, "Documents/Reading/Mood/a.pdf").absolutePath, moved.path)
+        assertEquals(File(root, "Documents/Reading/Mood").absolutePath, moved.folder)
+        assertEquals(listOf(tag), dao.tagIdsOf(d.id))
+        // Into another folder; not into itself.
+        lib.makeFolder(root, "Archive").getOrThrow()
+        lib.moveFolder(File(root, "Documents/Reading/Mood"), File(root, "Archive")).getOrThrow()
+        assertEquals(File(root, "Archive/Mood/a.pdf").absolutePath, dao.byId(d.id)!!.path)
+        assertTrue(lib.moveFolder(File(root, "Archive"), File(root, "Archive/Mood")).isFailure)
+        // A scan afterwards changes nothing.
+        val r = lib.scan()
+        assertEquals(0, r.added); assertEquals(0, r.removed)
+        // Only an empty folder can be deleted.
+        assertTrue(lib.deleteEmptyFolder(File(root, "Archive")).isFailure)
+        lib.makeFolder(root, "Empty").getOrThrow()
+        assertTrue(lib.deleteEmptyFolder(File(root, "Empty")).isSuccess)
+        assertFalse(File(root, "Empty").exists())
+    }
+
+    @Test
+    fun codeNamesGetTitlesAndLooseFilesAreKnown() = runBlocking {
+        val code = unique("Download/s41380-023-02145-x.pdf", 21)
+        val fine = unique("Documents/Lithium review.pdf", 22)
+        val doc3 = unique("Download/document(3).pdf", 23)
+        lib.scan()
+        val dao = db.dao()
+        val a = dao.byKey(code.absolutePath)!!.copy(title = "Lithium in bipolar disorder: a reappraisal", author = "Malhi et al.", year = 2023)
+        val b = dao.byKey(fine.absolutePath)!!.copy(title = "Something else entirely")
+        val c = dao.byKey(doc3.absolutePath)!!.copy(title = "Referral: clozapine titration", author = null, year = 0)
+        assertEquals("Malhi 2023 - Lithium in bipolar disorder - a reappraisal", lib.betterName(a))
+        assertNull("a fine name is left alone", lib.betterName(b))
+        assertEquals("Referral - clozapine titration", lib.betterName(c))
+        assertTrue(lib.isLoose(a.folder))
+        assertFalse(lib.isLoose(b.folder))
+        assertEquals(File(root, "Documents/Library/Papers"), lib.shelfDir("Papers"))
+    }
+
+    @Test
     fun ftsQueryIsSafe() {
         assertEquals("lith* level*", ftsQuery("Lith  level"))
         assertEquals("o* brien*", ftsQuery("O'Brien"))

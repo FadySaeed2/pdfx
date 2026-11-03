@@ -31,7 +31,22 @@ enum class Section(val label: String) {
 enum class SortBy(val label: String) { OPENED("Last opened"), NAME("Name"), MODIFIED("Date changed"), SIZE("Size") }
 
 data class Item(val doc: Doc, val tags: List<Tag>)
-data class FolderRow(val path: String?, val label: String, val count: Int)
+data class FolderRow(val path: String?, val label: String, val count: Int, val pinned: Boolean = false)
+
+/** What the big tidy can look at, with how many of each. */
+data class TidyCounts(
+    val duplicates: Int = 0,
+    /** Files with code names that a real title would name better. */
+    val codeNames: Int = 0,
+    /** Files lying in Downloads, WhatsApp and the like that have a shelf to go to. */
+    val loose: Int = 0,
+    /** Files that do not open. */
+    val broken: Int = 0,
+    /** Scans whose words have not been read. */
+    val bareScans: Int = 0,
+) {
+    val total get() = duplicates + codeNames + loose + broken + bareScans
+}
 data class DocResult(val doc: Doc, val nameMatch: Boolean, val hits: List<TextHit>, val totalHits: Int)
 
 /** Where in the library the user is. */
@@ -73,6 +88,13 @@ data class LibraryUi(
     val unindexed: Int = 0,
     val loaded: Boolean = false,
     val shelves: List<ShelfRow> = emptyList(),
+    /** Every folder that holds files, for moving and copying to. */
+    val allFolders: List<FolderRow> = emptyList(),
+    /** Files picked to act on together. */
+    val picked: Set<Long> = emptySet(),
+    /** Where the open folder sits: (name, path) from the top of the phone down. */
+    val crumbs: List<Pair<String, String>> = emptyList(),
+    val tidy: TidyCounts = TidyCounts(),
     /** The same file more than once (by fingerprint), each group its copies; the one to keep first. */
     val duplicates: List<List<Doc>> = emptyList(),
 )
@@ -90,6 +112,8 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     private val place = MutableStateFlow(Place())
     private val sorts = MutableStateFlow(loadSorts())
     private val query = MutableStateFlow("")
+    private val picks = MutableStateFlow<Set<Long>>(emptySet())
+    private val pins = MutableStateFlow(prefs.getStringSet("pinned_folders", emptySet()).orEmpty().toSet())
     private val access = MutableStateFlow(library.hasAllFilesAccess())
     val notice = MutableStateFlow<Notice?>(null)
 
@@ -101,8 +125,10 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     private val results = combine(query.debounce(180).distinctUntilChanged(), library.dao.observeUnindexed()) { q, _ -> q }
         .mapLatest { q -> if (q.isBlank()) null else search(q) }
 
-    val ui: StateFlow<LibraryUi> = combine(raw, place, sorts, query, combine(results, access) { r, a -> r to a }) { r, p, s, q, (res, a) ->
-        build(r, p, s[p.section] ?: defaultSort(p.section), q, res, a)
+    val ui: StateFlow<LibraryUi> = combine(raw, place, sorts, query, combine(results, access, picks, pins) { r, a, pk, pn -> listOf(r, a, pk, pn) }) { r, p, s, q, extra ->
+        @Suppress("UNCHECKED_CAST")
+        build(r, p, s[p.section] ?: defaultSort(p.section), q, extra[0] as List<DocResult>?, extra[1] as Boolean)
+            .copy(picked = extra[2] as Set<Long>)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LibraryUi())
 
     fun refresh() {
@@ -112,7 +138,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         pdfx.refresh(force = access.value && !had)
     }
 
-    fun go(section: Section) { place.value = Place(section) }
+    fun go(section: Section) { place.value = Place(section); picks.value = emptySet() }
     fun openFolder(path: String?) { place.value = Place(Section.FOLDERS, folder = path, inFolder = true) }
     fun openTag(id: Long) { place.value = Place(Section.TAGS, tagId = id) }
     fun openShelf(s: Shelf) { place.value = Place(Section.SHELVES, shelf = s.name) }
@@ -120,8 +146,14 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     fun back(): Boolean {
         val p = place.value
         return when {
+            picks.value.isNotEmpty() -> { picks.value = emptySet(); true }
             query.value.isNotEmpty() -> { query.value = ""; true }
-            p.inFolder -> { place.value = Place(Section.FOLDERS); true }
+            p.inFolder -> {
+                // Up one folder; out of the folders from the top.
+                val up = p.folder?.let { File(it).parentFile }
+                place.value = if (up != null && up.absolutePath.startsWith(library.root.absolutePath) && up.absolutePath != library.root.absolutePath) Place(Section.FOLDERS, folder = up.absolutePath, inFolder = true) else Place(Section.FOLDERS)
+                true
+            }
             p.tagId != null -> { place.value = Place(Section.TAGS); true }
             p.shelf != null -> { place.value = Place(Section.SHELVES); true }
             p.section != Section.RECENT -> { place.value = Place(); true }
@@ -137,6 +169,126 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         val next = if (cur.by == by) cur.copy(descending = !cur.descending) else Sort(by, descending = by != SortBy.NAME)
         sorts.value = sorts.value + (sec to next)
         prefs.edit().putString("sort_${sec.name}", "${next.by.name}:${next.descending}").apply()
+    }
+
+    // --------------------------------------------------------- picking many
+
+    fun pick(d: Doc) { picks.value = if (d.id in picks.value) picks.value - d.id else picks.value + d.id }
+    fun pickAll() { picks.value = ui.value.items.map { it.doc.id }.toSet() }
+    fun clearPicks() { picks.value = emptySet() }
+    private fun pickedDocs(): List<Doc> { val ids = picks.value; return ui.value.items.map { it.doc }.filter { it.id in ids } }
+
+    /** Does [op] to each picked file, then says how it went: "Moved 12 files", or how many could not be. */
+    private fun many(done: String, op: suspend (Doc) -> Result<*>) = launch {
+        val docs = pickedDocs()
+        picks.value = emptySet()
+        var ok = 0
+        var first: Throwable? = null
+        for (d in docs) op(d).onSuccess { ok++ }.onFailure { if (first == null) first = it }
+        val failed = docs.size - ok
+        say("$done ${if (ok == 1) "1 file" else "$ok files"}." + if (failed > 0) " $failed could not be: ${first?.message ?: "they may have gone"}" else "")
+    }
+
+    fun moveMany(dir: File) = many("Moved to ${library.folderLabel(dir.absolutePath)}:") { library.move(it, dir) }
+    fun copyMany(dir: File) = many("Copied to ${library.folderLabel(dir.absolutePath)}:") { library.copy(it, dir) }
+    fun trashMany() = many("Moved to the trash:") { library.trash(it) }
+    fun starMany() = many("Starred") { d -> runCatching { library.setStar(d, true) } }
+    fun tagMany(tag: Tag) = many("Tagged ${tag.name}:") { d -> runCatching { library.setTag(d.id, tag.id, true) } }
+    fun readingMany(state: Int) = many(if (state == 1) "On the To read shelf:" else "Marked done:") { d ->
+        runCatching { library.dao.byId(d.id)?.let { library.dao.update(it.copy(reading = state)) } }
+    }
+    /** The picked files, for sharing or merging; picking ends. */
+    fun takePicked(): List<Doc> = pickedDocs().also { picks.value = emptySet() }
+
+    // --------------------------------------------------------- the big tidy
+
+    /** Files whose code names a real title would name better, with the name each would get. */
+    suspend fun renameSuggestions(): List<Pair<Doc, String>> =
+        library.dao.all().filter { !it.inTrash && it.isFile }.mapNotNull { d -> library.betterName(d)?.let { d to it } }
+            .sortedBy { it.second.lowercase() }
+
+    fun applyRenames(list: List<Pair<Doc, String>>) = launch {
+        var ok = 0
+        for ((d, name) in list) library.dao.byId(d.id)?.let { now -> library.rename(now, name).onSuccess { ok++ } }
+        say(if (ok == 1) "1 file renamed." else "$ok files renamed." + if (ok < list.size) " ${list.size - ok} could not be (a file of that name may be there already)." else "")
+    }
+
+    /** Files lying in Downloads, WhatsApp and the like, by the shelf folder each would go to. */
+    suspend fun sortSuggestions(): Map<Shelf, List<Doc>> =
+        library.dao.all().filter { d -> !d.inTrash && d.isFile && library.isLoose(d.folder) && d.kind != null && d.kind != com.fadysaeed.pdfx.engine.DocKind.OTHER.name }
+            .groupBy { d -> Shelf.entries.first { it.name == d.kind } }
+            .toSortedMap(compareBy { it.ordinal })
+
+    fun folderFor(s: Shelf): String = library.folderLabel(library.shelfDir(s.label).absolutePath)
+
+    fun applySort(chosen: Map<Shelf, List<Doc>>) = launch {
+        var ok = 0
+        var all = 0
+        for ((shelf, docs) in chosen) for (d in docs) {
+            all++
+            library.dao.byId(d.id)?.let { now -> library.move(now, library.shelfDir(shelf.label)).onSuccess { ok++ } }
+        }
+        say("Moved $ok of $all files into Documents/Library, a folder for each kind." + if (ok < all) " The rest could not be moved." else "")
+    }
+
+    suspend fun brokenFiles(): List<Doc> =
+        library.dao.all().filter { !it.inTrash && it.isFile && it.indexedAt == it.modified && it.indexedAt > 0 && it.pages == 0 && !it.locked }
+
+    fun trashAll(docs: List<Doc>) = launch {
+        var ok = 0
+        for (d in docs) library.dao.byId(d.id)?.let { now -> library.trash(now).onSuccess { ok++ } }
+        say(if (ok == 1) "1 file moved to the trash." else "$ok files moved to the trash. The trash keeps them 30 days.")
+    }
+
+    suspend fun bareScans(): List<Doc> = library.dao.all().filter { !it.inTrash && it.isFile && it.kind == com.fadysaeed.pdfx.engine.DocKind.SCAN.name }
+
+    /** Reads the words on scans, each file in place (the version before stays in Earlier versions). [say] hears progress. */
+    suspend fun readScans(docs: List<Doc>, say: (String) -> Unit): Int {
+        var done = 0
+        for ((k, d) in docs.withIndex()) {
+            say("Reading the words in file ${k + 1} of ${docs.size}…")
+            val now = library.dao.byId(d.id) ?: continue
+            val path = now.path ?: continue
+            val r = pdfx.saver.replace(now, android.net.Uri.parse(now.uri)) { out ->
+                com.fadysaeed.pdfx.engine.Reading.makeSearchable(path, out.absolutePath)
+                com.artifex.mupdf.fitz.Document.openDocument(out.absolutePath).let { x -> x.countPages().also { x.destroy() } }
+            }
+            r.onSuccess { done++; library.dao.byId(d.id)?.let { library.dao.update(it.copy(kind = null)) } }
+        }
+        com.fadysaeed.pdfx.data.TextIndexer.schedule(pdfx)
+        this.say(if (done == 1) "The words on 1 scan were read." else "The words on $done scans were read; they can be searched now.")
+        return done
+    }
+
+    // --------------------------------------------------------- folders
+
+    fun pinFolder(path: String, on: Boolean) {
+        pins.value = if (on) pins.value + path else pins.value - path
+        prefs.edit().putStringSet("pinned_folders", pins.value).apply()
+    }
+
+    fun renameFolder(path: String, name: String) = launch {
+        val src = File(path)
+        library.moveFolder(src, src.parentFile ?: return@launch, name).fold({ dst ->
+            if (pins.value.contains(path)) { pinFolder(path, false); pinFolder(dst.absolutePath, true) }
+            if (place.value.folder?.startsWith(path) == true) place.value = Place(Section.FOLDERS, folder = dst.absolutePath + place.value.folder!!.removePrefix(path), inFolder = true)
+            say("Renamed to ${dst.name}.")
+        }, ::fail)
+    }
+
+    fun moveFolder(path: String, into: File) = launch {
+        library.moveFolder(File(path), into).fold({ dst ->
+            if (pins.value.contains(path)) { pinFolder(path, false); pinFolder(dst.absolutePath, true) }
+            say("Moved into ${library.folderLabel(into.absolutePath)}.")
+        }, ::fail)
+    }
+
+    fun makeFolder(parent: String?, name: String) = launch {
+        library.makeFolder(File(parent ?: library.root.absolutePath), name).fold({ f -> place.value = Place(Section.FOLDERS, folder = f.absolutePath, inFolder = true) }, ::fail)
+    }
+
+    fun deleteFolder(path: String) = launch {
+        library.deleteEmptyFolder(File(path)).fold({ pinFolder(path, false); say("Folder deleted.") }, ::fail)
     }
 
     // --------------------------------------------------------- actions
@@ -209,7 +361,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     /** Places a file can be moved or copied to: folders that hold PDFs plus the usual ones. */
     fun destinations(): List<FolderRow> {
         val docs = ui.value
-        val known = docs.folders.filter { it.path != null }.map { it.path!! }
+        val known = docs.allFolders.filter { it.path != null }.map { it.path!! }
         val standard = listOf(
             File(library.root, "Download").absolutePath,
             File(library.root, "Documents").absolutePath,
@@ -257,9 +409,10 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             Section.TRASH -> r.docs.filter { it.inTrash }
             Section.SHELVES -> p.shelf?.let { name -> Shelf.entries.firstOrNull { it.name == name } }?.let { sh -> live.filter { onShelf(it, sh) } } ?: emptyList()
         }
-        val folders = live.groupBy { it.folder }
+        val allFolders = live.groupBy { it.folder }
             .map { (f, l) -> FolderRow(f, library.folderLabel(f), l.size) }
             .sortedWith(compareBy<FolderRow> { it.path == null }.thenBy { it.label.lowercase() })
+        val folders = if (p.section == Section.FOLDERS) folderLevel(live, if (p.inFolder) p.folder else null) else emptyList()
         val title = when {
             p.inFolder -> library.folderLabel(p.folder).substringAfterLast('/')
             p.tagId != null -> tagsById[p.tagId]?.name ?: "Tag"
@@ -271,6 +424,9 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             title = title,
             items = sorted(docs, if (p.section == Section.TRASH) Sort(SortBy.OPENED, true) else s, p.section).map { Item(it, tagsOf[it.id].orEmpty()) },
             folders = folders,
+            allFolders = allFolders,
+            crumbs = if (p.inFolder) crumbsOf(p.folder) else emptyList(),
+            tidy = tidyOf(live),
             tags = r.counts,
             allTags = r.tags,
             docTags = r.links.groupBy({ it.docId }, { it.tagId }).mapValues { it.value.toSet() },
@@ -306,6 +462,66 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         val by = runCatching { SortBy.valueOf(v.substringBefore(':')) }.getOrNull() ?: return@mapNotNull null
         sec to Sort(by, v.substringAfter(':').toBoolean())
     }.toMap()
+
+    /**
+     * The folders to show at one level: inside [base], its folders that hold PDFs somewhere below
+     * (with how many); at the top, pinned folders and the usual places first, then the phone's
+     * top-level folders, then files from other apps.
+     */
+    private fun folderLevel(live: List<Doc>, base: String?): List<FolderRow> {
+        val rootPath = library.root.absolutePath
+        val counts = HashMap<String, Int>()
+        for (d in live) {
+            var f = d.folder?.let(::File) ?: continue
+            while (true) {
+                counts.merge(f.absolutePath, 1, Int::plus)
+                val up = f.parentFile ?: break
+                if (!up.absolutePath.startsWith(rootPath) || up.absolutePath == rootPath) break
+                f = up
+            }
+        }
+        if (base != null) {
+            return counts.keys.filter { File(it).parent == base }
+                .map { FolderRow(it, File(it).name, counts.getValue(it), it in pins.value) }
+                .sortedWith(compareByDescending<FolderRow> { it.pinned }.thenBy { it.label.lowercase() })
+        }
+        val usual = (counts.keys.filter { it.endsWith("/WhatsApp Documents") } + listOf(
+            File(library.root, "Download").absolutePath, File(library.homeDir, "Scans").absolutePath,
+            File(library.homeDir, "Books").absolutePath, library.receivedDir.absolutePath, File(library.root, "Documents/Library").absolutePath,
+        )).filter { (counts[it] ?: 0) > 0 }
+        val pinned = pins.value.filter { File(it).isDirectory }
+        val top = counts.keys.filter { File(it).parent == rootPath }
+        val out = LinkedHashMap<String, FolderRow>()
+        for (f in pinned) out[f] = FolderRow(f, library.folderLabel(f), counts[f] ?: 0, pinned = true)
+        for (f in usual) if (f !in out) out[f] = FolderRow(f, library.folderLabel(f), counts.getValue(f))
+        for (f in top.sortedBy { File(it).name.lowercase() }) if (f !in out) out[f] = FolderRow(f, File(f).name, counts.getValue(f))
+        val loose = live.count { it.folder == rootPath }
+        if (loose > 0) out[rootPath] = FolderRow(rootPath, "Phone storage (top level)", loose)
+        val shared = live.count { it.folder == null }
+        val rows = out.values.toMutableList()
+        if (shared > 0) rows += FolderRow(null, "From other apps", shared)
+        return rows
+    }
+
+    /** Phone › Documents › Papers, each part a place to go back to. */
+    private fun crumbsOf(folder: String?): List<Pair<String, String>> {
+        val f = folder ?: return emptyList()
+        val rootPath = library.root.absolutePath
+        if (!f.startsWith(rootPath)) return emptyList()
+        val parts = f.removePrefix(rootPath).trim('/').split('/').filter { it.isNotEmpty() }
+        return parts.indices.map { i -> parts[i] to rootPath + "/" + parts.take(i + 1).joinToString("/") }
+    }
+
+    private fun tidyOf(live: List<Doc>): TidyCounts {
+        val files = live.filter { it.isFile }
+        return TidyCounts(
+            duplicates = duplicatesOf(live).size,
+            codeNames = files.count { library.betterName(it) != null },
+            loose = files.count { library.isLoose(it.folder) && it.kind != null && it.kind != com.fadysaeed.pdfx.engine.DocKind.OTHER.name },
+            broken = files.count { it.indexedAt == it.modified && it.indexedAt > 0 && it.pages == 0 && !it.locked },
+            bareScans = files.count { it.kind == com.fadysaeed.pdfx.engine.DocKind.SCAN.name },
+        )
+    }
 
     private val month = 30L * 24 * 3600 * 1000
 

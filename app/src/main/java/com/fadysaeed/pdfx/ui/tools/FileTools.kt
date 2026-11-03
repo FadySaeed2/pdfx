@@ -102,11 +102,11 @@ object FileWork {
  * contents list gets one entry per file, so each can be found again.
  */
 @Composable
-fun MergeScreen(start: Doc?, onClose: () -> Unit, onDone: (Doc) -> Unit) {
+fun MergeScreen(start: Doc?, onClose: () -> Unit, more: List<Doc> = emptyList(), onDone: (Doc) -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as PdfxApp
     val scope = rememberCoroutineScope()
-    val files = remember { mutableStateListOf<Doc>().apply { start?.let { add(it) } } }
+    val files = remember { mutableStateListOf<Doc>().apply { start?.let { add(it) }; addAll(more) } }
     var name by remember { mutableStateOf(start?.let { LibraryModel.display(it) + " (merged)" } ?: "Merged") }
     var adding by remember { mutableStateOf(start == null) }
     var busy by remember { mutableStateOf(false) }

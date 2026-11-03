@@ -73,6 +73,12 @@ private sealed interface Sheet {
     data class Tags(val doc: Doc) : Sheet
     data object Sorting : Sheet
     data class TagMenu(val tag: TagCount) : Sheet
+    /** Where the picked files go. */
+    data class ManyPlaces(val copy: Boolean) : Sheet
+    data object ManyTags : Sheet
+    data object ManyMore : Sheet
+    data class FolderMenu(val row: FolderRow) : Sheet
+    data class FolderPlaces(val path: String) : Sheet
 }
 
 private sealed interface Ask {
@@ -82,6 +88,10 @@ private sealed interface Ask {
     data class NewFolder(val doc: Doc, val copy: Boolean) : Ask
     data class NewTag(val doc: Doc?) : Ask
     data class DeleteTag(val tag: TagCount) : Ask
+    data class RenameFolder(val path: String) : Ask
+    data class NewFolderIn(val parent: String?) : Ask
+    /** A new folder for the picked files, moved or copied there. */
+    data class NewFolderForMany(val copy: Boolean) : Ask
 }
 
 /** The library with all its menus. [onOpen] opens a document, optionally at a page. */
@@ -123,8 +133,11 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     var splitting by remember { mutableStateOf<Doc?>(null) }
     var duplicatesOpen by remember { mutableStateOf(false) }
     var topicsOpen by remember { mutableStateOf(false) }
+    var tidyOpen by remember { mutableStateOf(false) }
+    var tidyStep by remember { mutableStateOf<TidyStep?>(null) }
+    var mergingMany by remember { mutableStateOf<List<Doc>?>(null) }
 
-    BackHandler(enabled = ui.place != Place() || ui.query.isNotEmpty()) { vm.back() }
+    BackHandler(enabled = ui.place != Place() || ui.query.isNotEmpty() || ui.picked.isNotEmpty()) { vm.back() }
     LaunchedEffect(notice?.id) {
         if (notice != null) { delay(if (notice?.undo != null) 6000 else 3500); vm.dismissNotice() }
     }
@@ -158,12 +171,59 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             duplicates = { duplicatesOpen = true },
             shelf = vm::openShelf,
             topics = { topicsOpen = true },
+            tidy = { tidyOpen = true },
+            pickDoc = vm::pick,
+            pickAll = vm::pickAll,
+            clearPicks = vm::clearPicks,
+            many = { what ->
+                when (what) {
+                    "move" -> sheet = Sheet.ManyPlaces(copy = false)
+                    "tag" -> sheet = Sheet.ManyTags
+                    "trash" -> vm.trashMany()
+                    else -> sheet = Sheet.ManyMore
+                }
+            },
+            folderMore = { sheet = Sheet.FolderMenu(it) },
+            newFolder = { ask = Ask.NewFolderIn(it) },
+            crumb = vm::openFolder,
         ),
     )
     merging?.let { start ->
         com.fadysaeed.pdfx.ui.tools.MergeScreen(start, onClose = { merging = null }) { made ->
             merging = null
             vm.notice.value = Notice("Merged into ${LibraryModel.display(made)}, beside ${LibraryModel.display(start)}.")
+            onOpen(made, 0)
+        }
+    }
+    if (tidyOpen && tidyStep == null) {
+        TidyScreen(ui.tidy, ui.unindexed, onStep = { step -> if (step == TidyStep.TAGS) topicsOpen = true else tidyStep = step }, onClose = { tidyOpen = false })
+    }
+    LaunchedEffect(tidyStep, ui.duplicates.isEmpty()) { if (tidyStep == TidyStep.DUPLICATES && ui.duplicates.isEmpty()) tidyStep = null }
+    when (tidyStep) {
+        TidyStep.DUPLICATES -> if (ui.duplicates.isNotEmpty()) DuplicatesScreen(
+            ui.duplicates, vm.library::folderLabel,
+            onKeep = { g, k -> vm.keepOne(g, k) },
+            onKeepAll = { gs -> vm.keepSuggested(gs); tidyStep = null },
+            onClose = { tidyStep = null },
+        )
+        TidyStep.NAMES -> RenameReview(load = vm::renameSuggestions, onApply = { vm.applyRenames(it); tidyStep = null }, onClose = { tidyStep = null })
+        TidyStep.SORT -> SortReview(load = vm::sortSuggestions, folderFor = vm::folderFor, onApply = { vm.applySort(it); tidyStep = null }, onClose = { tidyStep = null })
+        TidyStep.BROKEN -> FilesReview(
+            "Files that don't open", "PDFx could not open these: they are damaged, empty, or not really PDFs. They go to the trash, where they stay 30 days.",
+            "Move them to the trash", load = vm::brokenFiles, label = vm.library::folderLabel,
+            run = { docs, _ -> vm.trashAll(docs) }, onClose = { tidyStep = null },
+        )
+        TidyStep.SCANS -> FilesReview(
+            "Scans with no words", "Each scan's words are read on the phone and laid invisibly over its pages, so search, copy and highlight work. Each file keeps its earlier version in Earlier versions.",
+            "Read their words", load = vm::bareScans, label = vm.library::folderLabel,
+            run = { docs, say -> vm.readScans(docs, say) }, onClose = { tidyStep = null },
+        )
+        else -> Unit
+    }
+    mergingMany?.let { docs ->
+        com.fadysaeed.pdfx.ui.tools.MergeScreen(docs.first(), more = docs.drop(1), onClose = { mergingMany = null }) { made ->
+            mergingMany = null
+            vm.notice.value = Notice("Merged ${docs.size} files into ${LibraryModel.display(made)}.")
             onOpen(made, 0)
         }
     }
@@ -258,6 +318,46 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
                             SheetRow(Glyph.RESTORE, whenText(v.savedAt, System.currentTimeMillis()), { sheet = null; vm.restoreVersion(current.doc, v) }, note = humanSize(v.size) + "  ·  tap to put this one back")
                         }
                     }
+                    is Sheet.ManyPlaces -> PlacesSheet(
+                        title = if (current.copy) "Copy ${ui.picked.size} files to" else "Move ${ui.picked.size} files to",
+                        places = vm.destinations(),
+                        onPick = { dir -> sheet = null; if (current.copy) vm.copyMany(dir) else vm.moveMany(dir) },
+                        onNewFolder = { sheet = null; ask = Ask.NewFolderForMany(current.copy) },
+                    )
+                    Sheet.ManyTags -> {
+                        SheetTitle("Tag ${ui.picked.size} files", null)
+                        Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+                            ui.allTags.forEach { t -> SheetRow(Glyph.TAG, t.name, { sheet = null; vm.tagMany(t) }) }
+                            SheetRow(Glyph.PLUS, "New tag…", { sheet = null; ask = Ask.NewTag(null) }, color = Ink.Amber)
+                        }
+                    }
+                    Sheet.ManyMore -> {
+                        SheetTitle("${ui.picked.size} files", null)
+                        SheetRow(Glyph.SHARE, "Share", { sheet = null; shareMany(context, vm.takePicked()) })
+                        SheetRow(Glyph.COPY, "Copy to…", { sheet = Sheet.ManyPlaces(copy = true) })
+                        SheetRow(Glyph.STAR, "Star", { sheet = null; vm.starMany() })
+                        SheetRow(Glyph.BOOKMARK, "To read", { sheet = null; vm.readingMany(1) })
+                        SheetRow(Glyph.CHECK, "Mark done", { sheet = null; vm.readingMany(2) })
+                        if (ui.picked.size >= 2) SheetRow(Glyph.PLUS, "Merge into one file…", { sheet = null; mergingMany = vm.takePicked() }, note = "In the order picked; you can change it")
+                    }
+                    is Sheet.FolderMenu -> {
+                        val path = current.row.path!!
+                        SheetTitle(current.row.label.substringAfterLast('/'), vm.library.folderLabel(path))
+                        SheetRow(Glyph.OPEN, "Open", { sheet = null; vm.openFolder(path) })
+                        SheetRow(Glyph.STAR, if (current.row.pinned) "Unpin" else "Pin to the top", { sheet = null; vm.pinFolder(path, !current.row.pinned) })
+                        if (java.io.File(path) != vm.library.root) {
+                            SheetRow(Glyph.RENAME, "Rename", { sheet = null; ask = Ask.RenameFolder(path) })
+                            SheetRow(Glyph.MOVE, "Move to…", { sheet = Sheet.FolderPlaces(path) }, note = "With everything in it")
+                        }
+                        SheetRow(Glyph.PLUS, "New folder inside", { sheet = null; ask = Ask.NewFolderIn(path) })
+                        SheetRow(Glyph.TRASH, "Delete", { sheet = null; vm.deleteFolder(path) }, note = "Only when it is empty")
+                    }
+                    is Sheet.FolderPlaces -> PlacesSheet(
+                        title = "Move the folder into",
+                        places = vm.destinations().filter { it.path != null && it.path != current.path && !it.path.startsWith(current.path + "/") },
+                        onPick = { dir -> sheet = null; vm.moveFolder(current.path, dir) },
+                        onNewFolder = null,
+                    )
                     is Sheet.TagMenu -> {
                         SheetTitle(current.tag.name, "${current.tag.count} ${if (current.tag.count == 1) "document" else "documents"}")
                         SheetRow(Glyph.OPEN, "Show documents", { sheet = null; vm.openTag(current.tag.id) })
@@ -285,6 +385,30 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
         ) { name ->
             val dir = vm.newFolder(name)
             if (dir != null) { if (a.copy) vm.copy(a.doc, dir) else vm.move(a.doc, dir) }
+            ask = null
+        }
+        is Ask.RenameFolder -> TextAsk(
+            title = "Rename folder",
+            initial = java.io.File(a.path).name,
+            confirm = "Rename",
+            onDismiss = { ask = null },
+        ) { vm.renameFolder(a.path, it); ask = null }
+        is Ask.NewFolderIn -> TextAsk(
+            title = "New folder",
+            note = "Made inside ${a.parent?.let { vm.library.folderLabel(it) } ?: "Documents"}.",
+            initial = "",
+            confirm = "Make it",
+            onDismiss = { ask = null },
+        ) { vm.makeFolder(a.parent ?: java.io.File(vm.library.root, "Documents").absolutePath, it); ask = null }
+        is Ask.NewFolderForMany -> TextAsk(
+            title = "New folder",
+            note = "Made inside Documents.",
+            initial = "",
+            confirm = if (a.copy) "Copy here" else "Move here",
+            onDismiss = { ask = null },
+        ) { name ->
+            val dir = vm.newFolder(name)
+            if (dir != null) { if (a.copy) vm.copyMany(dir) else vm.moveMany(dir) }
             ask = null
         }
         is Ask.NewTag -> NewTagAsk(onDismiss = { ask = null }) { name, color -> vm.createTag(name, color, a.doc); ask = null }
@@ -497,4 +621,27 @@ fun share(context: Context, d: Doc) {
         .putExtra(Intent.EXTRA_STREAM, uri)
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     runCatching { context.startActivity(Intent.createChooser(send, LibraryModel.display(d))) }
+}
+
+
+/** Folders to move or copy to (picked files, or a folder). */
+@Composable
+private fun PlacesSheet(title: String, places: List<FolderRow>, onPick: (File) -> Unit, onNewFolder: (() -> Unit)?) {
+    SheetTitle(title, null)
+    Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+        places.filter { it.path != null }.forEach { f -> SheetRow(Glyph.FOLDER, f.label, { onPick(File(f.path!!)) }) }
+        if (onNewFolder != null) SheetRow(Glyph.PLUS, "New folder…", onNewFolder, color = Ink.Amber)
+    }
+}
+
+/** Shares several files at once. */
+fun shareMany(context: Context, docs: List<Doc>) {
+    val uris = ArrayList(docs.mapNotNull { d ->
+        if (d.path != null) runCatching { FileProvider.getUriForFile(context, "${context.packageName}.files", File(d.path)) }.getOrNull() else Uri.parse(d.uri)
+    })
+    if (uris.isEmpty()) return
+    val send = Intent(if (uris.size == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE).setType("application/pdf")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    if (uris.size == 1) send.putExtra(Intent.EXTRA_STREAM, uris[0]) else send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+    runCatching { context.startActivity(Intent.createChooser(send, if (uris.size == 1) "Share" else "Share ${uris.size} files")) }
 }

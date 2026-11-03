@@ -3,6 +3,7 @@ package com.fadysaeed.pdfx.ui.library
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -86,6 +87,18 @@ class LibraryActions(
     val duplicates: () -> Unit = {},
     val shelf: (Shelf) -> Unit = {},
     val topics: () -> Unit = {},
+    val tidy: () -> Unit = {},
+    /** Picks a file to act on with others (or unpicks it). */
+    val pickDoc: (Doc) -> Unit = {},
+    val pickAll: () -> Unit = {},
+    val clearPicks: () -> Unit = {},
+    /** What to do with the picked files: "move", "copy", "tag", "share", "trash", "more". */
+    val many: (String) -> Unit = {},
+    val folderMore: (FolderRow) -> Unit = {},
+    /** A new folder inside the given one (null: inside Documents). */
+    val newFolder: (String?) -> Unit = {},
+    /** Opens a folder from the path shown above it. */
+    val crumb: (String) -> Unit = {},
 )
 
 @Composable
@@ -125,7 +138,8 @@ fun LibraryContent(
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 20.dp, vertical = 12.dp),
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (ui.picked.isNotEmpty()) PickBar(ui.picked.size, ui.items.size, actions)
+            else Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 AmberButton("Scan", actions.scan, Modifier.weight(1f))
                 GhostButton("Open a file", actions.pick, Modifier.weight(1f), minHeight = 52.dp)
             }
@@ -171,6 +185,7 @@ private fun SearchField(value: String, onChange: (String) -> Unit, modifier: Mod
 private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (Doc) -> ImageBitmap?, now: Long, label: (String?) -> String) {
     val p = ui.place
     val nested = p.inFolder || p.tagId != null || p.shelf != null
+    val picking = ui.picked.isNotEmpty()
     LazyColumn(Modifier.fillMaxSize()) {
         item(key = "head") {
             Column(Modifier.padding(horizontal = 20.dp)) {
@@ -213,17 +228,16 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                 }
             }
         }
-        if (ui.duplicates.isNotEmpty() && p.section in setOf(Section.RECENT, Section.ALL)) {
-            item(key = "dups") {
-                val copies = ui.duplicates.sumOf { it.size - 1 }
+        if (ui.tidy.total > 0 && !nested && p.section in setOf(Section.RECENT, Section.ALL, Section.SHELVES)) {
+            item(key = "tidy") {
                 Row(
-                    Modifier.fillMaxWidth().clickable(onClick = actions.duplicates).padding(horizontal = 20.dp).padding(bottom = 12.dp),
+                    Modifier.fillMaxWidth().clickable(onClick = actions.tidy).padding(horizontal = 20.dp).padding(bottom = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(Modifier.size(6.dp).background(Ink.Amber))
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        "${ui.duplicates.size} ${if (ui.duplicates.size == 1) "file is" else "files are"} here more than once ($copies spare ${if (copies == 1) "copy" else "copies"}).",
+                        "Tidy up: ${ui.tidy.total} ${if (ui.tidy.total == 1) "thing" else "things"} to look at" + (if (ui.tidy.duplicates > 0) ", copies among them" else "") + ".",
                         style = Type.small, modifier = Modifier.weight(1f),
                     )
                     Text("Review", style = Type.bodyStrong.copy(color = Ink.Amber))
@@ -235,7 +249,34 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
         when {
             p.section == Section.FOLDERS && !p.inFolder -> {
                 if (ui.folders.isEmpty()) item { EmptyNote("No folders with PDFs yet.") }
-                items(ui.folders, key = { "f:" + (it.path ?: "-") }) { f -> FolderLine(f) { actions.folder(f.path) } }
+                items(ui.folders, key = { "f:" + (it.path ?: "-") }) { f -> FolderLine(f, { actions.folder(f.path) }, if (f.path != null) ({ actions.folderMore(f) }) else null) }
+                item(key = "new-folder") {
+                    Text("New folder", style = Type.bodyStrong.copy(color = Ink.Amber), modifier = Modifier.clickable { actions.newFolder(null) }.padding(horizontal = 20.dp, vertical = 16.dp))
+                }
+            }
+            p.section == Section.FOLDERS && p.inFolder -> {
+                if (ui.crumbs.size > 1) item(key = "crumbs") {
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        ui.crumbs.forEachIndexed { i, (name, path) ->
+                            if (i > 0) Text("  ›  ", style = Type.small)
+                            val last = i == ui.crumbs.lastIndex
+                            Text(name, style = if (last) Type.small.copy(color = Ink.Bone) else Type.small.copy(color = Ink.Amber), modifier = if (last) Modifier else Modifier.clickable { actions.crumb(path) })
+                        }
+                    }
+                }
+                items(ui.folders, key = { "f:" + (it.path ?: "-") }) { f -> FolderLine(f, { actions.folder(f.path) }, { actions.folderMore(f) }) }
+                if (ui.loaded && ui.items.isEmpty() && ui.folders.isEmpty()) item { EmptyNote(emptyText(p)) }
+                items(ui.items, key = { "d:${it.doc.id}" }) { item ->
+                    DocLine(
+                        item, now, thumb(item.doc), showFolder = false, label = label,
+                        onOpen = { if (picking) actions.pickDoc(item.doc) else actions.open(item.doc, null) },
+                        onMore = { actions.more(item.doc) }, onPick = { actions.pickDoc(item.doc) },
+                        picking = picking, picked = item.doc.id in ui.picked,
+                    )
+                }
+                if (p.folder != null) item(key = "new-folder") {
+                    Text("New folder here", style = Type.bodyStrong.copy(color = Ink.Amber), modifier = Modifier.clickable { actions.newFolder(p.folder) }.padding(horizontal = 20.dp, vertical = 16.dp))
+                }
             }
             p.section == Section.SHELVES && p.shelf == null -> {
                 items(ui.shelves, key = { "s:" + it.shelf.name }) { s -> ShelfLine(s) { actions.shelf(s.shelf) } }
@@ -268,7 +309,12 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
             else -> {
                 if (ui.loaded && ui.items.isEmpty()) item { EmptyNote(emptyText(p)) }
                 items(ui.items, key = { "d:${it.doc.id}" }) { item ->
-                    DocLine(item, now, thumb(item.doc), showFolder = p.section != Section.FOLDERS, label = label, onOpen = { actions.open(item.doc, null) }, onMore = { actions.more(item.doc) })
+                    DocLine(
+                        item, now, thumb(item.doc), showFolder = p.section != Section.FOLDERS, label = label,
+                        onOpen = { if (picking) actions.pickDoc(item.doc) else actions.open(item.doc, null) },
+                        onMore = { actions.more(item.doc) }, onPick = { actions.pickDoc(item.doc) },
+                        picking = picking, picked = item.doc.id in ui.picked,
+                    )
                 }
             }
         }
@@ -343,11 +389,23 @@ fun DocLine(
     label: (String?) -> String,
     onOpen: () -> Unit,
     onMore: () -> Unit,
+    /** A long press: picks the file to act on with others. */
+    onPick: (() -> Unit)? = null,
+    picking: Boolean = false,
+    picked: Boolean = false,
 ) {
     val d = item.doc
-    Column(Modifier.fillMaxWidth().combinedClickable(onClick = onOpen, onLongClick = onMore)) {
+    Column(Modifier.fillMaxWidth().background(if (picked) Ink.Field else Ink.Black).combinedClickable(onClick = onOpen, onLongClick = onPick ?: onMore)) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Thumb(d, image)
+            Box {
+                Thumb(d, image)
+                if (picking) Box(
+                    Modifier.align(Alignment.TopEnd).padding(3.dp).size(20.dp)
+                        .background(if (picked) Ink.Amber else Ink.Black.copy(alpha = 0.7f), RoundedCornerShape(50))
+                        .border(1.5.dp, if (picked) Ink.Amber else Ink.Bone, RoundedCornerShape(50)),
+                    contentAlignment = Alignment.Center,
+                ) { if (picked) GlyphIcon(Glyph.CHECK, Ink.Black, size = 14.dp) }
+            }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(LibraryModel.titleOf(d), style = Type.body, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -413,17 +471,19 @@ private fun ShelfLine(s: ShelfRow, onClick: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FolderLine(f: FolderRow, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
-            GlyphIcon(Glyph.FOLDER, Ink.Dust, size = 24.dp)
+private fun FolderLine(f: FolderRow, onClick: () -> Unit, onMore: (() -> Unit)? = null) {
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onMore)) {
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = if (onMore != null) 4.dp else 20.dp, top = 15.dp, bottom = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+            GlyphIcon(Glyph.FOLDER, if (f.pinned) Ink.Amber else Ink.Dust, size = 24.dp)
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
                 Text(f.label.substringAfterLast('/'), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (f.label.contains('/')) Text(f.label.substringBeforeLast('/'), style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text("${f.count}", style = Type.figure)
+            if (onMore != null) IconButton(Glyph.MORE, "More for ${f.label}", onMore, color = Ink.Dust, size = 44.dp)
         }
         Hairline(Modifier.padding(start = 60.dp))
     }
@@ -552,4 +612,23 @@ private fun meta(d: Doc, now: Long, showFolder: Boolean, label: (String?) -> Str
     }
     if (showFolder && !d.inTrash) parts += label(d.folder).substringAfterLast('/')
     return parts.joinToString("  ·  ")
+}
+
+
+/** What can be done with the picked files, in place of Scan and Open while files are picked. */
+@Composable
+private fun PickBar(count: Int, total: Int, actions: LibraryActions) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(if (count == 1) "1 file picked" else "$count files picked", style = Type.bodyStrong, modifier = Modifier.weight(1f))
+            if (count < total) Text("Pick all", style = Type.bodyStrong.copy(color = Ink.Amber), modifier = Modifier.clickable(onClick = actions.pickAll).padding(8.dp))
+            Text("Cancel", style = Type.bodyStrong.copy(color = Ink.Dust), modifier = Modifier.clickable(onClick = actions.clearPicks).padding(8.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for ((label, key) in listOf("Move" to "move", "Tag" to "tag", "Trash" to "trash", "More" to "more")) {
+                GhostButton(label, { actions.many(key) }, Modifier.weight(1f), minHeight = 46.dp)
+            }
+        }
+    }
 }
