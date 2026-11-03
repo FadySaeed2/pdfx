@@ -35,6 +35,21 @@ class TopicMathTest {
         "Depressive symptoms after stroke",
     ).withIndex().associate { (i, t) -> i.toLong() to t }
 
+    @Test fun aTitleNamesTopicsByTheirWordsPluralsAndCapitals() {
+        val ix = com.fadysaeed.pdfx.data.Topics.TitleIndex(com.fadysaeed.pdfx.data.Concepts.all)
+        assertEquals(setOf("Antipsychotics", "Metabolic health"), ix.topicsIn("Antipsychotics and metabolic syndrome"))
+        assertTrue("Bipolar" in ix.topicsIn("Lithium in bipolar disorder"))
+        assertTrue("Lithium" in ix.topicsIn("Lithium in bipolar disorder"))
+        assertTrue("Suicide and self-harm" in ix.topicsIn("Self harm in young people"))
+        assertTrue("Suicide and self-harm" in ix.topicsIn("Deliberate self-harm presentations"))
+        assertTrue("ECT and brain stimulation" in ix.topicsIn("ECT for catatonia"))
+        // Short capitals only as written, never inside a word.
+        assertFalse("ECT and brain stimulation" in ix.topicsIn("The effect of exercise on mood"))
+        assertFalse("ECT and brain stimulation" in ix.topicsIn("Direct elect sect"))
+        assertTrue("Antidepressants" in ix.topicsIn("SSRIs in pregnancy"))
+        assertTrue(ix.topicsIn("Something else entirely").isEmpty())
+    }
+
     @Test fun topicsAreWhatAPersonWouldCallTopics() {
         val found = TopicMath.fromTitles(titles, minDocs = 2, maxShare = 0.5).map { it.label }
         assertTrue(found.toString(), "New Zealand" in found)

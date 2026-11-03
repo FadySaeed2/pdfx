@@ -255,6 +255,31 @@ class LibraryRulesOnDeviceTest {
     }
 
     @Test
+    fun suggestedTagsForABigLibraryComeInSeconds() = runBlocking {
+        val dao = db.dao()
+        val words = com.fadysaeed.pdfx.data.Concepts.all.flatMap { it.terms } + List(3000) { "word$it" }
+        val r = kotlin.random.Random(7)
+        fun line(n: Int) = List(n) { words[r.nextInt(words.size)] }.joinToString(" ")
+        // 4000 files, each with a title and a few pages of words: a library of tons of files.
+        for (i in 0 until 4000) {
+            val id = dao.insert(com.fadysaeed.pdfx.data.Doc(key = "/big/$i.pdf", path = "/big/$i.pdf", uri = "file:///big/$i.pdf", name = "$i.pdf", folder = "/big", size = 1000L + i, modified = 1, pages = 6, title = line(9)))
+            lib.text.replace(id, (0 until 6).map { PageText(it, line(120)) })
+        }
+        val t0 = System.currentTimeMillis()
+        var steps = 0
+        val found = com.fadysaeed.pdfx.data.Topics.suggest(lib, emptySet()) { _, _ -> steps++ }
+        val first = System.currentTimeMillis() - t0
+        val t1 = System.currentTimeMillis()
+        com.fadysaeed.pdfx.data.Topics.suggest(lib, emptySet())
+        val again = System.currentTimeMillis() - t1
+        android.util.Log.i("PDFxTopics", "4000 files: first ${first} ms, again ${again} ms, ${found.size} areas")
+        assertTrue(found.isNotEmpty())
+        assertTrue("it tells how far it is", steps >= com.fadysaeed.pdfx.data.Concepts.all.size)
+        assertTrue("first time $first ms", first < 30_000)
+        assertTrue("again $again ms", again < 5_000)
+    }
+
+    @Test
     fun foldersMoveAndRenameWithTheirFiles() = runBlocking {
         val a = unique("Documents/Papers/Mood/a.pdf", 11)
         unique("Documents/Papers/b.pdf", 12)

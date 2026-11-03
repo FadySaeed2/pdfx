@@ -42,9 +42,11 @@ object TopicMath {
     /** First words of names that are one name with the next word: New Zealand, South Australia, United Kingdom. */
     private val nameStarts = setOf("new", "south", "north", "west", "east", "united", "saint", "st", "hong", "sri", "san", "los", "las")
 
+    private val wordBreak = Regex("[^\\p{L}\\p{N}'’-]+")
+
     /** Words in a title, as they are written; a two-word name ("New Zealand") is one word. */
     fun words(title: String): List<String> {
-        val raw = title.split(Regex("[^\\p{L}\\p{N}'’-]+")).map { it.trim('\'', '’', '-') }.filter { it.isNotBlank() }
+        val raw = title.split(wordBreak).map { it.trim('\'', '’', '-') }.filter { it.isNotBlank() }
         val out = ArrayList<String>()
         var i = 0
         while (i < raw.size) {
@@ -93,11 +95,14 @@ object TopicMath {
         val writings = HashMap<List<String>, HashMap<String, Int>>()
         for ((id, ws) in split) {
             val seen = HashSet<List<String>>()
+            // Each word's family and whether it may be in a topic, worked out once per title.
+            val fam = ws.map { keys[it.lowercase()] ?: it.lowercase() }
+            val good = ws.map(::ok)
             for (n in 1..3) for (i in 0..ws.size - n) {
+                if ((i until i + n).any { !good[it] }) continue
+                if (n == 1 && ws[i].length < 4) continue
                 val gram = ws.subList(i, i + n)
-                if (!gram.all(::ok)) continue
-                if (n == 1 && gram[0].length < 4) continue
-                val k = gram.map { keys[it.lowercase()] ?: it.lowercase() }
+                val k = fam.subList(i, i + n).toList()
                 if (seen.add(k)) {
                     docsOf.getOrPut(k) { HashSet() } += id
                     writings.getOrPut(k) { HashMap() }.merge(gram.joinToString(" "), 1, Int::plus)
@@ -111,21 +116,20 @@ object TopicMath {
         // in "New Zealand"); keep the word when the phrase adds nothing ("Bipolar" and "Bipolar disorder"
         // on the same files).
         val drop = HashSet<List<String>>()
-        for (a in found) for (b in found) {
+        // Only the longer phrases that hold a word of the shorter one are compared with it.
+        val longer = HashMap<String, MutableList<TitleTopic>>()
+        for (b in found) if (b.keys.size > 1) for (k in b.keys.toSet()) longer.getOrPut(k) { ArrayList() } += b
+        for (a in found) for (b in longer[a.keys[0]].orEmpty()) {
             if (a === b || b.keys.size <= a.keys.size || !b.keys.containsAll(a.keys)) continue
-            val outside = a.docs.count { it !in b.docs }
+            val inter = if (a.docs.size <= b.docs.size) a.docs.count { it in b.docs } else b.docs.count { it in a.docs }
+            val outside = a.docs.size - inter
             when {
                 outside <= a.docs.size * 0.2 -> drop += a.keys
-                jaccard(a.docs, b.docs) >= 0.85 -> drop += b.keys
+                inter.toDouble() / (a.docs.size + b.docs.size - inter).coerceAtLeast(1) >= 0.85 -> drop += b.keys
             }
         }
         found = found.filter { it.keys !in drop }
         return found.sortedByDescending { it.docs.size }
-    }
-
-    private fun jaccard(a: Set<Long>, b: Set<Long>): Double {
-        val inter = a.count { it in b }
-        return inter.toDouble() / (a.size + b.size - inter).coerceAtLeast(1)
     }
 
     /** The way a topic is most often written, capitals kept ("ADHD", "New Zealand"), else the first letter raised. */
@@ -156,9 +160,50 @@ object Topics {
         "\"" + t.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotBlank() }.joinToString(" ") + "\""
     }.filter { it.length > 2 }.distinct().joinToString(" OR ")
 
-    private fun titleHas(title: String, terms: List<String>): Boolean = terms.any { t ->
-        Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(t) + "(s|es)?(?![\\p{L}\\p{N}])", if (t.length <= 4 && t.uppercase() == t) setOf() else setOf(RegexOption.IGNORE_CASE)).containsMatchIn(title)
+    /**
+     * Which topics a title names, looked up word by word rather than searched for: every topic word
+     * ("bipolar disorder", "self-harm", "SSRI") is filed under its first word, so a title is read once
+     * whatever the number of topics. Plurals count ("antipsychotics"); short capitals ("ECT", "MDD")
+     * count only as written, so "ect" inside a word or in small letters never does.
+     */
+    internal class TitleIndex(concepts: List<Concept>) {
+        private class Term(val concept: String, val words: List<String>, val caps: String?)
+        private val byFirst = HashMap<String, MutableList<Term>>()
+
+        init {
+            for (c in concepts) for (t in c.terms) {
+                val ws = split(t.lowercase())
+                if (ws.isEmpty()) continue
+                val caps = t.takeIf { it.length <= 4 && it.uppercase() == it && ws.size == 1 }
+                byFirst.getOrPut(ws[0]) { ArrayList() } += Term(c.name, ws, caps)
+            }
+        }
+
+        private fun split(s: String) = s.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
+
+        private fun same(word: String, want: String, last: Boolean) =
+            word == want || (last && (word == want + "s" || word == want + "es"))
+
+        fun topicsIn(title: String): Set<String> {
+            val written = split(title)
+            val ws = written.map { it.lowercase() }
+            val out = HashSet<String>()
+            for (i in ws.indices) {
+                val w = ws[i]
+                val cands = byFirst[w].orEmpty() + byFirst[w.removeSuffix("s")].orEmpty() + byFirst[w.removeSuffix("es")].orEmpty()
+                for (t in cands) {
+                    if (t.concept in out || i + t.words.size > ws.size) continue
+                    val ok = t.words.indices.all { k -> same(ws[i + k], t.words[k], k == t.words.size - 1) }
+                    if (!ok) continue
+                    if (t.caps != null && !written[i].startsWith(t.caps)) continue
+                    out += t.concept
+                }
+            }
+            return out
+        }
     }
+
+    private val titleIndex by lazy { TitleIndex(Concepts.all) }
 
     /** Pages per file for each topic, kept until any file's words change ([TextIndex.version]). */
     private var cache: Triple<TextIndex, Long, Map<String, Map<Long, Int>>>? = null
@@ -182,13 +227,15 @@ object Topics {
             hits[c.name] = kept?.get(c.name) ?: lib.text.pagesMatching(ftsQuery(c.terms), raw = true)
         }
         cache = Triple(lib.text, v, hits)
+        progress(1f, "the topics in your titles")
+        // The topics each title names, each title read once.
+        val named = docs.associate { d -> d.id to titleIndex.topicsIn(d.title ?: d.name.removeSuffix(".pdf")) }
         // How strongly each file is about each topic.
         val strength = HashMap<Long, MutableList<Pair<Concept, Double>>>()
         for (c in Concepts.all) {
             val pages = hits[c.name].orEmpty()
             for (d in docs) {
-                val title = d.title ?: d.name.removeSuffix(".pdf")
-                val inTitle = titleHas(title, c.terms)
+                val inTitle = c.name in named.getValue(d.id)
                 val hit = pages[d.id] ?: 0
                 val n = d.pages.coerceAtLeast(1)
                 val share = hit.toDouble() / n
@@ -219,9 +266,9 @@ object Topics {
         // Topics in the titles that the vocabulary does not cover.
         val titles = docs.mapNotNull { d -> d.title?.let { d.id to it } }.toMap()
         val known = Concepts.all.flatMap { c -> c.terms.map { it.lowercase() } }.toSet()
-        val extra = TopicMath.fromTitles(titles).filter { t ->
+        val extra = TopicMath.fromTitles(titles).asSequence().filter { t ->
             t.label.lowercase() !in have && t.label.lowercase() !in known && t.keys.none { k -> known.any { it.startsWith(k) || k.startsWith(it) } }
-        }.take(20).map { TopicSuggestion(it.label, it.docs.toList(), example(it.docs.toList())) }
+        }.take(20).toList().map { TopicSuggestion(it.label, it.docs.toList(), example(it.docs.toList())) }
         if (extra.isNotEmpty()) groups += TopicGroup("Other topics in your titles", emptyList(), extra)
         groups.sortedByDescending { g -> g.topics.sumOf { it.docIds.size } }.sortedBy { it.area == "Other topics in your titles" }
     }
