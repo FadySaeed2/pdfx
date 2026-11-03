@@ -115,6 +115,8 @@ class RedactOnDeviceTest {
                 val img = d.loadImage(o)
                 val pix = img.toPixmap()
                 val n = pix.numberOfComponents
+                // The PNG's see-through mask is a picture of its own, in grey: only the colour one counts.
+                if (n < 3) { pix.destroy(); img.destroy(); continue }
                 fun at(x: Int, y: Int): Triple<Int, Int, Int> {
                     val k = y * pix.stride + x * n
                     val sm = pix.samples
