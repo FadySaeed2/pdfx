@@ -217,6 +217,11 @@ fun ViewerScreen(
     /** Reading the words on pages that are pictures: busy, and what it is doing or found. */
     var readBusy by remember(request) { mutableStateOf(false) }
     var readNote by remember(request) { mutableStateOf<String?>(null) }
+    /** Make smaller, password and hidden details: what they show while open. */
+    val shrinkUi = remember(request) { com.fadysaeed.pdfx.ui.tools.ShrinkUi() }
+    var toolBusy by remember(request) { mutableStateOf(false) }
+    var toolNote by remember(request) { mutableStateOf<String?>(null) }
+    var details by remember(request) { mutableStateOf<List<Pair<String, String>>?>(null) }
     var organizing by remember(request) { mutableStateOf(false) }
     var leavePages by remember(request) { mutableStateOf(false) }
     var signedPages by remember(request) { mutableStateOf(false) }
@@ -351,6 +356,9 @@ fun ViewerScreen(
                 // The tools read the file on the phone, so changes not yet saved go into it first.
                 if (session.dirty) { wantTool = t; saveAndReopen(null); return }
                 trimNote = if (t == "trim" && reader.docSignatures.isNotEmpty()) "This file is signed: trimming counts as a change after signing." else null
+                toolNote = if ((t == "password" || t == "details") && reader.docSignatures.isNotEmpty()) "This file is signed: the new file no longer carries valid signatures." else null
+                if (t == "shrink") shrinkUi.apply { made?.delete(); made = null; note = null; before = 0L }
+                if (t == "details") details = null
                 tool = t
             }
             fun trim(same: Boolean) {
@@ -425,6 +433,94 @@ fun ViewerScreen(
                     saveAndReopen(if (n == 1) "Words read on 1 page: you can search, copy and highlight them now." else "Words read on $n pages: you can search, copy and highlight them now.")
                 }
             }
+            /**
+             * Keeps a file a tool writes from this one: as a new file beside it, which then opens, or
+             * over it (its old state stays in Versions), carrying on from it with [passwordAfter].
+             */
+            fun keepMade(
+                asNew: Boolean, suffix: String, message: String, passwordAfter: String?,
+                after: () -> Unit, make: (base: String, out: java.io.File) -> Int,
+            ) {
+                scope.launch {
+                    val base = runCatching { basePath() }.getOrElse { after(); toolNote = it.message ?: "The file could not be read."; return@launch }
+                    if (asNew) {
+                        val r = app.saver.create(doc, "$name ($suffix)") { out -> make(base, out) }
+                        after()
+                        r.fold({ made ->
+                            tool = null
+                            val path = made.path
+                            if (path != null) onOpenOther(Uri.fromFile(java.io.File(path)))
+                            else reader.problem = "$message Saved as ${made.name.removeSuffix(".pdf")}."
+                        }) { toolNote = it.message ?: "The file could not be saved." }
+                    } else {
+                        val r = app.saver.replace(doc, request.uri) { out -> make(base, out) }
+                        after()
+                        r.fold({ saved ->
+                            tool = null
+                            password = passwordAfter
+                            reopen(saved, message, "This file belongs to another app, so the new one is in Documents/PDFx.", keepPlace = true)
+                        }) { toolNote = it.message ?: "The file could not be saved." }
+                    }
+                }
+            }
+            fun shrinkTry() {
+                val ui = shrinkUi
+                if (ui.busy) return
+                ui.busy = true
+                ui.note = null
+                val level = ui.level
+                scope.launch {
+                    val r = runCatching {
+                        val base = basePath()
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            val dir = java.io.File(context.cacheDir, "shrink").also { it.deleteRecursively(); it.mkdirs() }
+                            val out = java.io.File(dir, "try-${System.nanoTime()}.pdf")
+                            com.fadysaeed.pdfx.engine.Shrink.write(base, out.absolutePath, level, password)
+                            out
+                        }
+                    }
+                    ui.busy = false
+                    r.fold({ f -> ui.made?.delete(); ui.made = f; ui.after = f.length() }) { ui.note = it.message ?: "The file could not be made smaller." }
+                }
+            }
+            fun shrinkKeep() {
+                val ui = shrinkUi
+                val f = ui.made ?: return
+                if (ui.busy) return
+                ui.busy = true
+                val pages = session.pageCount
+                keepMade(
+                    ui.asNew, "smaller", "Made smaller: ${com.fadysaeed.pdfx.ui.tools.sizeText(ui.before)} → ${com.fadysaeed.pdfx.ui.tools.sizeText(ui.after)}.",
+                    password, after = { ui.busy = false },
+                ) { _, out -> f.copyTo(out, overwrite = true); pages }
+            }
+            fun lockWith(newPassword: String, asNew: Boolean) {
+                if (toolBusy) return
+                toolBusy = true
+                toolNote = null
+                val old = password
+                keepMade(asNew, "locked", "Locked with a password.", newPassword, after = { toolBusy = false }) { base, out ->
+                    com.fadysaeed.pdfx.engine.Secure.protect(base, out.absolutePath, newPassword, old)
+                }
+            }
+            fun unlockFile(asNew: Boolean) {
+                val old = password ?: return
+                if (toolBusy) return
+                toolBusy = true
+                toolNote = null
+                keepMade(asNew, "unlocked", "Password taken off.", null, after = { toolBusy = false }) { base, out ->
+                    com.fadysaeed.pdfx.engine.Secure.unprotect(base, out.absolutePath, old)
+                }
+            }
+            fun scrubDetails(asNew: Boolean) {
+                if (toolBusy) return
+                toolBusy = true
+                toolNote = null
+                val pw = password
+                keepMade(asNew, "clean", "Hidden details removed.", pw, after = { toolBusy = false }) { base, out ->
+                    com.fadysaeed.pdfx.engine.Secure.scrub(base, out.absolutePath, pw)
+                }
+            }
             fun closePages() {
                 organizer?.close(); organizer = null
                 leavePages = false
@@ -488,6 +584,7 @@ fun ViewerScreen(
                 reader.saveNow = { msg -> saveAndReopen(msg) }
                 reader.openPages = ::openPages
                 reader.openTool = ::openTool
+                reader.hasPassword = password != null
                 onReader?.invoke(reader) { centreItem(listState) }
             }
             LaunchedEffect(reader) {
@@ -519,6 +616,28 @@ fun ViewerScreen(
             )
             when (tool) {
                 "trim" -> com.fadysaeed.pdfx.ui.tools.TrimDialog(hasTrims, trimBusy, trimNote, onDismiss = { tool = null }, onTrim = ::trim, onRestore = ::untrim)
+                "shrink" -> {
+                    LaunchedEffect(Unit) {
+                        shrinkUi.before = runCatching { val b = basePath(); java.io.File(b).length() }.getOrDefault(0L)
+                    }
+                    com.fadysaeed.pdfx.ui.tools.ShrinkDialog(
+                        shrinkUi, signed = reader.docSignatures.isNotEmpty(), onTry = ::shrinkTry, onKeep = ::shrinkKeep,
+                        onDismiss = { tool = null; shrinkUi.made?.delete(); shrinkUi.made = null },
+                    )
+                }
+                "password" -> com.fadysaeed.pdfx.ui.tools.PasswordDialog(
+                    hasPassword = password != null, busy = toolBusy, note = toolNote,
+                    onLock = ::lockWith, onRemove = ::unlockFile, onDismiss = { tool = null },
+                )
+                "details" -> {
+                    LaunchedEffect(Unit) {
+                        details = runCatching {
+                            val b = basePath()
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.fadysaeed.pdfx.engine.Secure.details(b, password) }
+                        }.getOrElse { toolNote = it.message ?: "The file could not be read."; emptyList() }
+                    }
+                    com.fadysaeed.pdfx.ui.tools.DetailsDialog(details, toolBusy, toolNote, onRemove = ::scrubDetails, onDismiss = { tool = null })
+                }
                 "read" -> com.fadysaeed.pdfx.ui.tools.ReadDialog(readBusy, readNote, onDismiss = { if (!readBusy) { tool = null; readNote = null } }, onRead = ::readWords)
                 "split" -> doc?.let { d ->
                     com.fadysaeed.pdfx.ui.tools.SplitDialog(d, onDismiss = { tool = null }) { made ->
@@ -620,7 +739,7 @@ fun ViewerScreen(
     }
 }
 
-private enum class ViewerSheet { CONTENTS, DISPLAY, MORE }
+private enum class ViewerSheet { CONTENTS, DISPLAY, MORE, TOOLS }
 
 /** The reader: pages or reflowed text, with its bars, search, selection, contents and display menus. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -913,15 +1032,15 @@ fun ViewerContent(
             dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 6.dp).width(36.dp).height(3.dp).background(Ink.Edge)) },
         ) {
             Column(Modifier.windowInsetsPadding(WindowInsets.navigationBars).padding(bottom = 8.dp)) {
+                // Close the sheet first, then open what was picked: a screen opened while the
+                // sheet is still being taken down can upset the composition.
+                fun then(action: () -> Unit) {
+                    scope.launch { state.hide() }.invokeOnCompletion { sheet = null; action() }
+                }
                 when (open) {
                     ViewerSheet.CONTENTS -> ContentsSheetOnTab(reader, null, current, name) { p, y -> sheet = null; reader.go(p, y) }
                     ViewerSheet.DISPLAY -> DisplaySheet(reader, onFlatten = { sheet = null; askFlatten = true }, onReflow = ::toggleReflow)
                     ViewerSheet.MORE -> {
-                        // Close the sheet first, then open what was picked: a screen opened while the
-                        // sheet is still being taken down can upset the composition.
-                        fun then(action: () -> Unit) {
-                            scope.launch { state.hide() }.invokeOnCompletion { sheet = null; action() }
-                        }
                         val marked = current in reader.bookmarks
                         SheetRow(
                             if (marked) Glyph.BOOKMARK_FILLED else Glyph.BOOKMARK,
@@ -931,11 +1050,17 @@ fun ViewerContent(
                         )
                         SheetRow(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS })
                         if (reader.canMark && !reader.reflow) SheetRow(Glyph.GRID, "Pages", { then { reader.openPages?.invoke() } }, note = "Put them in order, turn, add or take out, or save some as a new file")
-                        if (reader.canMark && !reader.reflow) SheetRow(Glyph.PAGE, "Trim white margins", { then { reader.openTool?.invoke("trim") } }, note = "Bigger words on a phone; whole pages can come back")
-                        if (reader.canMark && !reader.reflow) SheetRow(Glyph.SEARCH, "Make searchable", { then { reader.openTool?.invoke("read") } }, note = "Reads the words on scanned pages, on the phone")
-                        if (reader.canMark) SheetRow(Glyph.GRID, "Split into files…", { then { reader.openTool?.invoke("split") } })
-                        if (reader.canMark) SheetRow(Glyph.PLUS, "Merge with other files…", { then { reader.openTool?.invoke("merge") } })
+                        if (reader.canMark) SheetRow(Glyph.LOCK, "File tools", { sheet = ViewerSheet.TOOLS }, note = "Searchable, smaller, password, hidden details, trim, split, merge")
                         SheetRow(Glyph.MOON, "Page colours and reading mode", { sheet = ViewerSheet.DISPLAY })
+                    }
+                    ViewerSheet.TOOLS -> {
+                        if (!reader.reflow) SheetRow(Glyph.SEARCH, "Make searchable", { then { reader.openTool?.invoke("read") } }, note = "Reads the words on scanned pages, on the phone")
+                        SheetRow(Glyph.DOWN, "Make smaller", { then { reader.openTool?.invoke("shrink") } }, note = "Shows the size before and after")
+                        SheetRow(Glyph.LOCK, if (reader.hasPassword) "Password" else "Lock with a password", { then { reader.openTool?.invoke("password") } }, note = if (reader.hasPassword) "Change it or take it off" else "AES-256; it opens only with the password")
+                        SheetRow(Glyph.TRASH, "Remove hidden details", { then { reader.openTool?.invoke("details") } }, note = "Author, programs, dates and editing history")
+                        if (!reader.reflow) SheetRow(Glyph.PAGE, "Trim white margins", { then { reader.openTool?.invoke("trim") } }, note = "Bigger words on a phone; whole pages can come back")
+                        SheetRow(Glyph.GRID, "Split into files…", { then { reader.openTool?.invoke("split") } })
+                        SheetRow(Glyph.PLUS, "Merge with other files…", { then { reader.openTool?.invoke("merge") } })
                     }
                 }
             }

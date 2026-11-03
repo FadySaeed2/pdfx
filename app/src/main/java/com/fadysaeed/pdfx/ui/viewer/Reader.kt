@@ -556,6 +556,8 @@ class Reader(
     var openPages: (() -> Unit)? = null
     /** Opens one of the file tools ("trim", "split", "merge"). Set by the viewer. */
     var openTool: ((String) -> Unit)? = null
+    /** Whether the open file needed a password to open. Set by the viewer. */
+    var hasPassword by mutableStateOf(false)
 
     val cert: com.fadysaeed.pdfx.data.SavedCert? get() = certs.firstOrNull { it.id == certId } ?: certs.firstOrNull()
 

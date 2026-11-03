@@ -393,3 +393,151 @@ fun ReadDialog(busy: Boolean, progress: String?, onDismiss: () -> Unit, onRead: 
         dismissButton = { GhostButton(if (busy) "Wait" else "Cancel", onDismiss, minHeight = 52.dp) },
     )
 }
+
+/** "12.4 MB", "830 KB". */
+fun sizeText(bytes: Long): String = com.fadysaeed.pdfx.ui.library.humanSize(bytes)
+
+/** Where a changed file goes: over this one (its old state stays in Versions) or beside it as a new file. */
+@Composable
+private fun SaveChoice(asNew: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
+    Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Chip("New file beside it", { if (enabled) onChange(true) }, selected = asNew)
+        Chip("Replace this file", { if (enabled) onChange(false) }, selected = !asNew)
+    }
+}
+
+/** What Make smaller shows: the level, and once tried, the sizes before and after. */
+class ShrinkUi {
+    var level by mutableStateOf(com.fadysaeed.pdfx.engine.Shrink.Level.BALANCED)
+    var busy by mutableStateOf(false)
+    var note by mutableStateOf<String?>(null)
+    var before by mutableStateOf(0L)
+    /** The smaller file, made but not yet kept, and its size. */
+    var made by mutableStateOf<File?>(null)
+    var after by mutableStateOf(0L)
+    var asNew by mutableStateOf(true)
+}
+
+@Composable
+fun ShrinkDialog(ui: ShrinkUi, signed: Boolean, onTry: () -> Unit, onKeep: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = { if (!ui.busy) onDismiss() },
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text("Make smaller", style = Type.title) },
+        text = { ShrinkBody(ui, signed) },
+        confirmButton = {
+            val ready = ui.made != null && ui.after < ui.before
+            AmberButton(
+                when { ui.busy -> "Working…"; ready -> "Keep it"; else -> "Make smaller" },
+                { if (ready) onKeep() else onTry() },
+                enabled = !ui.busy,
+            )
+        },
+        dismissButton = { GhostButton("Cancel", { if (!ui.busy) onDismiss() }, minHeight = 52.dp) },
+    )
+}
+
+@Composable
+internal fun ShrinkBody(ui: ShrinkUi, signed: Boolean) {
+    Column(Modifier.verticalScroll(rememberScrollState())) {
+        Text(if (ui.before > 0) "Now ${sizeText(ui.before)}." else "Measuring…", style = Type.bodyStrong)
+        Row(Modifier.padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (l in com.fadysaeed.pdfx.engine.Shrink.Level.entries)
+                Chip(l.label, { if (!ui.busy) { ui.level = l; ui.made?.delete(); ui.made = null } }, selected = ui.level == l)
+        }
+        Text(
+            when (ui.level) {
+                com.fadysaeed.pdfx.engine.Shrink.Level.TIDY -> "Writes the file again without waste. Nothing on the pages changes."
+                com.fadysaeed.pdfx.engine.Shrink.Level.BALANCED -> "Also makes big pictures and scans lighter. Still sharp on a phone and when printed."
+                com.fadysaeed.pdfx.engine.Shrink.Level.SMALLEST -> "Pictures and scans much lighter. Fine for reading on a screen; print may look soft."
+            },
+            style = Type.note,
+        )
+        ui.made?.let {
+            val saved = ui.before - ui.after
+            Text(
+                if (saved > 0) "${sizeText(ui.before)} → ${sizeText(ui.after)}, ${(saved * 100 / ui.before.coerceAtLeast(1))}% smaller."
+                else "This file is already as small as this level makes it.",
+                style = Type.bodyStrong.copy(color = if (saved > 0) Ink.Amber else Ink.Bone),
+                modifier = Modifier.padding(top = 14.dp),
+            )
+            if (saved > 0) SaveChoice(ui.asNew, { ui.asNew = it }, enabled = !ui.busy)
+        }
+        if (signed) Text("This file is signed: a smaller copy no longer carries valid signatures.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
+        ui.note?.let { Text(it, style = Type.small, modifier = Modifier.padding(top = 10.dp)) }
+    }
+}
+
+@Composable
+fun PasswordDialog(
+    hasPassword: Boolean, busy: Boolean, note: String?,
+    onLock: (password: String, asNew: Boolean) -> Unit, onRemove: (asNew: Boolean) -> Unit, onDismiss: () -> Unit,
+) {
+    var first by remember { mutableStateOf("") }
+    var second by remember { mutableStateOf("") }
+    var asNew by remember { mutableStateOf(!hasPassword) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    fun lock() {
+        problem = com.fadysaeed.pdfx.engine.Secure.problem(first) ?: if (first != second) "The two passwords are not the same." else null
+        if (problem == null) onLock(first, asNew)
+    }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text(if (hasPassword) "Password" else "Lock with a password", style = Type.title) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    (if (hasPassword) "Give it a new password, or take the password off. " else "") +
+                        "Locked with AES-256: any PDF reader asks for the password, and without it nobody can open the file. There is no way back in if it is forgotten.",
+                    style = Type.note,
+                )
+                InkField(first, { first = it; problem = null }, "Password", modifier = Modifier.padding(top = 14.dp), label = if (hasPassword) "New password" else "Password", secret = true)
+                InkField(second, { second = it; problem = null }, "The same again", modifier = Modifier.padding(top = 10.dp), label = "Once more", secret = true, onDone = ::lock)
+                SaveChoice(asNew, { asNew = it }, enabled = !busy)
+                if (hasPassword && !busy) Text(
+                    "Take the password off", style = Type.bodyStrong.copy(color = Ink.Amber),
+                    modifier = Modifier.padding(top = 14.dp).clickable { onRemove(asNew) }.padding(vertical = 6.dp),
+                )
+                (problem ?: note)?.let { Text(it, style = Type.small, modifier = Modifier.padding(top = 10.dp)) }
+            }
+        },
+        confirmButton = { AmberButton(if (busy) "Working…" else "Lock", ::lock, enabled = !busy) },
+        dismissButton = { GhostButton("Cancel", { if (!busy) onDismiss() }, minHeight = 52.dp) },
+    )
+}
+
+@Composable
+fun DetailsDialog(details: List<Pair<String, String>>?, busy: Boolean, note: String?, onRemove: (asNew: Boolean) -> Unit, onDismiss: () -> Unit) {
+    var asNew by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text("Remove hidden details", style = Type.title) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                when {
+                    details == null -> Text("Looking…", style = Type.note)
+                    details.isEmpty() -> Text("This file carries no hidden details about who made it or with what.", style = Type.note)
+                    else -> {
+                        Text("Anyone you send the file to can see these:", style = Type.note)
+                        for ((k, v) in details) Column(Modifier.padding(top = 10.dp)) {
+                            Text(k, style = Type.small)
+                            Text(v, style = Type.body, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        }
+                        SaveChoice(asNew, { asNew = it }, enabled = !busy)
+                    }
+                }
+                note?.let { Text(it, style = Type.small, modifier = Modifier.padding(top = 10.dp)) }
+            }
+        },
+        confirmButton = {
+            if (!details.isNullOrEmpty()) AmberButton(if (busy) "Removing…" else "Remove them", { onRemove(asNew) }, enabled = !busy)
+            else GhostButton("Close", onDismiss, minHeight = 52.dp)
+        },
+        dismissButton = { if (!details.isNullOrEmpty()) GhostButton("Cancel", { if (!busy) onDismiss() }, minHeight = 52.dp) },
+    )
+}

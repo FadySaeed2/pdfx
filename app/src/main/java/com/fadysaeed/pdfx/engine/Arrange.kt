@@ -150,7 +150,7 @@ object Arranger {
 
     class Result(val pages: Int, val skippedFiles: List<String>)
 
-    private fun open(path: String, password: String?): PDFDocument {
+    internal fun open(path: String, password: String?): PDFDocument {
         val doc = Document.openDocument(path)
         val pdf = doc.asPDF() ?: run { doc.destroy(); throw IllegalArgumentException("Not a PDF file.") }
         if (pdf.needsPassword() && (password == null || !pdf.authenticatePassword(password))) {

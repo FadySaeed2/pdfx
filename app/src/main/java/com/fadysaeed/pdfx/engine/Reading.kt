@@ -14,7 +14,7 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 /**
  * Reads the words on pictures of pages, on the phone. Google's text reader (ML Kit, its English
  * and Latin model built into the app) was chosen over Tesseract by measuring both on the same
- * scanned and photographed pages (OcrEvalOnDeviceTest): as many words found, fewer wrong ones on
+ * scanned and photographed pages (PLAN.md, 2026-11-03): as many words found, fewer wrong ones on
  * photos and tables. Nothing is sent anywhere; the app has no internet permission.
  */
 object Reading {

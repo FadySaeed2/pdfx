@@ -503,6 +503,21 @@ class ScreensTest {
     }
 
     @Test
+    fun shrinkResult() {
+        val ui = com.fadysaeed.pdfx.ui.tools.ShrinkUi().apply {
+            before = 12_400_000L; after = 3_100_000L; made = java.io.File("made.pdf")
+        }
+        compose.setContent {
+            PdfxTheme {
+                androidx.compose.foundation.layout.Box(Modifier.background(Ink.Field).padding(24.dp)) {
+                    com.fadysaeed.pdfx.ui.tools.ShrinkBody(ui, signed = false)
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/43_shrink.png")
+    }
+
+    @Test
     fun signaturesList() {
         compose.setContent {
             PdfxTheme {

@@ -6,6 +6,8 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -102,6 +104,45 @@ class ViewerOnDeviceTest {
             val t = p.toStructuredText().asText()
             p.destroy()
             assertTrue("page 2 is now chapter 3: $t", t.contains("marker-3"))
+        } finally {
+            d.destroy()
+        }
+    }
+
+    @Test
+    fun fileToolsLockTheFileWithAPassword() {
+        val f = File(ctx.cacheDir, "Locked-${System.nanoTime()}.pdf")
+        InstrumentationRegistry.getInstrumentation().context.assets.open("organise.pdf").use { i -> f.outputStream().use { i.copyTo(it) } }
+        var reader: Reader? = null
+        compose.setContent {
+            PdfxTheme { ViewerScreen(OpenRequest(Uri.fromFile(f), page = 0), onReader = { r, _ -> reader = r }) {} }
+        }
+        compose.waitUntil(15_000) { reader?.pages?.aspects?.size == 6 }
+        compose.waitForIdle()
+        val first = reader!!
+        compose.onNode(SemanticsMatcher("opens more") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull()?.startsWith("More:") == true }).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("File tools").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("File tools").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Lock with a password").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "file_tools.png")
+        compose.onNodeWithText("Lock with a password").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Once more").fetchSemanticsNodes().isNotEmpty() }
+        val pw = "Clozapine, 400"
+        compose.onNodeWithContentDescription("Password").performTextInput(pw)
+        compose.onNodeWithContentDescription("Once more").performTextInput(pw)
+        compose.onNodeWithText("Replace this file").performClick()
+        compose.waitForIdle()
+        save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "password_dialog.png")
+        compose.onNodeWithText("Lock").performClick()
+        compose.waitUntil(20_000) { reader !== first && reader?.pages?.aspects?.size == 6 }
+        compose.waitForIdle()
+        assertTrue("the file stays open after locking", reader?.hasPassword == true)
+        val d = com.artifex.mupdf.fitz.Document.openDocument(f.absolutePath)
+        try {
+            assertTrue("the file now asks for its password", d.needsPassword())
+            assertTrue(d.authenticatePassword(pw))
+            assertEquals(6, d.countPages())
         } finally {
             d.destroy()
         }
