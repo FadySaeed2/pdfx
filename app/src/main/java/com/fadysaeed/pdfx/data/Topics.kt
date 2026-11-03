@@ -175,11 +175,11 @@ object Topics {
         val byId = docs.associateBy { it.id }
         val have = existing.map { it.lowercase() }.toSet()
         val v = lib.text.version
-        val known = cache?.takeIf { it.first === lib.text && it.second == v }?.third
+        val kept = cache?.takeIf { it.first === lib.text && it.second == v }?.third
         val hits = HashMap<String, Map<Long, Int>>()
         for ((k, c) in Concepts.all.withIndex()) {
             progress(0.5f + 0.5f * k / Concepts.all.size, c.name)
-            hits[c.name] = known?.get(c.name) ?: lib.text.pagesMatching(ftsQuery(c.terms), raw = true)
+            hits[c.name] = kept?.get(c.name) ?: lib.text.pagesMatching(ftsQuery(c.terms), raw = true)
         }
         cache = Triple(lib.text, v, hits)
         // How strongly each file is about each topic.
