@@ -9,3 +9,4 @@ local.properties
 *.p12
 signing/*.properties
 !app/src/androidTest/assets/doctor.p12
+app/src/androidTest/assets/tessdata/

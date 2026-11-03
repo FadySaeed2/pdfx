@@ -124,6 +124,9 @@ dependencies {
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    // Two OCR engines side by side on the same scanned pages, to choose the one that reads best.
+    androidTestImplementation("com.google.mlkit:text-recognition:16.0.1")
+    androidTestImplementation("cz.adaptech.tesseract4android:tesseract4android:4.9.0")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }

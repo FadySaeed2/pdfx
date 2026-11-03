@@ -15,6 +15,10 @@ dependencyResolutionManagement {
         maven("https://maven.ghostscript.com/") {
             content { includeGroup("com.artifex.mupdf") }
         }
+        // Tesseract for Android (the open-source OCR engine), only to compare it with Google's on test pages.
+        maven("https://jitpack.io") {
+            content { includeGroup("cz.adaptech.tesseract4android") }
+        }
     }
 }
 
