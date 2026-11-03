@@ -134,9 +134,10 @@ class Saver(private val library: Library) {
      * Writes a new file named [name] beside the document (or in Documents/PDFx when its folder
      * cannot take it) and adds it to the library. [make] writes it and returns its page count.
      */
-    suspend fun create(doc: Doc?, name: String, make: (File) -> Int): Result<Doc> = withContext(Dispatchers.IO) {
+    suspend fun create(doc: Doc?, name: String, into: File? = null, make: (File) -> Int): Result<Doc> = withContext(Dispatchers.IO) {
         runCatching {
-            val here = doc?.path?.let(::File)?.parentFile?.takeIf { it.isDirectory && it.canWrite() && doc.inTrash.not() }
+            val here = into?.also { it.mkdirs() }?.takeIf { it.isDirectory && it.canWrite() }
+                ?: doc?.path?.let(::File)?.parentFile?.takeIf { it.isDirectory && it.canWrite() && doc.inTrash.not() }
             val dir = here ?: library.homeDir.also { it.mkdirs() }
             val out = Library.uniqueTarget(dir, if (name.endsWith(".pdf", true)) name else "$name.pdf")
             val tmp = File(dir, ".${out.name}.pdfx-saving")

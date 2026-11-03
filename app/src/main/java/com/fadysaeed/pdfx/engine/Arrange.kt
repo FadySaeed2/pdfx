@@ -135,6 +135,19 @@ object Arranger {
         }
     }
 
+    /** A new file of [pictures] (JPEG or PNG, already upright), one to a page, fitted to A4. Returns the page count. */
+    fun fromPictures(pictures: List<String>, out: String): Int {
+        require(pictures.isNotEmpty()) { "No pictures to make a file from." }
+        val d = PDFDocument()
+        try {
+            for (p in pictures) addPicture(d, p)
+            d.save(out, "garbage=compact")
+            return d.countPages()
+        } finally {
+            runCatching { d.destroy() }
+        }
+    }
+
     class Result(val pages: Int, val skippedFiles: List<String>)
 
     private fun open(path: String, password: String?): PDFDocument {

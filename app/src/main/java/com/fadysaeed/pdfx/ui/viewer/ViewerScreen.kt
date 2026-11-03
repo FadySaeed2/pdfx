@@ -416,7 +416,7 @@ fun ViewerScreen(
                     val base = runCatching { basePath() }.getOrElse { organizing = false; o.note = it.message ?: "The file could not be read."; return@launch }
                     val make: (java.io.File) -> Int = { out -> com.fadysaeed.pdfx.engine.Arranger.write(base, items, out.absolutePath, password).pages }
                     if (asNewFile) {
-                        val r = app.saver.create(doc, "$name (pages)", make)
+                        val r = app.saver.create(doc, "$name (pages)", make = make)
                         organizing = false
                         r.fold({ made ->
                             closePages()
@@ -524,6 +524,13 @@ fun ViewerScreen(
                         o.note = if (paths.size == 1) "1 photo added" else "${paths.size} photos added"
                     }
                 }
+                val scanPages = com.fadysaeed.pdfx.ui.tools.rememberScanner(
+                    onPages = { files ->
+                        o.insert(files.map { com.fadysaeed.pdfx.engine.PageItem(com.fadysaeed.pdfx.engine.PageSource.PICTURE, path = it.absolutePath) })
+                        o.note = if (files.size == 1) "1 scanned page added" else "${files.size} scanned pages added"
+                    },
+                    onProblem = { o.note = it },
+                )
                 BackHandler { if (o.changed) leavePages = true else closePages() }
                 Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { } }) {
                     PagesScreen(
@@ -533,6 +540,7 @@ fun ViewerScreen(
                         onExtract = ::extractPages,
                         onAddBlank = { scope.launch { val (w, h) = o.blankSize(); o.insert(listOf(com.fadysaeed.pdfx.engine.PageItem(com.fadysaeed.pdfx.engine.PageSource.BLANK, width = w, height = h))) } },
                         onAddPdf = { pickPdf.launch(arrayOf("application/pdf")) },
+                        onAddScan = scanPages,
                         onAddPictures = { pickPhotos.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     )
                 }

@@ -252,4 +252,35 @@ class ArrangeOnDeviceTest {
             again.close()
         }
     }
+
+    @Test
+    fun scannedPagesBecomeAFile() {
+        // Pages as the scanner hands them over: JPEGs, two upright A4 sheets and one wider receipt.
+        fun page(w: Int, h: Int, label: String): String {
+            val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val c = Canvas(b)
+            c.drawColor(Color.WHITE)
+            c.drawText(label, w * 0.1f, h * 0.2f, Paint().apply { color = Color.BLACK; textSize = w / 14f })
+            val f = File(ctx.cacheDir, "scan-$label.jpg")
+            f.outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+            return f.absolutePath
+        }
+        val out = File(shots, "scanned.pdf")
+        val n = Arranger.fromPictures(listOf(page(1240, 1754, "one"), page(1240, 1754, "two"), page(1600, 900, "wide")), out.absolutePath)
+        assertEquals(3, n)
+        val d = Document.openDocument(out.absolutePath)
+        try {
+            assertEquals(3, d.countPages())
+            val a4 = d.loadPage(0).let { p -> val b = p.bounds; p.destroy(); b }
+            assertEquals(842f, a4.y1 - a4.y0, 1f)
+            assertEquals(595f, a4.x1 - a4.x0, 2f)
+            val wide = d.loadPage(2).let { p -> val b = p.bounds; p.destroy(); b }
+            assertEquals(842f, wide.x1 - wide.x0, 1f)
+            // Each page is the scan itself: one picture and no words yet (reading them comes next).
+            assertTrue(text(d, 1).isBlank())
+            assertTrue("the page holds the picture", out.length() > 20_000)
+        } finally {
+            d.destroy()
+        }
+    }
 }

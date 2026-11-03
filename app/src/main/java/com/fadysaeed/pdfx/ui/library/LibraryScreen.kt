@@ -64,6 +64,7 @@ import com.fadysaeed.pdfx.ui.theme.Ink
 import com.fadysaeed.pdfx.ui.theme.Type
 import kotlinx.coroutines.delay
 import java.io.File
+import kotlinx.coroutines.launch
 
 private sealed interface Sheet {
     data class Actions(val doc: Doc) : Sheet
@@ -95,6 +96,24 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     var ask by remember { mutableStateOf<Ask?>(null) }
     /** The file tools: merging (with the file to start from) and splitting a file. */
     var merging by remember { mutableStateOf<Doc?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    // Scanned pages become a new file in Documents/PDFx/Scans, which opens at once.
+    val scan = com.fadysaeed.pdfx.ui.tools.rememberScanner(
+        onPages = { files ->
+            scope.launch {
+                val name = "Scan " + java.text.SimpleDateFormat("yyyy-MM-dd HH.mm", java.util.Locale.getDefault()).format(java.util.Date())
+                val r = app.saver.create(null, name, into = File(app.library.homeDir, "Scans")) { out ->
+                    com.fadysaeed.pdfx.engine.Arranger.fromPictures(files.map { it.absolutePath }, out.absolutePath)
+                }
+                files.firstOrNull()?.parentFile?.deleteRecursively()
+                r.fold(
+                    { d -> vm.notice.value = Notice("Saved as ${LibraryModel.display(d)} in Documents/PDFx/Scans."); onOpen(d, 0) },
+                    { vm.notice.value = Notice(it.message ?: "The scan could not be saved.") },
+                )
+            }
+        },
+        onProblem = { vm.notice.value = Notice(it) },
+    )
     var splitting by remember { mutableStateOf<Doc?>(null) }
 
     BackHandler(enabled = ui.place != Place() || ui.query.isNotEmpty()) { vm.back() }
@@ -122,6 +141,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             query = vm::setQuery,
             sort = { sheet = Sheet.Sorting },
             pick = onPick,
+            scan = scan,
             grantAccess = { askForAllFiles(context) },
             emptyTrash = { ask = Ask.EmptyTrash },
             newTag = { ask = Ask.NewTag(null) },

@@ -247,6 +247,7 @@ fun PagesScreen(
     onAddBlank: () -> Unit,
     onAddPdf: () -> Unit,
     onAddPictures: () -> Unit,
+    onAddScan: () -> Unit = {},
 ) {
     val grid = rememberLazyGridState()
     var adding by remember { mutableStateOf(false) }
@@ -375,6 +376,7 @@ fun PagesScreen(
                 )
                 com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.PAGE, "A blank page", { adding = false; onAddBlank() }, note = "The same size as the page before it")
                 com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.FOLDER, "Pages from another PDF", { adding = false; onAddPdf() }, note = "All its pages; take out the ones you don't need")
+                com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.PAGE, "Scan pages", { adding = false; onAddScan() }, note = "Paper straight from the camera, edges found and cleaned")
                 com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.PLUS, "Photos", { adding = false; onAddPictures() }, note = "Each photo on a page of its own")
             }
         }

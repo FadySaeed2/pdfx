@@ -77,6 +77,7 @@ class LibraryActions(
     val query: (String) -> Unit = {},
     val sort: () -> Unit = {},
     val pick: () -> Unit = {},
+    val scan: () -> Unit = {},
     val grantAccess: () -> Unit = {},
     val emptyTrash: () -> Unit = {},
     val newTag: () -> Unit = {},
@@ -121,7 +122,10 @@ fun LibraryContent(
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 20.dp, vertical = 12.dp),
         ) {
-            AmberButton("Open a PDF", actions.pick, Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AmberButton("Scan", actions.scan, Modifier.weight(1f))
+                GhostButton("Open a PDF", actions.pick, Modifier.weight(1f), minHeight = 52.dp)
+            }
         }
     }
 }
