@@ -70,13 +70,21 @@ import java.io.File
 object FileWork {
     /** A path to read the file from: its own, or a copy in the app's space when it lives inside another app. */
     suspend fun localPath(context: Context, d: Doc): String = withContext(Dispatchers.IO) {
-        d.path?.takeIf { File(it).canRead() } ?: run {
-            val f = File(context.cacheDir, "tools/${d.id}-${System.nanoTime()}.pdf")
-            f.parentFile?.mkdirs()
-            context.contentResolver.openInputStream(Uri.parse(d.uri))?.use { i -> f.outputStream().use { i.copyTo(it) } }
-                ?: throw java.io.IOException("${LibraryModel.display(d)} could not be read.")
-            f.absolutePath
+        d.path?.takeIf { File(it).canRead() }?.let { return@withContext it }
+        val app = context.applicationContext as PdfxApp
+        app.library.keptCopy(d).takeIf { it.isFile && it.length() > 0 }?.let { return@withContext it.absolutePath }
+        val f = File(context.cacheDir, "tools/${d.id}-${System.nanoTime()}.pdf")
+        f.parentFile?.mkdirs()
+        val ok = runCatching { context.contentResolver.openInputStream(Uri.parse(d.uri))?.use { i -> f.outputStream().use { i.copyTo(it) } } != null }.getOrDefault(false)
+        if (!ok) {
+            f.delete()
+            // Gmail, WhatsApp and the like let another app read a file only for a while.
+            throw java.io.IOException(
+                "${LibraryModel.display(d)} came from another app, which no longer lets PDFx read it. " +
+                    "Open it again from that app (that lets PDFx keep its own copy), then try again.",
+            )
         }
+        f.absolutePath
     }
 
     /** The number of pages, or null when the file is locked with a password or cannot be read. */

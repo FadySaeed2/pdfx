@@ -129,7 +129,27 @@ class Library(
      * it runs within a Room transaction, and touching the database from another thread there
      * would wait for the transaction forever.
      */
+    /**
+     * The app's own copy of a file shared from another app (Gmail, WhatsApp). Those apps let PDFx
+     * read the file only for a while; the copy, made while it can, keeps the file usable after.
+     */
+    fun keptCopy(d: Doc): File = File(context.filesDir, "shared/${d.id}.pdf")
+
+    /** Makes or refreshes the kept copy of a shared file from [uri], while it can still be read. */
+    suspend fun keepCopy(d: Doc, uri: Uri) = withContext(Dispatchers.IO) {
+        if (d.isFile) return@withContext
+        val f = keptCopy(d)
+        if (f.exists() && f.length() == d.size && d.size > 0) return@withContext
+        runCatching {
+            f.parentFile?.mkdirs()
+            val tmp = File(f.parentFile, "${f.name}.part")
+            context.contentResolver.openInputStream(uri)?.use { i -> tmp.outputStream().use { i.copyTo(it) } } ?: return@runCatching
+            if (!tmp.renameTo(f)) { tmp.copyTo(f, overwrite = true); tmp.delete() }
+        }
+    }
+
     private suspend fun forgetNow(d: Doc) {
+        keptCopy(d).delete()
         text.clear(d.id)
         bookmarks.clear(d.id)
         versions.clear(d.id)

@@ -222,11 +222,19 @@ fun ViewerScreen(
     LaunchedEffect(request) {
         doc = runCatching { library.resolve(request.uri) }.getOrNull()
         load = try {
-            val s = PdfSession.open(context, request.uri)
+            val s = try {
+                PdfSession.open(context, request.uri)
+            } catch (t: Throwable) {
+                // A file shared from another app that no longer lets PDFx read it: the copy kept from before.
+                val kept = doc?.let { library.keptCopy(it) }?.takeIf { it.isFile && it.length() > 0 } ?: throw t
+                PdfSession.openFile(kept.absolutePath)
+            }
             if (s.needsPassword) Load.Locked(s, wrong = false) else Load.Ready(s)
         } catch (t: Throwable) {
             Load.Failed(t.message?.takeIf { it.isNotBlank() } ?: "The file is not a readable PDF.")
         }
+        // While the other app still lets PDFx read it, keep a copy of a shared file.
+        doc?.let { d -> if (!d.isFile) library.keepCopy(d, request.uri) }
     }
     DisposableEffect(request) {
         onDispose {

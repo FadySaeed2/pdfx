@@ -73,6 +73,9 @@ fun PdfxRoot(incoming: Uri?, onIncomingHandled: () -> Unit) {
     }
 
     val current = open
+    // A last stop for the back gesture inside a file: the viewer's own handling comes first; this
+    // only makes sure a file never closes the whole app.
+    androidx.activity.compose.BackHandler(enabled = current != null) { open = null }
     if (current == null) {
         LibraryScreen(
             vm = vm,
