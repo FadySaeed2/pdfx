@@ -21,6 +21,8 @@ import com.fadysaeed.pdfx.data.TextHit
 import com.fadysaeed.pdfx.ui.library.ActionsSheet
 import com.fadysaeed.pdfx.ui.library.DocResult
 import com.fadysaeed.pdfx.ui.library.FolderRow
+import com.fadysaeed.pdfx.ui.library.Shelf
+import com.fadysaeed.pdfx.ui.library.ShelfRow
 import com.fadysaeed.pdfx.ui.library.Item
 import com.fadysaeed.pdfx.ui.library.LibraryActions
 import com.fadysaeed.pdfx.ui.library.LibraryContent
@@ -141,6 +143,30 @@ class ScreensTest {
     }
 
     @Test fun recent() = shot(base.copy(unindexed = 37), "01_recent.png")
+
+    @Test fun shelves() = shot(
+        base.copy(
+            place = Place(Section.SHELVES), title = "Shelves", items = emptyList(),
+            shelves = listOf(
+                ShelfRow(Shelf.READING, 3), ShelfRow(Shelf.TO_READ, 12), ShelfRow(Shelf.DONE, 41), ShelfRow(Shelf.PAPER, 318),
+                ShelfRow(Shelf.BOOK, 27), ShelfRow(Shelf.GUIDELINE, 44), ShelfRow(Shelf.LETTER, 63), ShelfRow(Shelf.SCAN, 9), ShelfRow(Shelf.OTHER, 85),
+            ),
+        ),
+        "46_shelves.png",
+    )
+
+    @Test fun realTitles() = shot(
+        base.copy(
+            title = "Recent",
+            duplicates = listOf(listOf(doc(20, "a.pdf", "$root/Download", 1, 1, 0), doc(21, "b.pdf", "$root/Download", 1, 1, 0))),
+            items = listOf(
+                Item(doc(11, "s41380-023-02145-x.pdf", "$root/Download", 2_400_000, 12, ago(0), page = 7).copy(title = "Lithium in the treatment of bipolar disorder: a reappraisal of the evidence", author = "Malhi et al.", year = 2023), listOf(reading)),
+                Item(doc(12, "bjp.2024.172.pdf", "$root/Download", 1_100_000, 12, ago(2), page = 11).copy(title = "Pharmacological interventions for co-occurring psychopathology in borderline personality disorder", author = "Ribeiro et al.", year = 2024, reading = 2), emptyList()),
+                Item(doc(13, "document(3).pdf", "$root/WhatsApp Documents", 90_000, 2, ago(5)), emptyList()),
+            ),
+        ),
+        "47_real_titles.png",
+    )
 
     @Test fun allNoAccess() = shot(
         base.copy(place = Place(Section.ALL), title = "All files", hasAccess = false, items = docs.sortedBy { it.doc.name }, sort = Sort(SortBy.NAME, false)),

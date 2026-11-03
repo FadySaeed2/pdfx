@@ -52,19 +52,27 @@ class TextIndexer(private val context: Context, private val library: Library) {
                 }
                 withContext(Dispatchers.IO) { library.text.replace(d.id, rows) }
             }
-            // Its real title, author and year.
-            val facts = runCatching {
-                com.fadysaeed.pdfx.engine.DocInfo.find(session.metadata() + ("File" to d.name), session.infoPages())
-            }.getOrNull()
-            markDone(d, pages = session.pageCount, locked = false, facts = facts)
+            // Its real title, author and year, and its kind.
+            val meta = runCatching { session.metadata() }.getOrDefault(emptyMap())
+            val first = runCatching { session.infoPages(3) }.getOrDefault(emptyList())
+            val facts = runCatching { com.fadysaeed.pdfx.engine.DocInfo.find(meta + ("File" to d.name), first.take(2)) }.getOrNull()
+            val kind = runCatching {
+                val size = session.pageSize(0)
+                com.fadysaeed.pdfx.engine.Kinds.of(com.fadysaeed.pdfx.engine.KindClues(
+                    name = d.name, folder = d.folder, pages = session.pageCount, text = first.joinToString("\n") { it.text },
+                    title = facts?.title, doi = facts?.doi, formFields = session.formFieldCount(),
+                    landscape = size.width > size.height * 1.15f, creator = (meta["Creator"].orEmpty() + " " + meta["Producer"].orEmpty()),
+                ))
+            }.getOrDefault(com.fadysaeed.pdfx.engine.DocKind.OTHER)
+            markDone(d, pages = session.pageCount, locked = false, facts = facts, kind = kind.name)
         } finally {
             session.close()
         }
     }
 
-    private suspend fun markDone(d: Doc, pages: Int, locked: Boolean, facts: com.fadysaeed.pdfx.engine.DocFacts? = null) {
+    private suspend fun markDone(d: Doc, pages: Int, locked: Boolean, facts: com.fadysaeed.pdfx.engine.DocFacts? = null, kind: String = com.fadysaeed.pdfx.engine.DocKind.OTHER.name) {
         val now = library.dao.byId(d.id) ?: return
-        var next = now.copy(indexedAt = d.modified, infoAt = d.modified, pages = if (pages > 0) pages else now.pages, locked = locked)
+        var next = now.copy(indexedAt = d.modified, infoAt = d.modified, pages = if (pages > 0) pages else now.pages, locked = locked, kind = kind)
         if (facts != null) next = next.copy(title = facts.title, author = facts.author, year = facts.year, doi = facts.doi)
         library.dao.update(next)
     }

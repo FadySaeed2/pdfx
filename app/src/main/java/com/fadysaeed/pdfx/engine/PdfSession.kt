@@ -1311,9 +1311,14 @@ class PdfSession private constructor(
         }
     }
 
-    /** What the file says about itself: Title, Author, CreationDate (empty ones left out). */
+    /** How many form fields the file has. */
+    suspend fun formFieldCount(): Int = onDoc {
+        runCatching { (pdf ?: return@onDoc 0).trailer.get("Root").get("AcroForm").get("Fields").size() }.getOrDefault(0)
+    }
+
+    /** What the file says about itself: Title, Author, CreationDate, Creator, Producer (empty ones left out). */
     suspend fun metadata(): Map<String, String> = onDoc {
-        listOf("Title", "Author", "CreationDate").mapNotNull { k ->
+        listOf("Title", "Author", "CreationDate", "Creator", "Producer").mapNotNull { k ->
             runCatching { doc.getMetaData("info:$k") }.getOrNull()?.takeIf { it.isNotBlank() }?.let { k to it }
         }.toMap()
     }

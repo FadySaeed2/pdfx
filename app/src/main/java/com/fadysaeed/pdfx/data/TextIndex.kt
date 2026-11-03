@@ -48,6 +48,16 @@ class TextIndex(private val db: LibraryDb) {
         return out
     }
 
+    /** For each file, on how many pages [phrase] comes up. */
+    fun pagesMatching(phrase: String): Map<Long, Int> {
+        val words = phrase.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotBlank() }
+        if (words.isEmpty()) return emptyMap()
+        val q = SimpleSQLiteQuery("SELECT ref, COUNT(*) FROM page_text WHERE page_text MATCH ? GROUP BY ref", arrayOf<Any>("\"" + words.joinToString(" ") + "\""))
+        val out = HashMap<Long, Int>()
+        sql.query(q).use { c -> while (c.moveToNext()) out[c.getLong(0)] = c.getInt(1) }
+        return out
+    }
+
     fun pagesIndexed(docId: Long): Int =
         sql.query(SimpleSQLiteQuery("SELECT COUNT(*) FROM page_text WHERE ref = ?", arrayOf<Any>(docId))).use { c ->
             if (c.moveToFirst()) c.getInt(0) else 0

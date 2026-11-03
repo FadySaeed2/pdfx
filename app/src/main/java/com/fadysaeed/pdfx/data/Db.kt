@@ -60,6 +60,10 @@ data class Doc(
     @ColumnInfo(defaultValue = "0") val infoAt: Long = 0,
     /** When PDFx first saw it. */
     @ColumnInfo(defaultValue = "0") val addedAt: Long = 0,
+    /** Its kind (a [com.fadysaeed.pdfx.engine.DocKind] name), read from it; null until read. */
+    val kind: String? = null,
+    /** What the user said about reading it: 0 nothing, 1 to read, 2 done. */
+    @ColumnInfo(defaultValue = "0") val reading: Int = 0,
 ) {
     val inTrash: Boolean get() = trashedAt > 0
     val isFile: Boolean get() = path != null
@@ -109,10 +113,10 @@ interface LibraryDao {
     @Query("SELECT * FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND fingerprint IS NULL LIMIT :n")
     suspend fun withoutFingerprint(n: Int): List<Doc>
 
-    @Query("SELECT * FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified OR infoAt != modified) ORDER BY lastOpened DESC, size ASC LIMIT 1")
+    @Query("SELECT * FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified OR infoAt != modified OR kind IS NULL) ORDER BY lastOpened DESC, size ASC LIMIT 1")
     suspend fun nextToIndex(): Doc?
 
-    @Query("SELECT COUNT(*) FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified OR infoAt != modified)")
+    @Query("SELECT COUNT(*) FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified OR infoAt != modified OR kind IS NULL)")
     fun observeUnindexed(): Flow<Int>
 
     // Tags
@@ -147,11 +151,14 @@ interface LibraryDao {
     @Query("DELETE FROM doc_tags WHERE docId = :docId")
     suspend fun untagDoc(docId: Long)
 
+    @Query("SELECT * FROM tags")
+    suspend fun allTags(): List<Tag>
+
     @Query("SELECT tagId FROM doc_tags WHERE docId = :docId")
     suspend fun tagIdsOf(docId: Long): List<Long>
 }
 
-@Database(entities = [Doc::class, Tag::class, DocTag::class], version = 2, exportSchema = true)
+@Database(entities = [Doc::class, Tag::class, DocTag::class], version = 3, exportSchema = true)
 abstract class LibraryDb : RoomDatabase() {
     abstract fun dao(): LibraryDao
 
@@ -172,10 +179,18 @@ abstract class LibraryDb : RoomDatabase() {
             }
         }
 
+        /** Version 3: each file's kind, and whether it is to be read or done. */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE docs ADD COLUMN kind TEXT")
+                db.execSQL("ALTER TABLE docs ADD COLUMN reading INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun open(context: Context): LibraryDb = open(context, "library.db")
 
         fun open(context: Context, name: String): LibraryDb =
-            Room.databaseBuilder(context, LibraryDb::class.java, name).addMigrations(MIGRATION_1_2).addCallback(TextIndex.Setup).build()
+            Room.databaseBuilder(context, LibraryDb::class.java, name).addMigrations(MIGRATION_1_2, MIGRATION_2_3).addCallback(TextIndex.Setup).build()
 
         fun inMemory(context: Context): LibraryDb =
             Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).addCallback(TextIndex.Setup).allowMainThreadQueries().build()

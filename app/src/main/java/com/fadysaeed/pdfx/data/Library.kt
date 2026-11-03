@@ -451,6 +451,14 @@ class Library(
         if (on) dao.tag(DocTag(docId, tagId)) else dao.untag(docId, tagId)
     }
 
+    /** Puts the tag [name] (made if new) on [docIds]. Returns how many files got it. */
+    suspend fun applyTopic(name: String, docIds: List<Long>): Int {
+        val existing = dao.allTags().firstOrNull { it.name.equals(name, true) }
+        val id = existing?.id ?: createTag(name, (name.hashCode() and 0x7fffffff) % 8)
+        db.withTransaction { docIds.forEach { dao.tag(DocTag(it, id)) } }
+        return docIds.size
+    }
+
     suspend fun deleteTag(id: Long) = db.withTransaction { dao.untagAll(id); dao.deleteTag(id) }
 
     // ---------------------------------------------------------------- search inside documents

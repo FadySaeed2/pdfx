@@ -122,6 +122,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     )
     var splitting by remember { mutableStateOf<Doc?>(null) }
     var duplicatesOpen by remember { mutableStateOf(false) }
+    var topicsOpen by remember { mutableStateOf(false) }
 
     BackHandler(enabled = ui.place != Place() || ui.query.isNotEmpty()) { vm.back() }
     LaunchedEffect(notice?.id) {
@@ -155,6 +156,8 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             undo = { notice?.undo?.invoke(); vm.dismissNotice() },
             dismissNotice = vm::dismissNotice,
             duplicates = { duplicatesOpen = true },
+            shelf = vm::openShelf,
+            topics = { topicsOpen = true },
         ),
     )
     merging?.let { start ->
@@ -163,6 +166,9 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             vm.notice.value = Notice("Merged into ${LibraryModel.display(made)}, beside ${LibraryModel.display(start)}.")
             onOpen(made, 0)
         }
+    }
+    if (topicsOpen) {
+        TopicsScreen(load = vm::topicSuggestions, onAdd = { vm.addTopics(it); topicsOpen = false }, onClose = { topicsOpen = false })
     }
     if (duplicatesOpen && ui.duplicates.isNotEmpty()) {
         DuplicatesScreen(
@@ -208,6 +214,9 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
                             when (a) {
                                 DocAction.OPEN -> onOpen(d, null)
                                 DocAction.STAR -> vm.star(d)
+                                DocAction.TO_READ -> vm.setReading(d, 1)
+                                DocAction.DONE -> vm.setReading(d, 2)
+                                DocAction.NOT_READING -> vm.setReading(d, 0)
                                 DocAction.RENAME -> ask = Ask.Rename(d)
                                 DocAction.MOVE -> sheet = Sheet.Destination(d, copy = false)
                                 DocAction.COPY -> sheet = Sheet.Destination(d, copy = true)
@@ -300,7 +309,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     }
 }
 
-enum class DocAction { OPEN, STAR, RENAME, MOVE, COPY, TAGS, SHARE, TRASH, RESTORE, DELETE, SAVE_COPY, FORGET, FOLDER, VERSIONS, MERGE, SPLIT }
+enum class DocAction { OPEN, STAR, RENAME, MOVE, COPY, TAGS, SHARE, TRASH, RESTORE, DELETE, SAVE_COPY, FORGET, FOLDER, VERSIONS, MERGE, SPLIT, TO_READ, DONE, NOT_READING }
 
 @Composable
 private fun SheetTitle(title: String, note: String?) {
@@ -334,6 +343,14 @@ fun ActionsSheet(d: Doc, label: String, versions: Int = 0, pick: (DocAction) -> 
                 SheetRow(Glyph.OPEN, "Open", { pick(DocAction.OPEN) })
                 SheetRow(if (d.starred) Glyph.STAR_FILLED else Glyph.STAR, if (d.starred) "Remove star" else "Star", { pick(DocAction.STAR) })
                 SheetRow(Glyph.TAG, "Tags", { pick(DocAction.TAGS) })
+                when (d.reading) {
+                    1 -> SheetRow(Glyph.CHECK, "Mark done", { pick(DocAction.DONE) }, note = "It is on the To read shelf")
+                    2 -> SheetRow(Glyph.BOOKMARK, "Not done after all", { pick(DocAction.NOT_READING) })
+                    else -> {
+                        SheetRow(Glyph.BOOKMARK, "To read", { pick(DocAction.TO_READ) }, note = "Keeps it on the To read shelf")
+                        SheetRow(Glyph.CHECK, "Mark done", { pick(DocAction.DONE) })
+                    }
+                }
                 SheetRow(Glyph.RENAME, "Rename", { pick(DocAction.RENAME) })
                 SheetRow(Glyph.MOVE, "Move to…", { pick(DocAction.MOVE) })
                 SheetRow(Glyph.COPY, "Copy to…", { pick(DocAction.COPY) })

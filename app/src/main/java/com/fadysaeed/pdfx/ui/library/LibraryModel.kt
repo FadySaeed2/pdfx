@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 enum class Section(val label: String) {
-    RECENT("Recent"), ALL("All files"), STARRED("Starred"), FOLDERS("Folders"), TAGS("Tags"), TRASH("Trash")
+    RECENT("Recent"), SHELVES("Shelves"), ALL("All files"), STARRED("Starred"), FOLDERS("Folders"), TAGS("Tags"), TRASH("Trash")
 }
 
 enum class SortBy(val label: String) { OPENED("Last opened"), NAME("Name"), MODIFIED("Date changed"), SIZE("Size") }
@@ -40,7 +40,20 @@ data class Place(
     val folder: String? = null,
     val inFolder: Boolean = false,
     val tagId: Long? = null,
+    /** A shelf open in Shelves: a [Shelf] name. */
+    val shelf: String? = null,
 )
+
+/** The shelves: three for reading, then one for each kind of file. */
+enum class Shelf(val label: String, val note: String) {
+    READING("Reading now", "Opened in the last month, not finished"),
+    TO_READ("To read", "Marked to read"),
+    DONE("Done", "Finished, or marked done"),
+    PAPER("Papers", ""), BOOK("Books", ""), GUIDELINE("Guidelines", ""), LETTER("Letters", ""), FORM("Forms", ""),
+    RECEIPT("Receipts and bills", ""), SLIDES("Slides", ""), SCAN("Scans", ""), OTHER("Everything else", ""),
+}
+
+data class ShelfRow(val shelf: Shelf, val count: Int)
 
 data class Sort(val by: SortBy = SortBy.OPENED, val descending: Boolean = true)
 
@@ -59,6 +72,7 @@ data class LibraryUi(
     val hasAccess: Boolean = true,
     val unindexed: Int = 0,
     val loaded: Boolean = false,
+    val shelves: List<ShelfRow> = emptyList(),
     /** The same file more than once (by fingerprint), each group its copies; the one to keep first. */
     val duplicates: List<List<Doc>> = emptyList(),
 )
@@ -101,6 +115,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     fun go(section: Section) { place.value = Place(section) }
     fun openFolder(path: String?) { place.value = Place(Section.FOLDERS, folder = path, inFolder = true) }
     fun openTag(id: Long) { place.value = Place(Section.TAGS, tagId = id) }
+    fun openShelf(s: Shelf) { place.value = Place(Section.SHELVES, shelf = s.name) }
     /** Back inside the library: out of a folder or tag first. True when it handled the back press. */
     fun back(): Boolean {
         val p = place.value
@@ -108,6 +123,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             query.value.isNotEmpty() -> { query.value = ""; true }
             p.inFolder -> { place.value = Place(Section.FOLDERS); true }
             p.tagId != null -> { place.value = Place(Section.TAGS); true }
+            p.shelf != null -> { place.value = Place(Section.SHELVES); true }
             p.section != Section.RECENT -> { place.value = Place(); true }
             else -> false
         }
@@ -239,6 +255,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             Section.FOLDERS -> if (p.inFolder) live.filter { it.folder == p.folder } else emptyList()
             Section.TAGS -> if (p.tagId != null) live.filter { d -> tagsOf[d.id].orEmpty().any { it.id == p.tagId } } else emptyList()
             Section.TRASH -> r.docs.filter { it.inTrash }
+            Section.SHELVES -> p.shelf?.let { name -> Shelf.entries.firstOrNull { it.name == name } }?.let { sh -> live.filter { onShelf(it, sh) } } ?: emptyList()
         }
         val folders = live.groupBy { it.folder }
             .map { (f, l) -> FolderRow(f, library.folderLabel(f), l.size) }
@@ -246,6 +263,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         val title = when {
             p.inFolder -> library.folderLabel(p.folder).substringAfterLast('/')
             p.tagId != null -> tagsById[p.tagId]?.name ?: "Tag"
+            p.shelf != null -> Shelf.entries.firstOrNull { it.name == p.shelf }?.label ?: "Shelf"
             else -> p.section.label
         }
         return LibraryUi(
@@ -263,6 +281,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             unindexed = r.unindexed,
             loaded = true,
             duplicates = duplicatesOf(live),
+            shelves = if (p.section == Section.SHELVES && p.shelf == null) Shelf.entries.map { sh -> ShelfRow(sh, live.count { onShelf(it, sh) }) }.filter { it.count > 0 || it.shelf.ordinal < 3 } else emptyList(),
         )
     }
 
@@ -287,6 +306,31 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         val by = runCatching { SortBy.valueOf(v.substringBefore(':')) }.getOrNull() ?: return@mapNotNull null
         sec to Sort(by, v.substringAfter(':').toBoolean())
     }.toMap()
+
+    private val month = 30L * 24 * 3600 * 1000
+
+    /** Whether a file belongs on a shelf. */
+    private fun onShelf(d: Doc, sh: Shelf): Boolean = when (sh) {
+        Shelf.READING -> d.reading != 2 && d.pages > 1 && d.lastOpened > System.currentTimeMillis() - month && progressOf(d) in 0.01f..0.95f
+        Shelf.TO_READ -> d.reading == 1
+        Shelf.DONE -> d.reading == 2 || (d.pages > 1 && progressOf(d) > 0.95f)
+        else -> d.isFile && d.kind == sh.name
+    }
+
+    fun setReading(d: Doc, state: Int) = launch {
+        library.dao.byId(d.id)?.let { library.dao.update(it.copy(reading = state)) }
+        say(when (state) { 1 -> "On the To read shelf."; 2 -> "Marked done."; else -> "Taken off the reading shelves." })
+    }
+
+    /** Topics that run through the files, to become tags; worked out on asking (a few seconds for a big library). */
+    suspend fun topicSuggestions(): List<com.fadysaeed.pdfx.data.TopicSuggestion> =
+        com.fadysaeed.pdfx.data.Topics.suggest(library, ui.value.allTags.map { it.name.lowercase() }.toSet())
+
+    fun addTopics(chosen: List<com.fadysaeed.pdfx.data.TopicSuggestion>) = launch {
+        var files = 0
+        for (t in chosen) files += library.applyTopic(t.term, t.docIds)
+        say(if (chosen.size == 1) "Tag ${chosen[0].term} put on ${chosen[0].docIds.size} files." else "${chosen.size} tags put on $files files in all.")
+    }
 
     /**
      * Files that are the same file (the same fingerprint) more than once, the copy to keep first:
@@ -322,6 +366,9 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
 
         /** What a file is called in lists: its real title when one was read from it, else its name. */
         fun titleOf(d: Doc) = d.title?.takeIf { it.isNotBlank() } ?: display(d)
+
+        /** How far through it the reader got, 0 to 1. */
+        fun progressOf(d: Doc): Float = if (d.pages > 1) (d.lastPage + 1).toFloat() / d.pages else 0f
 
         /** "Malhi et al. · 2023". */
         fun byline(d: Doc): String = listOfNotNull(d.author?.takeIf { it.isNotBlank() }, d.year.takeIf { it > 0 }?.toString()).joinToString(" · ")

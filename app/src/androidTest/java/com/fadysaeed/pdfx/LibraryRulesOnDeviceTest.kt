@@ -228,6 +228,30 @@ class LibraryRulesOnDeviceTest {
     }
 
     @Test
+    fun topicsThatRunThroughFilesBecomeSuggestedTags() = runBlocking {
+        val dao = db.dao()
+        val files = (1..5).map { unique("Download/p$it.pdf", 100 + it) }
+        lib.scan()
+        val docs = files.map { dao.byKey(it.absolutePath)!! }
+        // Two about lithium by title, one with lithium on most of its pages, one mentioning it once.
+        dao.update(docs[0].copy(title = "Lithium toxicity in older adults", pages = 8))
+        dao.update(docs[1].copy(title = "Lithium and the kidney", pages = 6))
+        dao.update(docs[2].copy(title = "Mood stabilisers compared", pages = 4))
+        dao.update(docs[3].copy(title = "Sleep in shift workers", pages = 10))
+        lib.text.replace(docs[2].id, (0 until 4).map { com.fadysaeed.pdfx.data.PageText(it, "lithium levels and lithium dosing on page $it") })
+        lib.text.replace(docs[3].id, listOf(com.fadysaeed.pdfx.data.PageText(0, "a passing mention of lithium")) + (1 until 10).map { com.fadysaeed.pdfx.data.PageText(it, "sleep hygiene") })
+        val found = com.fadysaeed.pdfx.data.Topics.suggest(lib, emptySet())
+        val lithium = found.first { it.term == "Lithium" }
+        assertEquals(setOf(docs[0].id, docs[1].id, docs[2].id), lithium.docIds.toSet())
+        assertEquals(3, lib.applyTopic("Lithium", lithium.docIds))
+        val tag = dao.allTags().first { it.name == "Lithium" }
+        assertEquals(listOf(tag.id), dao.tagIdsOf(docs[2].id))
+        assertTrue(dao.tagIdsOf(docs[3].id).isEmpty())
+        // A tag that exists is not suggested again.
+        assertTrue(com.fadysaeed.pdfx.data.Topics.suggest(lib, setOf("lithium")).none { it.term == "Lithium" })
+    }
+
+    @Test
     fun ftsQueryIsSafe() {
         assertEquals("lith* level*", ftsQuery("Lith  level"))
         assertEquals("o* brien*", ftsQuery("O'Brien"))

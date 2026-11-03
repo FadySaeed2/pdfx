@@ -84,6 +84,8 @@ class LibraryActions(
     val undo: () -> Unit = {},
     val dismissNotice: () -> Unit = {},
     val duplicates: () -> Unit = {},
+    val shelf: (Shelf) -> Unit = {},
+    val topics: () -> Unit = {},
 )
 
 @Composable
@@ -168,7 +170,7 @@ private fun SearchField(value: String, onChange: (String) -> Unit, modifier: Mod
 @Composable
 private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (Doc) -> ImageBitmap?, now: Long, label: (String?) -> String) {
     val p = ui.place
-    val nested = p.inFolder || p.tagId != null
+    val nested = p.inFolder || p.tagId != null || p.shelf != null
     LazyColumn(Modifier.fillMaxSize()) {
         item(key = "head") {
             Column(Modifier.padding(horizontal = 20.dp)) {
@@ -179,7 +181,7 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                         Spacer(Modifier.width(4.dp))
                     }
                     Column(Modifier.weight(1f)) {
-                        Text(if (p.inFolder) "FOLDER" else if (p.tagId != null) "TAG" else "LIBRARY", style = Type.eyebrow)
+                        Text(if (p.inFolder) "FOLDER" else if (p.tagId != null) "TAG" else if (p.shelf != null) "SHELF" else "LIBRARY", style = Type.eyebrow)
                         Spacer(Modifier.height(4.dp))
                         Text(ui.title, style = Type.display, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
@@ -235,7 +237,30 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                 if (ui.folders.isEmpty()) item { EmptyNote("No folders with PDFs yet.") }
                 items(ui.folders, key = { "f:" + (it.path ?: "-") }) { f -> FolderLine(f) { actions.folder(f.path) } }
             }
+            p.section == Section.SHELVES && p.shelf == null -> {
+                items(ui.shelves, key = { "s:" + it.shelf.name }) { s -> ShelfLine(s) { actions.shelf(s.shelf) } }
+                item(key = "shelves-note") {
+                    Text(
+                        "PDFx puts each file on a shelf by what it finds in it: a DOI or an abstract makes a paper, a contents list a book, and so on. Now and then it gets one wrong; nothing is moved or renamed because of it.",
+                        style = Type.small, modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                    )
+                }
+            }
             p.section == Section.TAGS && p.tagId == null -> {
+                item(key = "topics") {
+                    Row(
+                        Modifier.fillMaxWidth().clickable(onClick = actions.topics).padding(horizontal = 20.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        GlyphIcon(Glyph.TAG, Ink.Amber, size = 20.dp)
+                        Spacer(Modifier.width(16.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Suggested tags", style = Type.bodyStrong.copy(color = Ink.Amber))
+                            Text("Topics that run through your files, to tag them all at once", style = Type.small)
+                        }
+                    }
+                    Hairline(Modifier.padding(start = 56.dp))
+                }
                 if (ui.tags.isEmpty()) item { EmptyNote("No tags yet. Add one from any file's menu, or make one here.") }
                 items(ui.tags, key = { "t:${it.id}" }) { t -> TagLine(t, { actions.tag(t.id) }, { actions.tagMore(t) }) }
                 item { Box(Modifier.padding(20.dp)) { GhostButton("New tag", actions.newTag) } }
@@ -254,11 +279,12 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
 @Composable
 private fun SubLine(ui: LibraryUi, actions: LibraryActions) {
     val p = ui.place
-    val listing = !(p.section == Section.FOLDERS && !p.inFolder) && !(p.section == Section.TAGS && p.tagId == null)
+    val listing = !(p.section == Section.FOLDERS && !p.inFolder) && !(p.section == Section.TAGS && p.tagId == null) && !(p.section == Section.SHELVES && p.shelf == null)
     Row(verticalAlignment = Alignment.CenterVertically) {
         val count = when {
             p.section == Section.FOLDERS && !p.inFolder -> ui.folders.size.let { if (it == 1) "1 folder" else "$it folders" }
             p.section == Section.TAGS && p.tagId == null -> ui.tags.size.let { if (it == 1) "1 tag" else "$it tags" }
+            p.section == Section.SHELVES && p.shelf == null -> "Your files by kind, and what you are reading"
             else -> ui.items.size.let { if (it == 1) "1 document" else "$it documents" }
         }
         Text(count, style = Type.note)
@@ -304,6 +330,7 @@ private fun emptyText(p: Place) = when (p.section) {
     Section.TRASH -> "The trash is empty."
     Section.FOLDERS -> "This folder has no PDFs."
     Section.TAGS -> "Nothing has this tag yet."
+    Section.SHELVES -> "Nothing on this shelf yet."
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -326,6 +353,13 @@ fun DocLine(
                 Text(LibraryModel.titleOf(d), style = Type.body, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(3.dp))
                 Text(meta(d, now, showFolder, label), style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val progress = LibraryModel.progressOf(d)
+                if (progress > 0.01f && !d.inTrash) {
+                    Spacer(Modifier.height(6.dp))
+                    Box(Modifier.fillMaxWidth(0.6f).height(2.dp).background(Ink.Rule)) {
+                        Box(Modifier.fillMaxWidth(progress.coerceAtMost(1f)).height(2.dp).background(if (d.reading == 2 || progress > 0.95f) Ink.Teal else Ink.Amber))
+                    }
+                }
                 if (item.tags.isNotEmpty()) {
                     Spacer(Modifier.height(5.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -360,6 +394,22 @@ private fun Thumb(d: Doc, image: ImageBitmap?) {
             d.locked -> GlyphIcon(Glyph.LOCK, Ink.Ash, size = 18.dp)
             else -> GlyphIcon(Glyph.PAGE, Ink.Slate, size = 20.dp)
         }
+    }
+}
+
+@Composable
+private fun ShelfLine(s: ShelfRow, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+            GlyphIcon(if (s.shelf.ordinal < 3) Glyph.BOOKMARK else Glyph.LIST, if (s.shelf.ordinal < 3) Ink.Amber else Ink.Dust, size = 22.dp)
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(s.shelf.label, style = Type.body, maxLines = 1)
+                if (s.shelf.note.isNotEmpty()) Text(s.shelf.note, style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text("${s.count}", style = Type.figure)
+        }
+        Hairline(Modifier.padding(start = 58.dp))
     }
 }
 
