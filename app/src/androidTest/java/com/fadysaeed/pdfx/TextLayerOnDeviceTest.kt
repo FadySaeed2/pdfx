@@ -80,6 +80,8 @@ class TextLayerOnDeviceTest {
             assertEquals(ws.size, TextLayer.add(doc, p, ws))
             p.destroy()
         }
+        // Let the collector finalise the Java objects made on the way: the words must not go with them.
+        repeat(3) { System.gc(); System.runFinalization() }
         val out = File(shots, "searchable.pdf")
         doc.save(out.absolutePath, "garbage=compact")
         doc.destroy()

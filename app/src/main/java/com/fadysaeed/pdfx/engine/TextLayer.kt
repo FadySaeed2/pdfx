@@ -64,11 +64,11 @@ object TextLayer {
 
             val old = pageObj.get("Contents")
             val contents = doc.newArray()
-            contents.push(doc.addStream("q\n"))
-            if (old.isArray) for (i in 0 until old.size()) contents.push(old.get(i))
-            else if (!old.isNull) contents.push(old)
-            contents.push(doc.addStream("\nQ\n"))
-            contents.push(doc.addStream(sb.toString()))
+            contents.append(doc.addStream("q\n"))
+            if (old.isArray) for (i in 0 until old.size()) contents.append(old.get(i))
+            else if (!old.isNull) contents.append(old)
+            contents.append(doc.addStream("\nQ\n"))
+            contents.append(doc.addStream(sb.toString()))
             pageObj.put("Contents", contents)
             return usable.size
         } finally {

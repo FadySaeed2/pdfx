@@ -605,7 +605,7 @@ class PdfSession private constructor(
                     val lock = d.newDictionary()
                     lock.put("Action", d.newName("Exclude"))
                     val names = d.newArray()
-                    others.forEach { names.push(d.newString(it)) }
+                    others.forEach { names.append(d.newString(it)) }
                     lock.put("Fields", names)
                     w.getObject().put("Lock", lock)
                     d.endOperation()

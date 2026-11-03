@@ -257,7 +257,7 @@ object Arranger {
             // dictionary itself, not its reference, and lets go of it: so not that.)
             val ref = d.createObject()
             ref.writeObject(c)
-            out.push(ref)
+            out.append(ref)
         }
         if (out.size() > 0) dst.put("Annots", out)
     }
@@ -303,7 +303,7 @@ object Arranger {
             return kids.isArray && kids.any { alive(it, depth + 1) }
         }
         val keep = d.newArray()
-        for (f in fields) if (alive(f, 0)) keep.push(f)
+        for (f in fields) if (alive(f, 0)) keep.append(f)
         if (keep.size() == 0) return null
         form.put("Fields", keep)
         return form
