@@ -328,18 +328,32 @@ class Reader(
         searching = true
         searchJob = scope.launch {
             val start = fromPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+            // Hits are handed to the screen in batches (the first at once, then every fifth of a
+            // second): one page at a time, a long book redrew the pages on screen thousands of times.
+            val waiting = LinkedHashMap<Int, List<Hit>>()
+            var shownAt = 0L
+            fun publish() {
+                shownAt = System.currentTimeMillis()
+                if (waiting.isEmpty()) return
+                for ((p, found) in waiting) { snippets[p] = found; hits[p] = found.map { it.boxes } }
+                val firstNew = waiting.keys.first()
+                waiting.clear()
+                order = hits.keys.sorted().flatMap { pg -> hits[pg]!!.indices.map { pg to it } }
+                if (current < 0) select(order.indexOfFirst { it.first == firstNew })
+                else current = order.indexOf(lastShown ?: (firstNew to 0)).coerceAtLeast(0)
+                shownAt = System.currentTimeMillis()
+            }
             for (k in 0 until pageCount) {
                 val p = (start + k) % pageCount
                 val found = runCatching { session.searchHits(p, q) }.getOrDefault(emptyList())
-                searchedPages = k + 1
-                if (found.isNotEmpty()) {
-                    snippets[p] = found
-                    hits[p] = found.map { it.boxes }
-                    order = hits.keys.sorted().flatMap { pg -> hits[pg]!!.indices.map { pg to it } }
-                    if (current < 0) select(order.indexOfFirst { it.first == p })
-                    else current = order.indexOf(lastShown ?: (p to 0)).coerceAtLeast(0)
+                if (found.isNotEmpty()) waiting[p] = found
+                if ((current < 0 && waiting.isNotEmpty()) || System.currentTimeMillis() - shownAt > 200 || k == pageCount - 1) {
+                    publish()
+                    searchedPages = k + 1
                 }
             }
+            publish()
+            searchedPages = pageCount
             searching = false
         }
     }

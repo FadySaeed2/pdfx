@@ -73,6 +73,78 @@ class EngineOnDeviceTest {
         return out
     }
 
+    /** A book of [pages] pages: the sample page over and over, each with its own number in the text. */
+    private fun bigPdf(pages: Int): File {
+        val out = File(ctx.cacheDir, "big-$pages.pdf")
+        if (out.exists()) return out
+        val src = com.artifex.mupdf.fitz.Document.openDocument(samplePdf(1).absolutePath) as com.artifex.mupdf.fitz.PDFDocument
+        val doc = com.artifex.mupdf.fitz.PDFDocument()
+        try {
+            val map = doc.newPDFGraftMap()
+            repeat(pages) { map.graftPage(-1, src, 0) }
+            doc.save(out.absolutePath, "compress")
+        } finally {
+            doc.destroy(); src.destroy()
+        }
+        return out
+    }
+
+    /**
+     * A 3,000-page book: how long the first page, a jump to near the end, and a search through the
+     * whole book take, written to large-file.txt; and that each stays within bounds a reader would
+     * put up with.
+     */
+    @Test
+    fun aVeryLargeBookOpensJumpsAndSearchesInGoodTime() {
+        val n = 3000
+        val t0 = System.nanoTime()
+        val file = bigPdf(n)
+        val made = (System.nanoTime() - t0) / 1_000_000
+        val t1 = System.nanoTime()
+        val session = runBlocking { PdfSession.open(ctx, Uri.fromFile(file)) }
+        val opened = (System.nanoTime() - t1) / 1_000_000
+        assertEquals(n, session.pageCount)
+        var reader: Reader? = null
+        var list: androidx.compose.foundation.lazy.LazyListState? = null
+        val t2 = System.nanoTime()
+        compose.setContent {
+            PdfxTheme {
+                val scope = rememberCoroutineScope()
+                val r = remember { Reader(session, session.pageCount, scope).also { reader = it } }
+                val pages = r.pages!!
+                val state = rememberLazyListState().also { list = it }
+                ViewerContent(
+                    name = "Big book", reader = r, aspects = pages.aspects, widths = pages.widths,
+                    image = { pages.images[it] }, tile = { pages.tiles[it] }, listState = state,
+                    onWant = pages::want, onTiles = pages::wantTiles, onBack = {},
+                )
+            }
+        }
+        compose.waitUntil(30_000) { reader?.pages?.drawCount(0) ?: 0 > 0 }
+        val firstPage = (System.nanoTime() - t2) / 1_000_000
+        val t3 = System.nanoTime()
+        compose.runOnIdle { reader!!.go(2700) }
+        compose.waitUntil(30_000) { reader!!.pages!!.drawCount(2700) > 0 }
+        val jumped = (System.nanoTime() - t3) / 1_000_000
+        val t4 = System.nanoTime()
+        compose.runOnIdle { reader!!.searchOpen = true; reader!!.search("brown fox", 2700) }
+        compose.waitUntil(30_000) { reader!!.order.isNotEmpty() }
+        val firstHit = (System.nanoTime() - t4) / 1_000_000
+        compose.waitUntil(600_000) { !reader!!.searching }
+        val searched = (System.nanoTime() - t4) / 1_000_000
+        val hitsFound = reader!!.order.size
+        File(shots, "large-file.txt").writeText(
+            "pages: $n\nmade: $made ms\nopened: $opened ms\nfirst page drawn: $firstPage ms\njump to page 2701 drawn: $jumped ms\n" +
+                "first search hit: $firstHit ms\nwhole book searched: $searched ms ($hitsFound hits)\n",
+        )
+        assertEquals(n * 34, hitsFound)
+        assertTrue("opening took $opened ms", opened < 5_000)
+        assertTrue("the first page took $firstPage ms", firstPage < 5_000)
+        assertTrue("the jump took $jumped ms", jumped < 5_000)
+        assertTrue("the first hit took $firstHit ms", firstHit < 3_000)
+        session.close()
+    }
+
     /** A selection from the foot of one page into the next: both parts, and the words of both in order. */
     @Test
     fun aSelectionRunsOnToTheNextPage() = runBlocking {
