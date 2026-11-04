@@ -399,23 +399,36 @@ class Reader(
         dragSelection(start, if (start) sel.page else sel.lastPart.page, x, y)
     }
 
-    /** Moves one end of the selection to a point on [page], which may be another page: the selection then runs across. */
+    private data class DragTo(val start: Boolean, val page: Int, val x: Float, val y: Float)
+    private val dragTo = kotlinx.coroutines.flow.MutableStateFlow<DragTo?>(null)
+    private var dragJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Moves one end of the selection to a point on [page], which may be another page: the selection
+     * then runs across. Only the latest point is worked out: a finger sends far more moves than the
+     * words can be found for, and working out every one left the handle trailing behind.
+     */
     fun dragSelection(start: Boolean, page: Int, x: Float, y: Float) {
-        val sel = selection ?: return
         val s = session ?: return
-        val end = sel.lastPart
-        var a = Triple(sel.page, sel.ax, sel.ay)
-        var b = Triple(end.page, end.bx, end.by)
-        if (start) a = Triple(page, x, y) else b = Triple(page, x, y)
-        if (a.first > b.first) { val t = a; a = b; b = t }
-        scope.launch {
-            val next = if (a.first == b.first) s.selectWords(a.first, a.second, a.third, b.second, b.third)
-                else s.selectAcross(a.first, a.second, a.third, b.first, b.second, b.third)
-            if (next != null) selection = next
+        dragTo.value = DragTo(start, page, x, y)
+        if (dragJob?.isActive == true) return
+        dragJob = scope.launch {
+            dragTo.collect { d ->
+                if (d == null) return@collect
+                val sel = selection ?: return@collect
+                val end = sel.lastPart
+                var a = Triple(sel.page, sel.ax, sel.ay)
+                var b = Triple(end.page, end.bx, end.by)
+                if (d.start) a = Triple(d.page, d.x, d.y) else b = Triple(d.page, d.x, d.y)
+                if (a.first > b.first) { val t = a; a = b; b = t }
+                val next = if (a.first == b.first) s.selectWords(a.first, a.second, a.third, b.second, b.third)
+                    else s.selectAcross(a.first, a.second, a.third, b.first, b.second, b.third)
+                if (next != null && selection != null) selection = next
+            }
         }
     }
 
-    fun clearSelection() { selection = null }
+    fun clearSelection() { selection = null; dragTo.value = null }
 
     /** For screenshot tests. */
     fun showSelection(sel: Selection?) { selection = sel }

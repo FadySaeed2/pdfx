@@ -33,6 +33,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -320,15 +322,19 @@ fun DocumentView(
                     LaunchedEffect(i) { reader.loadLinks(i); reader.loadMarks(i) }
                     // A loupe over the finger while a selection handle is dragged.
                     var lens by remember { mutableStateOf(Offset.Unspecified) }
+                    // Whether part of the selection is on this page: true or false, so a handle being
+                    // dragged does not compose the whole page again at every move.
+                    val selHere by remember(i) { derivedStateOf { reader.selection?.parts?.any { it.page == i } == true } }
                     Box(
                         Modifier
                             .fillMaxWidth()
                             .aspectRatio(aspect)
                             .background(paper)
                             .semantics { contentDescription = "Page ${i + 1}" }
-                            // The loupe only while a handle is held: every page carrying one costs a little at every frame of a scroll.
+                            // The loupe only on a page with a selection on it (and it shows only while a handle is
+                            // held): every page carrying one cost a little at every frame of a scroll.
                             .then(
-                                if (lens.isSpecified) Modifier.magnifier(
+                                if (selHere) Modifier.magnifier(
                                     sourceCenter = { lens },
                                     magnifierCenter = { if (lens.isSpecified) lens - Offset(0f, 64.dp.toPx()) else Offset.Unspecified },
                                     zoom = 1.8f,
@@ -437,29 +443,64 @@ fun DocumentView(
                                     val start = ds < de
                                     down.consume()
                                     reader.holdsPage = true
+                                    val lift = 18.dp.toPx()
+                                    val edge = 56.dp.toPx()
+                                    val cellW = size.width.toFloat()
+                                    /** Moves the handle to [aim], a point in this page's own place (it may lie past its foot or head). */
+                                    fun aimAt(aim: Offset) {
+                                        // Past the bottom (or top) of this page, the handle is on the next (or the one
+                                        // before), and the selection runs across. Pages side by side keep to one page.
+                                        var page = i
+                                        var y = aim.y
+                                        if (perRow == 1) {
+                                            fun h(p: Int) = cellW / (aspects.getOrNull(p)?.takeIf { it > 0f } ?: 0.707f)
+                                            while (y > h(page) && page < pageCount - 1) { y -= h(page) + gapPx; page++ }
+                                            while (y < 0f && page > 0) { page--; y += h(page) + gapPx }
+                                        }
+                                        val kp = cellW / pageWidthPt(page)
+                                        reader.dragSelection(start, page, aim.x / kp, y / kp)
+                                    }
+                                    // Held near the top or bottom of the screen, the pages scroll on under the handle,
+                                    // so a selection can run on to pages not yet in view.
+                                    var aimNow = down.position
+                                    var drift: Job? = null
+                                    fun edgeDir(fingerY: Float): Int {
+                                        val info = listState.layoutInfo
+                                        val row = info.visibleItemsInfo.firstOrNull { it.index == i / perRow } ?: return 0
+                                        val onScreen = row.offset - info.viewportStartOffset + fingerY
+                                        val h = info.viewportSize.height
+                                        return when {
+                                            onScreen > h - info.afterContentPadding - edge -> 1
+                                            onScreen < info.beforeContentPadding + edge -> -1
+                                            else -> 0
+                                        }
+                                    }
                                     try {
                                         do {
                                             val e = awaitPointerEvent(PointerEventPass.Initial)
                                             val c = e.changes.firstOrNull { it.id == down.id } ?: break
                                             if (c.positionChange() != Offset.Zero) {
                                                 // Aim a little above the finger so the text being picked stays visible.
-                                                val aim = Offset(c.position.x, c.position.y - 18.dp.toPx())
-                                                lens = aim
-                                                // Past the bottom (or top) of this page, the handle is on the next (or the one
-                                                // before), and the selection runs across. Pages side by side keep to one page.
-                                                var page = i
-                                                var y = aim.y
-                                                if (perRow == 1) {
-                                                    fun h(p: Int) = size.width / (aspects.getOrNull(p)?.takeIf { it > 0f } ?: 0.707f)
-                                                    while (y > h(page) && page < pageCount - 1) { y -= h(page) + gapPx; page++ }
-                                                    while (y < 0f && page > 0) { page--; y += h(page) + gapPx }
+                                                aimNow = Offset(c.position.x, c.position.y - lift)
+                                                lens = aimNow
+                                                aimAt(aimNow)
+                                                val dir = if (perRow == 1) edgeDir(c.position.y) else 0
+                                                if (dir == 0) { drift?.cancel(); drift = null }
+                                                else if (drift == null) drift = scope.launch {
+                                                    while (true) {
+                                                        withFrameNanos { }
+                                                        val moved = listState.dispatchRawDelta(dir * 9.dp.toPx())
+                                                        if (moved == 0f) break
+                                                        // The page moved under a still finger: the finger is that much further down it.
+                                                        aimNow = aimNow.copy(y = aimNow.y + moved)
+                                                        aimAt(aimNow)
+                                                    }
                                                 }
-                                                val kp = size.width / pageWidthPt(page)
-                                                reader.dragSelection(start, page, aim.x / kp, y / kp)
                                             }
                                             c.consume()
                                         } while (c.pressed)
                                     } finally {
+                                        drift?.cancel()
                                         reader.holdsPage = false
                                         lens = Offset.Unspecified
                                     }
@@ -508,15 +549,8 @@ fun DocumentView(
                             )
                         }
                         PageMarks(reader, i, pageWidthPt(i), img)
-                        val sel = reader.selection
-                        if (sel != null && sel.page == i && !reader.marking && sel.boxes.isNotEmpty()) {
-                            val k = cellPx(zoom) / pageWidthPt(i)
-                            val top = sel.boxes.minOf { it.y0 } * k
-                            val bottom = sel.boxes.maxOf { it.y1 } * k
-                            val centre = (sel.boxes.minOf { it.x0 } + sel.boxes.maxOf { it.x1 }) / 2f * k
-                            val cx = c * (cellPx(zoom) + gapPx)
-                            FloatOver(top, bottom, centre, panX - cx, panX - cx + viewportPx, selectionBar)
-                        }
+                        // The bar over a selection, in a scope of its own: the selection changes at every move of a handle.
+                        if (selHere) SelectionBarOn(reader, i, { cellPx(zoom) / pageWidthPt(i) }, { panX - c * (cellPx(zoom) + gapPx) }, viewportPx, selectionBar)
                     }
                     } }
                    }
@@ -525,6 +559,19 @@ fun DocumentView(
             }
         }
     }
+}
+
+/** The copy / find / share bar over the selection on page [page]. [k] is pixels per point; [minX] the screen's left edge in the page's pixels. */
+@Composable
+private fun SelectionBarOn(reader: Reader, page: Int, k: () -> Float, minX: () -> Float, viewportPx: Float, bar: @Composable () -> Unit) {
+    val sel = reader.selection ?: return
+    if (sel.page != page || reader.marking || sel.boxes.isEmpty()) return
+    val kk = k()
+    val top = sel.boxes.minOf { it.y0 } * kk
+    val bottom = sel.boxes.maxOf { it.y1 } * kk
+    val centre = (sel.boxes.minOf { it.x0 } + sel.boxes.maxOf { it.x1 }) / 2f * kk
+    val left = minX()
+    FloatOver(top, bottom, centre, left, left + viewportPx, bar)
 }
 
 /** Which pages were in a row the last time the list was laid out, and the page then at the top. */
