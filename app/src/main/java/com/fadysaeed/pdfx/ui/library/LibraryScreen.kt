@@ -100,7 +100,7 @@ private sealed interface Ask {
 /** The library with all its menus. [onOpen] opens a document, optionally at a page. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> Unit, ask: String? = null, onAsked: () -> Unit = {}) {
+fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> Unit, shortcut: String? = null, onShortcut: () -> Unit = {}) {
     val context = LocalContext.current
     val app = context.applicationContext as PdfxApp
     val ui by vm.ui.collectAsState()
@@ -135,10 +135,10 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     )
     // A shortcut from the app's icon: scan straight away, or put the cursor in the search box.
     var focusSearch by remember { mutableStateOf(false) }
-    LaunchedEffect(ask) {
-        when (ask) {
-            "scan" -> { onAsked(); scan() }
-            "search" -> { onAsked(); vm.go(Section.RECENT); focusSearch = true }
+    LaunchedEffect(shortcut) {
+        when (shortcut) {
+            "scan" -> { onShortcut(); scan() }
+            "search" -> { onShortcut(); vm.go(Section.RECENT); focusSearch = true }
         }
     }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current

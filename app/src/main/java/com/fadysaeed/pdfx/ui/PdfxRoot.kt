@@ -210,8 +210,8 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit, shortcut: Stri
     if (current == null) {
         LibraryScreen(
             vm = vm,
-            ask = libraryAsk,
-            onAsked = { libraryAsk = null },
+            shortcut = libraryAsk,
+            onShortcut = { libraryAsk = null },
             // Opened from a search hit: carry the words in, so they are found and lit up inside.
             onOpen = { d, page ->
                 val q = vm.ui.value.query.trim().takeIf { it.isNotEmpty() && page != null }
