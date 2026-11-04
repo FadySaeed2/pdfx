@@ -248,3 +248,18 @@ signatures, and a full pass on every screen for clarity.
   contents and links; the Android MuPDF build has no Noto fonts, so a font loader lends MuPDF the
   phone's /system/fonts for Arabic and other scripts. Pictures to PDF from the picker or Share;
   pages to PNG/JPEG. Office files to PDF left out unless Fady asks (MuPDF's rendering is basic).
+- 2026-11-03/04: library fixes and step 4. Tidy counts and lists come from one rule; unticked
+  names are left for good; a name taken gets "(2)"; scans with a scanner app's stamp are read and
+  read scans leave the list; the words index keys rows by file × 1e6 + page so "pages per file"
+  never reads the words back (suggested tags went from minutes to seconds; titles matched to
+  topics by a word index instead of thousands of regexes). Step 4: ranked search (title > author
+  and tags > name; words inside by pages and share; the user's notes), slips of the finger spelt
+  as the nearest word (fts4aux vocabulary and the files' details), filter chips by kind, years and
+  tags; a Highlights section fed by a marks table the indexer fills from each file; a grid of
+  first pages (320 px thumbnails); long press is a quick look with Open and Select. Reflow keeps
+  hyphens that belong to the word. Fady asked for Word/Excel to PDF too: done by writing XHTML
+  from the OOXML (styles, numbering, tables with merges, pictures, links, sections, headers and
+  footers with PAGE/NUMPAGES, footnotes as notes at the end, theme fonts) and from sheets (number
+  formats incl. dates, theme colours with tint, merges, widths, overflow into empty cells, fit to
+  width), laid out by MuPDF's HTML engine part by part (it ignores CSS page breaks), compared
+  against LibreOffice on Apache POI's test files and our own report.
