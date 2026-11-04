@@ -263,3 +263,9 @@ signatures, and a full pass on every screen for clarity.
   formats incl. dates, theme colours with tint, merges, widths, overflow into empty cells, fit to
   width), laid out by MuPDF's HTML engine part by part (it ignores CSS page breaks), compared
   against LibreOffice on Apache POI's test files and our own report.
+- 2026-11-04: the repo went public (Actions minutes). Phase 7 finished: watermark (words across
+  the page, corner to corner or straight, colour and strength, every page or the first) and page
+  numbers (six places, five styles, not on the cover, any first number), written into the page
+  content the right way up on turned and cropped pages. Polish: shortcuts on the app icon (last
+  file, scan, search), a short fade between library and file, haptics on long press, old
+  thumbnails cleared. Viewer tests retry once only on Compose's own threading slip.

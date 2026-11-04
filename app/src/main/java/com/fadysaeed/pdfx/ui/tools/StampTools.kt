@@ -104,7 +104,7 @@ fun WatermarkBody(ui: WatermarkUi, busy: Boolean, note: String?) {
         PagePreview {
             Text(
                 ui.text.ifBlank { " " }, maxLines = 1, overflow = TextOverflow.Clip,
-                style = Type.bodyStrong.copy(fontSize = (if (ui.diagonal) 120f else 100f).div(ui.text.length.coerceAtLeast(4)).coerceIn(7f, 26f).sp, fontWeight = FontWeight.Bold, color = Color(0xFF000000 or ui.colour.toLong())),
+                style = Type.bodyStrong.copy(fontSize = (if (ui.diagonal) 175f else 130f).div(ui.text.length.coerceAtLeast(4)).coerceIn(8f, 30f).sp, fontWeight = FontWeight.Bold, color = Color(0xFF000000 or ui.colour.toLong())),
                 modifier = Modifier.align(Alignment.Center).rotate(if (ui.diagonal) -54.7f else 0f).alpha(ui.strength.coerceAtLeast(0.2f)),
             )
         }
