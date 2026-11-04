@@ -84,7 +84,12 @@ private fun Card(title: String, count: Int, what: String, onOpen: () -> Unit) {
                 Modifier.height(24.dp).widthIn(min = 24.dp).background(if (done) Ink.Teal else Ink.Field, RoundedCornerShape(50)).padding(horizontal = 7.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                if (done) GlyphIcon(Glyph.CHECK, Ink.Black, size = 14.dp) else Text(if (count > 0) "$count" else "·", style = Type.small.copy(color = Ink.Amber))
+                // A count of things to look at; the tags card has none, so it shows its kind instead.
+                when {
+                    done -> GlyphIcon(Glyph.CHECK, Ink.Black, size = 14.dp)
+                    count > 0 -> Text("$count", style = Type.small.copy(color = Ink.Amber))
+                    else -> GlyphIcon(Glyph.TAG, Ink.Amber, size = 14.dp)
+                }
             }
             Spacer(Modifier.width(12.dp))
             Text(title, style = Type.bodyStrong, modifier = Modifier.weight(1f))
