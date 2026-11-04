@@ -73,6 +73,28 @@ class EngineOnDeviceTest {
         return out
     }
 
+    /** A selection from the foot of one page into the next: both parts, and the words of both in order. */
+    @Test
+    fun aSelectionRunsOnToTheNextPage() = runBlocking {
+        val file = samplePdf(3)
+        val s = PdfSession.open(ctx, Uri.fromFile(file))
+        try {
+            // From line 33 on page 1 to the "Page 2 of 3" line on page 2.
+            val sel = s.selectAcross(0, 60f, 750f, 1, 200f, 136f)!!
+            assertEquals(listOf(0, 1), sel.parts.map { it.page })
+            assertTrue(sel.text, sel.text.contains("Line 33") && sel.text.contains("Line 34"))
+            assertTrue(sel.text, sel.text.contains("PDFx engine check") && sel.text.contains("Page 2 of 3"))
+            assertTrue("page 1 comes first", sel.text.indexOf("Line 34") < sel.text.indexOf("Page 2 of 3"))
+            assertFalse("nothing from page 1's top", sel.text.contains("Line 1:"))
+            // Three pages: the middle one whole.
+            val three = s.selectAcross(0, 60f, 750f, 2, 200f, 136f)!!
+            assertEquals(listOf(0, 1, 2), three.parts.map { it.page })
+            assertTrue(three.text.contains("Line 1: the quick"))
+        } finally {
+            s.close()
+        }
+    }
+
     @Test
     fun opensRendersReadsAndSearchesByUri() = runBlocking {
         val file = samplePdf()

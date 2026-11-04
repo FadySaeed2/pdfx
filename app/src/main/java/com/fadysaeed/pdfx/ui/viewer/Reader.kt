@@ -176,6 +176,7 @@ class Reader(
         private set
     /** A thin line with the page number where each page starts. */
     var reflowPageMarks by mutableStateOf(prefs?.getBoolean("reflow_page_marks", true) ?: true)
+        private set
     /** Two pages side by side while the phone is turned on its side. */
     var spreads by mutableStateOf(prefs?.getBoolean("spreads", true) ?: true)
     fun changeSpreads(on: Boolean) { spreads = on; prefs?.edit()?.putBoolean("spreads", on)?.apply() }
@@ -188,7 +189,6 @@ class Reader(
     val perRow: Int get() = if (reflow) 1 else spreadRow
     fun rowOf(page: Int) = page / perRow
     fun firstPageOf(row: Int) = row * perRow
-        private set
     /** A picture or table from reflowed text opened full screen to zoom: its page and place. */
     var zoomFigure by mutableStateOf<Pair<Int, Box>?>(null)
     /** Pictures cut from pages for reflowed text, by page, place and width. */
@@ -382,9 +382,21 @@ class Reader(
     /** Moves one end of the selection; [start] says which. */
     fun dragSelection(start: Boolean, x: Float, y: Float) {
         val sel = selection ?: return
+        dragSelection(start, if (start) sel.page else sel.lastPart.page, x, y)
+    }
+
+    /** Moves one end of the selection to a point on [page], which may be another page: the selection then runs across. */
+    fun dragSelection(start: Boolean, page: Int, x: Float, y: Float) {
+        val sel = selection ?: return
         val s = session ?: return
+        val end = sel.lastPart
+        var a = Triple(sel.page, sel.ax, sel.ay)
+        var b = Triple(end.page, end.bx, end.by)
+        if (start) a = Triple(page, x, y) else b = Triple(page, x, y)
+        if (a.first > b.first) { val t = a; a = b; b = t }
         scope.launch {
-            val next = if (start) s.selectWords(sel.page, x, y, sel.bx, sel.by) else s.selectWords(sel.page, sel.ax, sel.ay, x, y)
+            val next = if (a.first == b.first) s.selectWords(a.first, a.second, a.third, b.second, b.third)
+                else s.selectAcross(a.first, a.second, a.third, b.first, b.second, b.third)
             if (next != null) selection = next
         }
     }
@@ -1163,7 +1175,8 @@ class Reader(
         draft = Draft.Words(sel.page, sel.boxes, color)
         undoAction = null
         undoNotice = when (kind) { MarkKind.UNDERLINE -> "Underlined"; MarkKind.STRIKE -> "Struck through"; else -> "Highlighted" }
-        change(sel.page) { session?.addTextMark(sel.page, kind, sel.boxes, color, opacity) ?: false }
+        // A selection across pages is marked page by page.
+        for (part in sel.parts) change(part.page) { session?.addTextMark(part.page, kind, part.boxes, color, opacity) ?: false }
     }
 
     /** New colour for the picked marks; they stay picked so the colour can be tried again. */

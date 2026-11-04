@@ -40,7 +40,16 @@ data class PageLink(val box: Box, val page: Int?, val uri: String?)
 data class OutlineEntry(val title: String, val page: Int, val depth: Int)
 
 /** A text selection on one page: its two ends, the boxes to highlight, and the text. */
-data class Selection(val page: Int, val ax: Float, val ay: Float, val bx: Float, val by: Float, val boxes: List<Box>, val text: String)
+/**
+ * Selected text on [page], from point a to point b. One that runs on over later pages carries
+ * their parts in [rest] (each a selection of its own page), and [text] is then the whole of it.
+ */
+data class Selection(val page: Int, val ax: Float, val ay: Float, val bx: Float, val by: Float, val boxes: List<Box>, val text: String, val rest: List<Selection> = emptyList()) {
+    /** Every page's part, first to last. */
+    val parts: List<Selection> get() = if (rest.isEmpty()) listOf(this) else listOf(this) + rest
+    /** The part where the selection ends. */
+    val lastPart: Selection get() = rest.lastOrNull() ?: this
+}
 
 /** The kinds of marks PDFx makes and lists. Anything else in a file shows as OTHER. */
 enum class MarkKind(val label: String) {
@@ -356,6 +365,31 @@ class PdfSession private constructor(
         val b = Point(bx, by)
         runCatching { st.snapSelection(a, b, StructuredText.SELECT_WORDS) }
         selectionNow(index, st, a.x, a.y, b.x, b.y) ?: selectionNow(index, st, ax, ay, bx, by)
+    }
+
+    /**
+     * Text from a point on page [pa] to a point on a later page [pb] (at most 30 pages on): the end
+     * of the first page, every page between, and the start of the last, each its own part.
+     */
+    suspend fun selectAcross(pa: Int, ax: Float, ay: Float, pb: Int, bx: Float, by: Float): Selection? = onDoc {
+        if (pb <= pa) return@onDoc null
+        val last = minOf(pb, pa + 30)
+        val parts = ArrayList<Selection>()
+        for (p in pa..last) {
+            val st = stext(p)
+            val size = sizeNow(p)
+            val (x0, y0) = if (p == pa) ax to ay else 0f to 0f
+            val (x1, y1) = if (p == last) bx to by else size.width to size.height
+            if (p == pa || p == last) runCatching { st.snapSelection(Point(x0, y0), Point(x1, y1), StructuredText.SELECT_WORDS) }
+            selectionNow(p, st, x0, y0, x1, y1)?.let { parts += it }
+        }
+        if (parts.isEmpty()) return@onDoc null
+        val text = parts.joinToString("\n") { it.text.trimEnd() }
+        // The two ends are where the user put them, even when a page between has no words.
+        val first = parts.first().copy(ax = if (parts.first().page == pa) ax else parts.first().ax, ay = if (parts.first().page == pa) ay else parts.first().ay)
+        val rest = parts.drop(1).toMutableList()
+        if (rest.isNotEmpty() && rest.last().page == last) rest[rest.lastIndex] = rest.last().copy(bx = bx, by = by)
+        first.copy(text = text, rest = rest)
     }
 
     private fun selectionNow(index: Int, st: StructuredText, ax: Float, ay: Float, bx: Float, by: Float): Selection? {

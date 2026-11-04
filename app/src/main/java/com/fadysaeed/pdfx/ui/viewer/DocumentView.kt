@@ -418,20 +418,21 @@ fun DocumentView(
                                     }
                                 }
                             }
-                            .pointerInput(i) {
+                            .pointerInput(i, perRow) {
                                 // Dragging a selection handle; claimed before the list can scroll.
                                 awaitEachGesture {
                                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                                     val sel = reader.selection
-                                    if (sel == null || sel.page != i) return@awaitEachGesture
+                                    // The start handle sits on the first page of the selection, the end handle on its last.
+                                    if (sel == null || (sel.page != i && sel.lastPart.page != i)) return@awaitEachGesture
                                     val k = size.width / pageWidthPt(i)
                                     val first = sel.boxes.first()
-                                    val last = sel.boxes.last()
+                                    val last = sel.lastPart.boxes.last()
                                     val startAt = Offset(first.x0 * k, first.y1 * k)
                                     val endAt = Offset(last.x1 * k, last.y1 * k)
                                     val reach = 40.dp.toPx()
-                                    val ds = (down.position - startAt).getDistance()
-                                    val de = (down.position - endAt).getDistance()
+                                    val ds = if (sel.page == i) (down.position - startAt).getDistance() else Float.MAX_VALUE
+                                    val de = if (sel.lastPart.page == i) (down.position - endAt).getDistance() else Float.MAX_VALUE
                                     if (minOf(ds, de) > reach) return@awaitEachGesture
                                     val start = ds < de
                                     down.consume()
@@ -444,7 +445,17 @@ fun DocumentView(
                                                 // Aim a little above the finger so the text being picked stays visible.
                                                 val aim = Offset(c.position.x, c.position.y - 18.dp.toPx())
                                                 lens = aim
-                                                reader.dragSelection(start, aim.x / k, aim.y / k)
+                                                // Past the bottom (or top) of this page, the handle is on the next (or the one
+                                                // before), and the selection runs across. Pages side by side keep to one page.
+                                                var page = i
+                                                var y = aim.y
+                                                if (perRow == 1) {
+                                                    fun h(p: Int) = size.width / (aspects.getOrNull(p)?.takeIf { it > 0f } ?: 0.707f)
+                                                    while (y > h(page) && page < pageCount - 1) { y -= h(page) + gapPx; page++ }
+                                                    while (y < 0f && page > 0) { page--; y += h(page) + gapPx }
+                                                }
+                                                val kp = size.width / pageWidthPt(page)
+                                                reader.dragSelection(start, page, aim.x / kp, y / kp)
                                             }
                                             c.consume()
                                         } while (c.pressed)
@@ -523,7 +534,8 @@ private class RowKeeper(var perRow: Int, var page: Int)
 @Composable
 private fun PageMarks(reader: Reader, page: Int, pageWidthPt: Float, pageImage: ImageBitmap?) {
     val hits = reader.hits[page]
-    val sel = reader.selection?.takeIf { it.page == page }
+    val whole = reader.selection
+    val sel = whole?.parts?.firstOrNull { it.page == page }
     val cur = reader.currentHit()?.takeIf { it.first == page }?.second
     val draft = reader.draft?.takeIf { it.page == page }
     val picked = reader.selectedMark?.takeIf { it.page == page }
@@ -629,12 +641,13 @@ private fun PageMarks(reader: Reader, page: Int, pageWidthPt: Float, pageImage: 
             val now = h == cur
             boxes.forEach { b -> mark(b, k, Ink.Amber.copy(alpha = if (now) 0.55f else 0.28f), if (now) Ink.Amber else null) }
         }
-        if (sel != null) {
+        if (sel != null && whole != null) {
             sel.boxes.forEach { b -> mark(b, k, Ink.Teal.copy(alpha = 0.38f), null) }
             val first = sel.boxes.first()
             val last = sel.boxes.last()
-            handle(Offset(first.x0 * k, first.y1 * k), first.height * k)
-            handle(Offset(last.x1 * k, last.y1 * k), last.height * k)
+            // Across pages: the start handle on the first page, the end handle on the last.
+            if (whole.page == page) handle(Offset(first.x0 * k, first.y1 * k), first.height * k)
+            if (whole.lastPart.page == page) handle(Offset(last.x1 * k, last.y1 * k), last.height * k)
         }
     }
 }
