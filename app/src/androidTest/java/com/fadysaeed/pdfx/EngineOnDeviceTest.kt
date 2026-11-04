@@ -145,6 +145,19 @@ class EngineOnDeviceTest {
         session.close()
     }
 
+    /** Reflowed text: the Arabic line on the sample page reads right to left, its words in order. */
+    @Test
+    fun reflowedArabicReadsInOrder() = runBlocking {
+        val s = PdfSession.open(ctx, Uri.fromFile(samplePdf(1)))
+        try {
+            val all = s.paragraphs(0).joinToString("\n") { it.text }
+            File(shots, "reflow-arabic.txt").writeText(all)
+            assertTrue(all, all.contains("هذا سطر عربي للتأكد من عرض الحروف العربية"))
+        } finally {
+            s.close()
+        }
+    }
+
     /** A selection from the foot of one page into the next: both parts, and the words of both in order. */
     @Test
     fun aSelectionRunsOnToTheNextPage() = runBlocking {

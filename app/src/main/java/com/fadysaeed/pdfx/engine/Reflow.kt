@@ -105,15 +105,19 @@ internal class FlowWalker : StructuredTextWalker {
         lines = null
     }
 
+    /** Where each letter of the line sits across the page (its middle), in the order the file gave them. */
+    private val xs = ArrayList<Float>()
+
     override fun beginLine(bbox: Rect, wmode: Int, dir: Point?) {
-        sb.setLength(0); bold.clear(); italic.clear(); sizeSum = 0f
+        sb.setLength(0); bold.clear(); italic.clear(); xs.clear(); sizeSum = 0f
         lineBox = bbox
     }
 
     override fun endLine() {
         val r = lineBox ?: return
         if (sb.isNotEmpty() && sb.isNotBlank()) {
-            lines?.add(RawLine(sb.toString(), bold.toBooleanArray(), italic.toBooleanArray(), sizeSum / bold.size.coerceAtLeast(1), r.y0, r.y1, r.x0, r.x1))
+            val ordered = Bidi.logical(sb.toString(), bold.toBooleanArray(), italic.toBooleanArray(), xs.toFloatArray())
+            lines?.add(RawLine(ordered.text, ordered.bold, ordered.italic, sizeSum / bold.size.coerceAtLeast(1), r.y0, r.y1, r.x0, r.x1))
         }
     }
 
@@ -126,8 +130,9 @@ internal class FlowWalker : StructuredTextWalker {
         }
         val b = lastBold || (flags and StructuredText.CHAR_FLAGS_BOLD) != 0
         val units = Character.toChars(c)
+        val x = q?.let { (minOf(it.ul_x, it.ll_x) + maxOf(it.ur_x, it.lr_x)) / 2f } ?: xs.lastOrNull() ?: 0f
         units.forEach { u ->
-            sb.append(u); bold += b; italic += lastItalic
+            sb.append(u); bold += b; italic += lastItalic; xs += x
         }
         sizeSum += size * units.size
     }
@@ -280,4 +285,79 @@ internal fun joinParas(a: Para, b: Para): Para {
     val head = if (hyphen && !keepsHyphen(a.text, b.text, 0)) a.text.dropLast(1) else if (hyphen) a.text else a.text + " "
     val shift = head.length
     return a.copy(text = head + b.text, spans = a.spans.map { if (it.end > head.length) it.copy(end = head.length) else it } + b.spans.map { it.copy(start = it.start + shift, end = it.end + shift) })
+}
+
+/**
+ * Puts a line's letters in reading order. PDF files store Arabic either in the order it is read
+ * or in the order it is drawn, left to right, which reads backwards; and often as the shaped
+ * "presentation" forms of the letters rather than the letters themselves. Ordering by where each
+ * letter sits on the page gives the reading order either way: right to left for an Arabic line
+ * (numbers and Latin words inside it kept left to right), left to right otherwise (Arabic words
+ * inside turned round). Lines with no Arabic are left exactly as they came.
+ */
+internal object Bidi {
+    class Line(val text: String, val bold: BooleanArray, val italic: BooleanArray)
+
+    private fun isRtl(c: Char): Boolean = when (Character.getDirectionality(c)) {
+        Character.DIRECTIONALITY_RIGHT_TO_LEFT, Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC -> true
+        else -> false
+    }
+
+    private fun isLtr(c: Char): Boolean = when (Character.getDirectionality(c)) {
+        Character.DIRECTIONALITY_LEFT_TO_RIGHT, Character.DIRECTIONALITY_EUROPEAN_NUMBER, Character.DIRECTIONALITY_ARABIC_NUMBER -> true
+        else -> false
+    }
+
+    private fun isMark(c: Char): Boolean = Character.getType(c) == Character.NON_SPACING_MARK.toInt() || Character.getType(c) == Character.ENCLOSING_MARK.toInt()
+
+    /** A letter with the marks (short vowels, shadda) that go with it, its place and style. */
+    private class Cluster(val text: StringBuilder, val x: Float, val order: Int, val bold: Boolean, val italic: Boolean) {
+        val rtl get() = text.any { isRtl(it) }
+        val ltr get() = !rtl && text.any { isLtr(it) }
+    }
+
+    fun logical(text: String, bold: BooleanArray, italic: BooleanArray, xs: FloatArray): Line {
+        if (text.none { isRtl(it) } || xs.size != text.length) return Line(text, bold, italic)
+        // Letters and their marks, kept together; a letter made of two units (outside the basic plane) is one.
+        val clusters = ArrayList<Cluster>()
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            val n = if (Character.isHighSurrogate(c) && i + 1 < text.length) 2 else 1
+            val piece = text.substring(i, i + n)
+            if (isMark(c) && clusters.isNotEmpty()) clusters.last().text.append(piece)
+            else clusters += Cluster(StringBuilder(piece), xs[i], clusters.size, bold.getOrElse(i) { false }, italic.getOrElse(i) { false })
+            i += n
+        }
+        val rtlCount = clusters.count { it.rtl }
+        val ltrCount = clusters.count { it.text.any { ch -> Character.getDirectionality(ch) == Character.DIRECTIONALITY_LEFT_TO_RIGHT } }
+        val rtlLine = rtlCount >= ltrCount
+        // In the order they sit: right to left for an Arabic line, left to right for any other.
+        val sorted = if (rtlLine) clusters.sortedWith(compareByDescending<Cluster> { it.x }.thenBy { it.order })
+            else clusters.sortedWith(compareBy<Cluster> { it.x }.thenBy { it.order })
+        // Runs going the other way read backwards now: turn each round. A run is letters of the
+        // other direction with whatever sits between them (spaces, full stops), up to the last of them.
+        val out = sorted.toMutableList()
+        fun other(c: Cluster) = if (rtlLine) c.ltr else c.rtl
+        fun same(c: Cluster) = if (rtlLine) c.rtl else c.ltr
+        var k = 0
+        while (k < out.size) {
+            if (!other(out[k])) { k++; continue }
+            var end = k
+            var j = k + 1
+            while (j < out.size && !same(out[j])) { if (other(out[j])) end = j; j++ }
+            out.subList(k, end + 1).reverse()
+            k = end + 1
+        }
+        val sb = StringBuilder()
+        val b = ArrayList<Boolean>()
+        val it2 = ArrayList<Boolean>()
+        for (c in out) {
+            // Presentation forms (the shaped letters some files store) back to the letters themselves.
+            val t = c.text.toString().let { if (it.any { ch -> ch.code in 0xFB50..0xFDFF || ch.code in 0xFE70..0xFEFF }) java.text.Normalizer.normalize(it, java.text.Normalizer.Form.NFKC) else it }
+            sb.append(t)
+            repeat(t.length) { b += c.bold; it2 += c.italic }
+        }
+        return Line(sb.toString(), b.toBooleanArray(), it2.toBooleanArray())
+    }
 }
