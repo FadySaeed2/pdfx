@@ -18,7 +18,15 @@ import java.security.MessageDigest
 /** First-page pictures for the list and the grid, drawn once and kept on disk until the file changes. */
 class Thumbs(context: Context, private val library: Library) {
     private val appContext = context.applicationContext
-    private val dir = File(context.cacheDir, "thumbs").apply { mkdirs() }
+    private val dir = File(context.cacheDir, "thumbs").apply {
+        mkdirs()
+        // Pictures drawn at an earlier size are never asked for again: clear them once.
+        val prefs = context.getSharedPreferences("thumbs", Context.MODE_PRIVATE)
+        if (prefs.getInt("width", 0) != WIDTH_PX) {
+            listFiles()?.forEach { it.delete() }
+            prefs.edit().putInt("width", WIDTH_PX).apply()
+        }
+    }
     // Held by size: about 300 first pages at grid sharpness.
     private val memory = object : LruCache<String, ImageBitmap>(48 * 1024 * 1024) {
         override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4

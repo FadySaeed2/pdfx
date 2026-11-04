@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_scan">Scan</string>
+    <string name="shortcut_scan_long">Scan pages</string>
+    <string name="shortcut_last">Last file</string>
+    <string name="shortcut_last_long">Open the last file</string>
+    <string name="shortcut_search">Search</string>
+    <string name="shortcut_search_long">Search your files</string>
+</resources>

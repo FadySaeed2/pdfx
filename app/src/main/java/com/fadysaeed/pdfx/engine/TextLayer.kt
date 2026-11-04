@@ -128,7 +128,7 @@ object TextLayer {
     }
 
     /** The page's own resources, made its own if it only inherited them, so adding a font touches no other page. */
-    private fun ownResources(doc: PDFDocument, pageObj: PDFObject): PDFObject {
+    internal fun ownResources(doc: PDFDocument, pageObj: PDFObject): PDFObject {
         val own = pageObj.get("Resources")
         if (!own.isNull) return own
         val inherited = pageObj.getInheritable("Resources")

@@ -15,6 +15,8 @@ import com.fadysaeed.pdfx.ui.theme.PdfxTheme
 
 class MainActivity : ComponentActivity() {
     private val incoming = mutableStateOf<List<Uri>?>(null)
+    /** A shortcut held on the app's icon: "scan", "last" or "search". */
+    private val shortcut = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -22,10 +24,10 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.BLACK),
         )
         super.onCreate(savedInstanceState)
-        if (savedInstanceState == null) incoming.value = documentFrom(intent)
+        if (savedInstanceState == null) { incoming.value = documentFrom(intent); shortcut.value = shortcutFrom(intent) }
         setContent {
             PdfxTheme {
-                PdfxRoot(incoming.value) { incoming.value = null }
+                PdfxRoot(incoming.value, { incoming.value = null }, shortcut.value) { shortcut.value = null }
             }
         }
     }
@@ -33,6 +35,14 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         documentFrom(intent)?.let { incoming.value = it }
+        shortcutFrom(intent)?.let { shortcut.value = it }
+    }
+
+    private fun shortcutFrom(intent: Intent?): String? = when (intent?.action) {
+        "com.fadysaeed.pdfx.action.SCAN" -> "scan"
+        "com.fadysaeed.pdfx.action.LAST" -> "last"
+        "com.fadysaeed.pdfx.action.SEARCH" -> "search"
+        else -> null
     }
 
     /** What another app hands over: a PDF, a book, or one or more pictures to make into a PDF. */

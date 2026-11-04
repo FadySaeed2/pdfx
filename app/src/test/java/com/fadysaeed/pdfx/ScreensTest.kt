@@ -612,6 +612,30 @@ class ScreensTest {
     }
 
     @Test
+    fun watermarkDialog() {
+        compose.setContent {
+            PdfxTheme {
+                androidx.compose.foundation.layout.Box(Modifier.background(Ink.Field).padding(24.dp)) {
+                    com.fadysaeed.pdfx.ui.tools.WatermarkBody(com.fadysaeed.pdfx.ui.tools.WatermarkUi(), busy = false, note = null)
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/55_watermark.png")
+    }
+
+    @Test
+    fun pageNumbersDialog() {
+        compose.setContent {
+            PdfxTheme {
+                androidx.compose.foundation.layout.Box(Modifier.background(Ink.Field).padding(24.dp)) {
+                    com.fadysaeed.pdfx.ui.tools.PageNumbersBody(com.fadysaeed.pdfx.ui.tools.NumbersUi().apply { style = com.fadysaeed.pdfx.engine.Stamp.Style.OF; place = com.fadysaeed.pdfx.engine.Stamp.Place.BOTTOM_RIGHT }, 12, busy = false, note = null)
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/56_page_numbers.png")
+    }
+
+    @Test
     fun redactDialog() {
         compose.setContent {
             PdfxTheme {

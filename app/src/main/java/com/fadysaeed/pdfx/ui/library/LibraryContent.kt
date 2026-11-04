@@ -38,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -116,6 +117,9 @@ fun LibraryContent(
     notice: Notice? = null,
     now: Long = System.currentTimeMillis(),
     label: (String?) -> String = { it ?: "From other apps" },
+    /** Puts the cursor in the search box (the Search shortcut on the app's icon). */
+    focusSearch: Boolean = false,
+    onSearchFocused: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize().background(Ink.Black).windowInsetsPadding(WindowInsets.statusBars)) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -123,7 +127,9 @@ fun LibraryContent(
             Spacer(Modifier.weight(1f))
             Text("ON THIS PHONE ONLY", style = Type.eyebrow)
         }
-        SearchField(ui.query, actions.query, Modifier.padding(horizontal = 20.dp))
+        val focus = androidx.compose.runtime.remember { androidx.compose.ui.focus.FocusRequester() }
+        androidx.compose.runtime.LaunchedEffect(focusSearch) { if (focusSearch) { runCatching { focus.requestFocus() }; onSearchFocused() } }
+        SearchField(ui.query, actions.query, Modifier.padding(horizontal = 20.dp).focusRequester(focus))
         Spacer(Modifier.height(4.dp))
 
         Box(Modifier.weight(1f)) {

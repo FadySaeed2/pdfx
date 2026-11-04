@@ -100,7 +100,7 @@ private sealed interface Ask {
 /** The library with all its menus. [onOpen] opens a document, optionally at a page. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> Unit) {
+fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> Unit, ask: String? = null, onAsked: () -> Unit = {}) {
     val context = LocalContext.current
     val app = context.applicationContext as PdfxApp
     val ui by vm.ui.collectAsState()
@@ -133,6 +133,15 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
         },
         onProblem = { vm.notice.value = Notice(it) },
     )
+    // A shortcut from the app's icon: scan straight away, or put the cursor in the search box.
+    var focusSearch by remember { mutableStateOf(false) }
+    LaunchedEffect(ask) {
+        when (ask) {
+            "scan" -> { onAsked(); scan() }
+            "search" -> { onAsked(); vm.go(Section.RECENT); focusSearch = true }
+        }
+    }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     var splitting by remember { mutableStateOf<Doc?>(null) }
     var duplicatesOpen by remember { mutableStateOf(false) }
     var topicsOpen by remember { mutableStateOf(false) }
@@ -149,6 +158,8 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     LibraryContent(
         ui = ui,
         notice = notice,
+        focusSearch = focusSearch,
+        onSearchFocused = { focusSearch = false },
         label = vm.library::folderLabel,
         thumb = { d ->
             val img by produceState(app.thumbs.cached(d), d.key, d.modified, d.locked) { value = app.thumbs.load(d) }
@@ -175,7 +186,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             shelf = vm::openShelf,
             topics = { topicsOpen = true },
             tidy = { tidyOpen = true },
-            pickDoc = vm::pick,
+            pickDoc = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); vm.pick(it) },
             pickAll = vm::pickAll,
             clearPicks = vm::clearPicks,
             many = { what ->
@@ -189,7 +200,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             folderMore = { sheet = Sheet.FolderMenu(it) },
             newFolder = { ask = Ask.NewFolderIn(it) },
             crumb = vm::openFolder,
-            peek = { sheet = Sheet.Peek(it) },
+            peek = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); sheet = Sheet.Peek(it) },
             grid = vm::setGrid,
             filter = vm::setFilter,
         ),

@@ -750,6 +750,32 @@ fun ViewerScreen(
                     hasPassword = password != null, busy = toolBusy, note = toolNote,
                     onLock = ::lockWith, onRemove = ::unlockFile, onDismiss = { tool = null },
                 )
+                "watermark" -> com.fadysaeed.pdfx.ui.tools.WatermarkDialog(
+                    busy = toolBusy, note = toolNote,
+                    onMake = { m, asNew ->
+                        if (!toolBusy) {
+                            toolBusy = true; toolNote = null
+                            val pw = password
+                            keepMade(asNew, "watermark", "Watermark added.", pw, after = { toolBusy = false }) { base, out ->
+                                com.fadysaeed.pdfx.engine.Stamp.watermark(base, out.absolutePath, m, pw)
+                            }
+                        }
+                    },
+                    onDismiss = { if (!toolBusy) { tool = null; toolNote = null } },
+                )
+                "numbers" -> com.fadysaeed.pdfx.ui.tools.PageNumbersDialog(
+                    pageCount = session.pageCount, busy = toolBusy, note = toolNote,
+                    onMake = { n, asNew ->
+                        if (!toolBusy) {
+                            toolBusy = true; toolNote = null
+                            val pw = password
+                            keepMade(asNew, "numbered", "Pages numbered.", pw, after = { toolBusy = false }) { base, out ->
+                                com.fadysaeed.pdfx.engine.Stamp.pageNumbers(base, out.absolutePath, n, pw)
+                            }
+                        }
+                    },
+                    onDismiss = { if (!toolBusy) { tool = null; toolNote = null } },
+                )
                 "details" -> {
                     LaunchedEffect(Unit) {
                         details = runCatching {
@@ -1193,7 +1219,7 @@ fun ViewerContent(
                         )
                         SheetRow(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS })
                         if (reader.canMark && !reader.reflow) SheetRow(Glyph.GRID, "Pages", { then { reader.openPages?.invoke() } }, note = "Put them in order, turn, add or take out, or save some as a new file")
-                        if (reader.canMark) SheetRow(Glyph.LOCK, "File tools", { sheet = ViewerSheet.TOOLS }, note = "Searchable, smaller, password, hidden details, trim, split, merge")
+                        if (reader.canMark) SheetRow(Glyph.LOCK, "File tools", { sheet = ViewerSheet.TOOLS }, note = "Searchable, smaller, password, watermark, page numbers, split, merge")
                         SheetRow(Glyph.MOON, "Page colours and reading mode", { sheet = ViewerSheet.DISPLAY })
                     }
                     ViewerSheet.TOOLS -> {
@@ -1204,6 +1230,8 @@ fun ViewerContent(
                         SheetRow(Glyph.LOCK, if (reader.hasPassword) "Password" else "Lock with a password", { then { reader.openTool?.invoke("password") } }, note = if (reader.hasPassword) "Change it or take it off" else "AES-256; it opens only with the password")
                         SheetRow(Glyph.PEN, "Black out (redact)", { then { reader.openTool?.invoke("redact") } }, note = if (reader.redactions > 0) "${reader.redactions} marked; black them out for good" else "Names, numbers or areas, taken out of the file for good")
                         SheetRow(Glyph.TRASH, "Remove hidden details", { then { reader.openTool?.invoke("details") } }, note = "Author, programs, dates and editing history")
+                        SheetRow(Glyph.RENAME, "Watermark", { then { reader.openTool?.invoke("watermark") } }, note = "CONFIDENTIAL, DRAFT or your own words across the pages")
+                        SheetRow(Glyph.LIST, "Page numbers", { then { reader.openTool?.invoke("numbers") } }, note = "Where you want them, from the page you want")
                         if (!reader.reflow) SheetRow(Glyph.PAGE, "Trim white margins", { then { reader.openTool?.invoke("trim") } }, note = "Bigger words on a phone; whole pages can come back")
                         SheetRow(Glyph.GRID, "Split into files…", { then { reader.openTool?.invoke("split") } })
                         SheetRow(Glyph.PLUS, "Merge with other files…", { then { reader.openTool?.invoke("merge") } })

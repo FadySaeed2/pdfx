@@ -25,10 +25,11 @@ import com.fadysaeed.pdfx.ui.viewer.OpenRequest
 import com.fadysaeed.pdfx.ui.viewer.ViewerScreen
 import android.content.Intent
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.graphicsLayer
 
 /** The library and an open document. A file handed over by another app opens straight away. */
 @Composable
-fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit) {
+fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit, shortcut: String? = null, onShortcutHandled: () -> Unit = {}) {
     val context = LocalContext.current
     val vm: LibraryModel = viewModel()
     // Kept across the app being recreated, so an open file stays open.
@@ -172,6 +173,21 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit) {
         }
     }
 
+    // From the icon's shortcuts: the last file opens here; scanning and search are the library's.
+    var libraryAsk by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(shortcut) {
+        val s = shortcut ?: return@LaunchedEffect
+        onShortcutHandled()
+        when (s) {
+            "last" -> {
+                val last = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.library.dao.all().filter { !it.inTrash && it.lastOpened > 0 }.maxByOrNull { it.lastOpened } }
+                if (last != null) open = OpenRequest(Uri.parse(last.uri), last.lastPage)
+                else vm.notice.value = Notice("No file has been opened yet.")
+            }
+            else -> { open = null; libraryAsk = s }
+        }
+    }
+
     LaunchedEffect(incoming) {
         if (incoming != null) {
             onIncomingHandled()
@@ -187,9 +203,15 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit) {
     // A last stop for the back gesture inside a file: the viewer's own handling comes first; this
     // only makes sure a file never closes the whole app.
     androidx.activity.compose.BackHandler(enabled = current != null) { open = null }
+    // A short fade as a file opens or closes, so the change of screen is seen rather than jumped.
+    val fade = remember(current == null, current?.uri) { androidx.compose.animation.core.Animatable(0.35f) }
+    LaunchedEffect(fade) { fade.animateTo(1f, androidx.compose.animation.core.tween(160)) }
+    androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().graphicsLayer { alpha = fade.value }) {
     if (current == null) {
         LibraryScreen(
             vm = vm,
+            ask = libraryAsk,
+            onAsked = { libraryAsk = null },
             // Opened from a search hit: carry the words in, so they are found and lit up inside.
             onOpen = { d, page ->
                 val q = vm.ui.value.query.trim().takeIf { it.isNotEmpty() && page != null }
@@ -212,6 +234,7 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit) {
             if (message != null) vm.notice.value = Notice(message)
             open = null
         }
+    }
     }
     book?.let { u ->
         com.fadysaeed.pdfx.ui.tools.BookDialog(
