@@ -105,21 +105,21 @@ internal class FlowWalker : StructuredTextWalker {
         lines = null
     }
 
-    /** Where each letter of the line sits across the page (its middle), in the order the file gave them. */
-    private val xs = ArrayList<Float>()
-    /** Letters with no width of their own: the second letter of a ligature, drawn as one shape with the first. */
-    private val joined = ArrayList<Boolean>()
+    /** Where each letter of the line starts and ends across the page, in the order the engine gave them. */
+    private val x0s = ArrayList<Float>()
+    private val x1s = ArrayList<Float>()
 
     override fun beginLine(bbox: Rect, wmode: Int, dir: Point?) {
-        sb.setLength(0); bold.clear(); italic.clear(); xs.clear(); joined.clear(); sizeSum = 0f
+        sb.setLength(0); bold.clear(); italic.clear(); x0s.clear(); x1s.clear(); sizeSum = 0f
         lineBox = bbox
     }
 
     override fun endLine() {
         val r = lineBox ?: return
         if (sb.isNotEmpty() && sb.isNotBlank()) {
-            val ordered = Bidi.logical(sb.toString(), bold.toBooleanArray(), italic.toBooleanArray(), xs.toFloatArray(), joined.toBooleanArray())
-            lines?.add(RawLine(ordered.text, ordered.bold, ordered.italic, sizeSum / bold.size.coerceAtLeast(1), r.y0, r.y1, r.x0, r.x1))
+            val size = sizeSum / bold.size.coerceAtLeast(1)
+            val ordered = Bidi.logical(sb.toString(), bold.toBooleanArray(), italic.toBooleanArray(), x0s.toFloatArray(), x1s.toFloatArray(), size)
+            lines?.add(RawLine(ordered.text, ordered.bold, ordered.italic, size, r.y0, r.y1, r.x0, r.x1))
         }
     }
 
@@ -132,11 +132,12 @@ internal class FlowWalker : StructuredTextWalker {
         }
         val b = lastBold || (flags and StructuredText.CHAR_FLAGS_BOLD) != 0
         val units = Character.toChars(c)
-        val x = q?.let { (minOf(it.ul_x, it.ll_x) + maxOf(it.ur_x, it.lr_x)) / 2f } ?: xs.lastOrNull() ?: 0f
-        // The engine gives the further letters of one shape (a lam-meem, a feh-yeh) no width.
-        val none = q == null || (maxOf(q.ur_x, q.lr_x) - minOf(q.ul_x, q.ll_x)) < 0.05f
+        val left = q?.let { minOf(it.ul_x, it.ll_x) } ?: x1s.lastOrNull() ?: 0f
+        val right = q?.let { maxOf(it.ur_x, it.lr_x) } ?: left
         units.forEachIndexed { k, u ->
-            sb.append(u); bold += b; italic += lastItalic; xs += x; joined += (none || k > 0)
+            sb.append(u); bold += b; italic += lastItalic
+            // A second unit of one letter has no width of its own.
+            x0s += if (k == 0) left else right; x1s += right
         }
         sizeSum += size * units.size
     }
@@ -314,52 +315,164 @@ internal object Bidi {
 
     private fun isMark(c: Char): Boolean = Character.getType(c) == Character.NON_SPACING_MARK.toInt() || Character.getType(c) == Character.ENCLOSING_MARK.toInt()
 
-    /** A letter with the marks (short vowels, shadda) that go with it, its place and style. */
-    private class Cluster(val text: StringBuilder, val x: Float, val order: Int, val bold: Boolean, val italic: Boolean) {
-        val rtl get() = text.any { isRtl(it) }
-        val ltr get() = !rtl && text.any { isLtr(it) }
-    }
-
     /** Brackets and quotes drawn as they look: in a line stored as drawn, each stands for its mirror. */
     private val MIRROR = mapOf('(' to ')', ')' to '(', '[' to ']', ']' to '[', '{' to '}', '}' to '{', '<' to '>', '>' to '<', '«' to '»', '»' to '«', '‹' to '›', '›' to '‹')
 
-    fun logical(text: String, bold: BooleanArray, italic: BooleanArray, xs: FloatArray, joined: BooleanArray? = null): Line {
-        if (text.none { isRtl(it) } || xs.size != text.length) return Line(text, bold, italic)
-        // Letters and their marks, kept together; a letter made of two units (outside the basic plane) is one.
-        val clusters = ArrayList<Cluster>()
-        var i = 0
-        while (i < text.length) {
-            val c = text[i]
-            val n = if (Character.isHighSurrogate(c) && i + 1 < text.length) 2 else 1
-            val piece = text.substring(i, i + n)
-            // Marks, and the letters a ligature carries after its first, stay with the letter before.
-            if ((isMark(c) || joined?.getOrNull(i) == true) && clusters.isNotEmpty()) clusters.last().text.append(piece)
-            else clusters += Cluster(StringBuilder(piece), xs[i], clusters.size, bold.getOrElse(i) { false }, italic.getOrElse(i) { false })
-            i += n
+    /** A letter with the letters of its shape and its marks; where it sits and its style. */
+    private class Cluster(val text: String, val x0: Float, val x1: Float, val order: Int, val bold: Boolean, val italic: Boolean) {
+        val x get() = (x0 + x1) / 2
+        val rtl get() = text.any { isRtl(it) }
+        val ltr get() = !rtl && text.any { isLtr(it) }
+        val space get() = text.isBlank()
+    }
+
+    private val TANWEEN_ALEF = Regex("(?:\u064D\u0651|\u0651\u064D)(?=\u0627)")
+
+    private val PAIRS = listOf('(' to ')', '[' to ']', '{' to '}', '«' to '»')
+
+    /**
+     * Whether this page's Arabic lines give their brackets and quotes as they look rather than as
+     * they read. Many files keep the shape drawn: Arabic opens a bracket on its right, drawn as ")",
+     * so the file says ")هي KRRS(" for (هي KRRS). Each line where a pair shows which way it goes
+     * votes; true or false when the page decides, null when it shows nothing.
+     */
+    fun bracketsAsDrawn(lines: List<String>): Boolean? {
+        var asRead = 0
+        var asDrawn = 0
+        for (t in lines) {
+            if (t.count { isRtl(it) } <= t.count { Character.getDirectionality(it) == Character.DIRECTIONALITY_LEFT_TO_RIGHT }) continue
+            for ((open, close) in PAIRS) {
+                val o = t.indexOf(open)
+                val c = t.indexOf(close)
+                if (o >= 0 && c >= 0) { if (o < c) asRead++ else asDrawn++ }
+            }
         }
-        // Stored as drawn (left to right) rather than as read: then brackets and quotes are mirrored.
+        return if (asRead == asDrawn) null else asDrawn > asRead
+    }
+
+    /** Brackets and quotes of the page's Arabic lines turned round, when the file gives them as drawn. */
+    fun readBrackets(blocks: List<RawBlock>, asDrawn: Boolean): List<RawBlock> {
+        if (!asDrawn) return blocks
+        return blocks.map { b ->
+            if (b.lines.isEmpty() || b.lines.none { l -> l.text.any { MIRROR.containsKey(it) } }) b
+            else RawBlock(b.box, b.lines.map { l ->
+                if (l.text.count { isRtl(it) } <= l.text.count { Character.getDirectionality(it) == Character.DIRECTIONALITY_LEFT_TO_RIGHT }) l
+                else RawLine(String(CharArray(l.text.length) { i -> MIRROR[l.text[i]] ?: l.text[i] }), l.bold, l.italic, l.size, l.y0, l.y1, l.x0, l.x1)
+            }, b.image, b.table, b.figure)
+        }
+    }
+
+    /**
+     * Each letter of a line, from where the engine put it ([x0] to [x1]) and in the order it gave
+     * them, put back in reading order.
+     *
+     * What a real Arabic book showed (Yakout, set by a publisher's tool): the engine splits each
+     * shape of two letters (لا، لم، لى، في، ير، بر) into the first letter with the shape's width and the
+     * second with no width at the shape's far edge, given before the first; marks drawn together
+     * (shadda with a vowel) come as a space with no width and the marks; and the gaps between words
+     * are often left as gaps, with no space at all. So: letters with no width join the shape whose
+     * edge they sit at, marks join the letter before them, spaces with no width go, letters are put
+     * in the order they sit (right to left on an Arabic line, with numbers and Latin words inside
+     * kept left to right), and a gap as wide as a space becomes one.
+     */
+    fun logical(text: String, bold: BooleanArray, italic: BooleanArray, x0: FloatArray, x1: FloatArray, size: Float = 12f): Line {
+        val n = text.length
+        if (text.none { isRtl(it) } || x0.size != n || x1.size != n) return Line(text, bold, italic)
+        val zero = BooleanArray(n) { x1[it] - x0[it] < 0.05f }
+        // Which letter each unit belongs to: itself (a letter with width), another, or none (-2: dropped).
+        val owner = IntArray(n) { if (zero[it]) -1 else it }
+        // Marks the engine gave after the space that follows their word: they sit on the word's last
+        // letter, which may be the far letter of a shape (تغييرٍ), not the shape's first.
+        val wordEnd = BooleanArray(n)
+        for (i in 0 until n) {
+            if (!zero[i]) continue
+            val c = text[i]
+            if (c == ' ' || c == '\u00A0') { owner[i] = -2; continue }
+            if (Character.isLowSurrogate(c) && i > 0) { owner[i] = i - 1; continue }
+            if (isMark(c)) {
+                var j = i - 1
+                while (j >= 0 && (text[j].isWhitespace() || zero[j])) { if (text[j].isWhitespace() && !zero[j]) wordEnd[i] = true; j-- }
+                owner[i] = if (j >= 0) j else -2
+                continue
+            }
+            // The shape whose far edge this letter sits at: the next letter or two first, then the ones before.
+            var best = -1
+            for (j in (i + 1..minOf(n - 1, i + 3)) + (i - 1 downTo maxOf(0, i - 3))) {
+                if (!zero[j] && kotlin.math.abs(x1[j] - x0[i]) < 0.6f) { best = j; break }
+            }
+            owner[i] = if (best >= 0) best else if (i > 0) i - 1 else -2
+        }
+        fun root(i: Int): Int {
+            var r = i
+            var k = 0
+            while (r >= 0 && owner[r] != r && owner[r] >= 0 && k < 6) { r = owner[r]; k++ }
+            return if (r >= 0 && owner[r] == r) r else -1
+        }
+        val members = LinkedHashMap<Int, MutableList<Int>>()
+        for (i in 0 until n) {
+            if (owner[i] == -2) continue
+            val r = root(i)
+            if (r < 0) continue
+            members.getOrPut(r) { ArrayList() } += i
+        }
+        val clusters = members.entries.sortedBy { it.key }.map { (r, idx) ->
+            // The letter itself, its marks, then the further letters of its shape (given before it, so turned round).
+            val marks = idx.filter { it != r && isMark(text[it]) && !wordEnd[it] }
+            val lastMarks = idx.filter { it != r && isMark(text[it]) && wordEnd[it] }
+            val tails = idx.filter { it != r && !isMark(text[it]) && !(Character.isLowSurrogate(text[it]) && it == r + 1) }
+            val surrogate = idx.filter { it == r + 1 && Character.isLowSurrogate(text[it]) }
+            val t = buildString {
+                append(text[r]); surrogate.forEach { append(text[it]) }
+                marks.forEach { append(text[it]) }
+                tails.reversed().forEach { append(text[it]) }
+                lastMarks.forEach { append(text[it]) }
+            }
+            Cluster(t, x0[r], x1[r], r, bold.getOrElse(r) { false }, italic.getOrElse(r) { false })
+        }
         val rtlRun = clusters.filter { it.rtl }
         var rising = 0
         var falling = 0
         for (k in 1 until rtlRun.size) { val d = rtlRun[k].x - rtlRun[k - 1].x; if (d > 0.01f) rising++ else if (d < -0.01f) falling++ }
+        // Stored as drawn (left to right) rather than as read: then brackets and quotes are mirrored.
         val drawnOrder = rising > falling
-        val rtlCount = clusters.count { it.rtl }
-        val ltrCount = clusters.count { it.text.any { ch -> Character.getDirectionality(ch) == Character.DIRECTIONALITY_LEFT_TO_RIGHT } }
-        val rtlLine = rtlCount >= ltrCount
-        // In the order they sit: right to left for an Arabic line, left to right for any other.
+        val rtlLine = clusters.count { it.rtl } >= clusters.count { c -> c.text.any { Character.getDirectionality(it) == Character.DIRECTIONALITY_LEFT_TO_RIGHT } }
         val sorted = if (rtlLine) clusters.sortedWith(compareByDescending<Cluster> { it.x }.thenBy { it.order })
             else clusters.sortedWith(compareBy<Cluster> { it.x }.thenBy { it.order })
+        // A gap as wide as a space, where the file has none, is a space. In the book the narrowest
+        // such gap was 0.13 of the type size (بشنِّ الحروب); letters of one word sat closer than 0.08.
+        val spaced = ArrayList<Cluster>()
+        for (c in sorted) {
+            val prev = spaced.lastOrNull()
+            if (prev != null && !prev.space && !c.space) {
+                val gap = if (rtlLine) prev.x0 - c.x1 else c.x0 - prev.x1
+                if (gap > size * 0.12f) spaced += Cluster(" ", c.x1, c.x1, c.order, false, false)
+            }
+            spaced += c
+        }
         // Runs going the other way read backwards now: turn each round. A run is letters of the
         // other direction with whatever sits between them (spaces, full stops), up to the last of them.
-        val out = sorted.toMutableList()
+        val out = spaced.toMutableList()
         fun other(c: Cluster) = if (rtlLine) c.ltr else c.rtl
         fun same(c: Cluster) = if (rtlLine) c.rtl else c.ltr
+        // Numbers alone on an Arabic line are runs of their own: the dash or space between two of
+        // them reads right to left (١٩٠٥–١٩١٤م), only a point, comma or slash inside one keeps it whole.
+        fun number(c: Cluster) = c.text.isNotEmpty() && c.text.all { ch -> Character.getDirectionality(ch).let { it == Character.DIRECTIONALITY_EUROPEAN_NUMBER || it == Character.DIRECTIONALITY_ARABIC_NUMBER } }
+        fun separator(c: Cluster) = c.text.length == 1 && Character.getDirectionality(c.text[0]).let {
+            it == Character.DIRECTIONALITY_EUROPEAN_NUMBER_SEPARATOR || it == Character.DIRECTIONALITY_COMMON_NUMBER_SEPARATOR || it == Character.DIRECTIONALITY_EUROPEAN_NUMBER_TERMINATOR
+        }
         var k = 0
         while (k < out.size) {
             if (!other(out[k])) { k++; continue }
             var end = k
             var j = k + 1
-            while (j < out.size && !same(out[j])) { if (other(out[j])) end = j; j++ }
+            // A number with a Latin letter right against it (J18) belongs to the Latin word.
+            var t = k + 1
+            while (t < out.size && (number(out[t]) || (separator(out[t]) && t + 1 < out.size && number(out[t + 1])))) t++
+            if (rtlLine && number(out[k]) && !(t < out.size && out[t].ltr && !number(out[t]))) {
+                while (j < out.size && (number(out[j]) || (separator(out[j]) && j + 1 < out.size && number(out[j + 1])))) { if (number(out[j])) end = j; j++ }
+            } else {
+                while (j < out.size && !same(out[j])) { if (other(out[j])) end = j; j++ }
+            }
             out.subList(k, end + 1).reverse()
             k = end + 1
         }
@@ -368,12 +481,22 @@ internal object Bidi {
         val it2 = ArrayList<Boolean>()
         for (c in out) {
             // Presentation forms (the shaped letters some files store) back to the letters themselves.
-            var t = c.text.toString().let { if (it.any { ch -> ch.code in 0xFB50..0xFDFF || ch.code in 0xFE70..0xFEFF }) java.text.Normalizer.normalize(it, java.text.Normalizer.Form.NFKC) else it }
+            var t = c.text.let { if (it.any { ch -> ch.code in 0xFB50..0xFDFF || ch.code in 0xFE70..0xFEFF }) java.text.Normalizer.normalize(it, java.text.Normalizer.Form.NFKC).trimStart() else it }
             if (drawnOrder && rtlLine && t.length == 1) MIRROR[t[0]]?.let { t = it.toString() }
+            if (t.isEmpty()) continue
             sb.append(t)
             repeat(t.length) { b += c.bold; it2 += c.italic }
         }
-        return Line(sb.toString(), b.toBooleanArray(), it2.toBooleanArray())
+        // Shadda with the two fathas has no letter of its own, and fonts often name it shadda with
+        // the two kasras: before a closing alef it can only be the fathas (حقًّا، جدًّا، ذاتيًّا).
+        val text2 = TANWEEN_ALEF.replace(sb.toString(), "\u064B\u0651")
+        // Two spaces where a gap and a space met.
+        if (!text2.contains("  ")) return Line(text2, b.toBooleanArray(), it2.toBooleanArray())
+        val fb = ArrayList<Boolean>()
+        val fi = ArrayList<Boolean>()
+        val fs = StringBuilder()
+        text2.forEachIndexed { i, ch -> if (ch == ' ' && fs.endsWith(" ")) return@forEachIndexed; fs.append(ch); fb += b[i]; fi += it2[i] }
+        return Line(fs.toString(), fb.toBooleanArray(), fi.toBooleanArray())
     }
 }
 

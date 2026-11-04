@@ -432,8 +432,12 @@ class PdfSession private constructor(
         try { st.walk(w) } finally { runCatching { st.destroy() } }
         val near = ((index - 2)..(index + 2)).filter { it != index && it in 0 until pageCount }.flatMap { bandLines(it) }.toSet()
         val parts = partsOn(index)
-        buildParas(placeTables(joinBaselines(w.blocks), parts.tables, parts.figures), sizeNow(index).height, near)
+        // Whether the file gives Arabic brackets as drawn: the page says so, or the last page that did.
+        val drawn = Bidi.bracketsAsDrawn(w.blocks.flatMap { b -> b.lines.map { it.text } })?.also { bracketsDrawn = it } ?: bracketsDrawn
+        buildParas(placeTables(joinBaselines(Bidi.readBrackets(w.blocks, drawn)), parts.tables, parts.figures), sizeNow(index).height, near)
     }
+
+    @Volatile private var bracketsDrawn = false
 
     private val tableCache = object : LinkedHashMap<Int, PageParts>(8, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, PageParts>) = size > 24
