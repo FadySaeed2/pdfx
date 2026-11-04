@@ -496,6 +496,33 @@ class PdfSession private constructor(
         w.update()
     }
 
+    /** The run of words at ([x], [y]) on a page, to edit; null where there are none. */
+    suspend fun textRunAt(index: Int, x: Float, y: Float): TextRun? = onDoc {
+        if (pdf == null) null else runCatching { TextEdit.runAt(pdfPage(index), index, x, y) }.getOrNull()
+    }
+
+    /** Writes [text] in place of [run] (see [TextEdit]), as one step that undo takes back. */
+    suspend fun replaceText(index: Int, run: TextRun, text: String): Boolean {
+        val d = pdf ?: return false
+        val ok = edit("Edit text", index) { TextEdit.replace(d, pdfPage(index), run, text) }
+        // The old words are taken out as a blacking out does, so the file is written whole.
+        if (ok) rewriteOnly = true
+        return ok
+    }
+
+    /** A picture placed on the page in [box]: it can be moved and resized like any mark, and flattened into the page. */
+    suspend fun addPicture(index: Int, box: Box, imagePath: String) = edit("Picture", index) {
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_STAMP)
+        a.rect = Rect(box.x0, box.y0, box.x1, box.y1)
+        val img = com.artifex.mupdf.fitz.Image(imagePath)
+        try {
+            runCatching { a.setStampImage(img) }.getOrElse { a.setAppearance(img) }
+        } finally {
+            runCatching { img.destroy() }
+        }
+        a.update()
+    }
+
     /** A picture (a photographed signature) placed on the page in [box]. */
     suspend fun addImageStamp(index: Int, box: Box, imagePath: String) = edit("Signature", index) {
         val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_STAMP)

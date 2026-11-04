@@ -1154,6 +1154,24 @@ fun ViewerContent(
         }
     }
 
+    // A picture to put on the pages: made a phone-sized JPEG first, kept for the session.
+    val pickPicture = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            val out = java.io.File(context.cacheDir, "pictures/p-${System.nanoTime()}.jpg").apply { parentFile?.mkdirs() }
+            val made = com.fadysaeed.pdfx.data.Pictures.prepare(context, uri, out)
+            if (made == null) reader.problem = "That picture could not be read."
+            else {
+                val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(made.absolutePath, o)
+                reader.pictureAspect = if (o.outWidth > 0 && o.outHeight > 0) o.outWidth.toFloat() / o.outHeight else 1f
+                reader.picture = made.absolutePath
+            }
+        }
+    }
+    LaunchedEffect(reader) {
+        reader.pickPicture = { pickPicture.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+    }
+    reader.editRun?.let { run -> EditWordsDialog(run, onDismiss = { reader.editRun = null }, onSave = reader::saveEdit) }
     reader.textAsk?.let { ask -> WordsAsk(ask, onDismiss = { reader.textAsk = null }, onDone = reader::submitText) }
     reader.colorPick?.let { pick -> ColorPickerDialog(pick.initial, reader.customColors, onDismiss = { reader.colorPick = null }) { c -> reader.applyPicked(pick, c) } }
     reader.zoomFigure?.let { (pg, bx) -> FigureViewer(reader, pg, bx) { reader.zoomFigure = null } }
@@ -1755,6 +1773,14 @@ private fun MarkupBar(reader: Reader) {
                         Chip("Black out ${reader.redactions} now", { reader.openTool?.invoke("redact") })
                     }
                 }
+                Tool.EDIT -> Text("Changes go into the page itself; undo takes them back.", style = Type.small)
+                Tool.PICTURE -> {
+                    Chip(if (reader.picture == null) "Choose a picture" else "Another picture", { reader.pickPicture?.invoke() })
+                    reader.picture?.let { path ->
+                        val img = remember(path) { runCatching { android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = 8 })?.asImageBitmap() }.getOrNull() }
+                        if (img != null) androidx.compose.foundation.Image(img, "Chosen picture", modifier = Modifier.height(40.dp).border(1.dp, Ink.Edge))
+                    }
+                }
                 Tool.STAMP -> {
                     (StandardStamps + reader.customStamps).forEach { k -> StampChip(k, reader.stamp == k) { reader.pickStamp(k) } }
                     Chip("New stamp", { reader.stampAsk = true })
@@ -1812,6 +1838,8 @@ private fun MarkupBar(reader: Reader) {
             Tool.DOT -> "Tap to put a dot."
             Tool.DATE -> "Tap where today's date goes."
             Tool.NOTE -> "Tap where the note should sit."
+            Tool.EDIT -> "Tap a line to change its words: a name, a number, a date. They are written in the same font where it has the letters."
+            Tool.PICTURE -> if (reader.picture == null) "Choose a picture, then tap where it goes." else "Tap where the picture goes. Then drag or resize it."
             Tool.REDACT -> if (reader.redactArea) "Drag a box over what must go: a photo, a signature, a stamp, anything." else "Drag across the words that must go, or tap one word. Nothing goes until you black them out."
             Tool.ERASER -> null
         }
@@ -2640,4 +2668,34 @@ internal fun LockedPanel(name: String, wrong: Boolean, onCancel: () -> Unit, onU
         }
         Spacer(Modifier.width(1.dp))
     }
+}
+
+/** The words picked to change, ready to edit, with how they will be written. */
+@Composable
+internal fun EditWordsDialog(run: com.fadysaeed.pdfx.engine.TextRun, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var text by remember(run) { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(run.text, androidx.compose.ui.text.TextRange(run.text.length))) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Ink.Field,
+        shape = RectangleShape,
+        title = { Text("Change the words", style = Type.title) },
+        text = {
+            Column {
+                BasicTextField(
+                    value = text, onValueChange = { text = it },
+                    textStyle = Type.body.copy(color = Ink.Bone),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Ink.Amber),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus).border(1.dp, Ink.Edge).padding(12.dp)
+                        .semantics { contentDescription = "New words" },
+                )
+                Spacer(Modifier.height(10.dp))
+                Text("Written as before: ${run.look}." + if (run.onPicture) " On a scanned page the old words are painted over in the paper's colour." else "", style = Type.small)
+                Text("For a line or a few words. A longer change does not move the lines after it.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            }
+        },
+        confirmButton = { AmberButton("Change", { onSave(text.text) }) },
+        dismissButton = { GhostButton("Cancel", onDismiss, minHeight = 52.dp) },
+    )
 }

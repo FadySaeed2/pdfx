@@ -47,7 +47,7 @@ val ReflowMargins = listOf(14, 24, 40)
 /** The marking tools. */
 enum class Tool(val label: String) {
     SELECT("Select"), HIGHLIGHT("Highlight"), UNDERLINE("Underline"), STRIKE("Strike"), PEN("Pen"), MARKER("Marker"),
-    SHAPE("Shapes"), TEXT("Text"), NOTE("Note"),
+    SHAPE("Shapes"), TEXT("Text"), EDIT("Edit text"), PICTURE("Picture"), NOTE("Note"),
     SIGN("Sign"), STAMP("Stamp"), TICK("Tick"), CROSS("Cross"), DOT("Dot"), DATE("Date"),
     REDACT("Black out"), ERASER("Eraser"),
 }
@@ -56,7 +56,7 @@ enum class Tool(val label: String) {
 /** The outline of a place marked to be blacked out, as MuPDF draws it. */
 val RedactRed = 0xFFE0303A.toInt()
 
-val PlacingTools = setOf(Tool.SIGN, Tool.STAMP, Tool.TICK, Tool.CROSS, Tool.DOT, Tool.DATE)
+val PlacingTools = setOf(Tool.SIGN, Tool.STAMP, Tool.TICK, Tool.CROSS, Tool.DOT, Tool.DATE, Tool.PICTURE)
 
 /** Sizes for ticks, crosses and dots, in points. */
 val MarkSizes = listOf(9f, 13f, 18f)
@@ -669,6 +669,8 @@ class Reader(
             Tool.DATE -> placeDate(page, x, y)
             Tool.TEXT -> boxEdit = BoxEdit(page, x, y)
             Tool.NOTE -> textAsk = TextAsk(page, x, y, note = true)
+            Tool.EDIT -> editAt(page, x, y)
+            Tool.PICTURE -> placePicture(page, x, y)
             else -> return false
         }
         return true
@@ -748,7 +750,50 @@ class Reader(
 
     fun startMarking() { if (canMark) { marking = true; clearSelection(); selectedMark = null } }
     fun stopMarking() { marking = false; draft = null; selectedMark = null }
-    fun pickTool(t: Tool) { tool = t; prefs?.edit()?.putString("tool", t.name)?.apply() }
+    fun pickTool(t: Tool) {
+        tool = t
+        prefs?.edit()?.putString("tool", t.name)?.apply()
+        if (t == Tool.PICTURE && picture == null) pickPicture?.invoke()
+    }
+
+    // ------------------------------------------------------------------ changing the words, adding pictures
+
+    /** Words picked to change, waiting for their new wording. */
+    var editRun by mutableStateOf<com.fadysaeed.pdfx.engine.TextRun?>(null)
+
+    /** Picks the run of words tapped, to change. */
+    fun editAt(page: Int, x: Float, y: Float) {
+        val s = session ?: return
+        scope.launch {
+            val r = s.textRunAt(page, x, y)
+            if (r == null) problem = "No words there to change. Tap on a line of text; on a scanned page, make it searchable first (File tools)."
+            else editRun = r
+        }
+    }
+
+    /** Writes [text] in place of the words picked. */
+    fun saveEdit(text: String) {
+        val r = editRun ?: return
+        editRun = null
+        if (text == r.text) return
+        val s = session ?: return
+        change(r.page) { s.replaceText(r.page, r, text) }
+    }
+
+    /** The picture chosen to put on pages, and its shape (width over height). */
+    var picture by mutableStateOf<String?>(null)
+    var pictureAspect by mutableStateOf(1f)
+    /** Opens the phone's picture picker (set by the screen). */
+    var pickPicture: (() -> Unit)? = null
+
+    /** Puts the chosen picture on [page], centred where tapped, a fair size; then it can be moved and resized. */
+    fun placePicture(page: Int, x: Float, y: Float) {
+        val path = picture ?: run { pickPicture?.invoke(); return }
+        val s = session ?: return
+        val w = if (pictureAspect >= 1f) 200f else 200f * pictureAspect
+        val h = w / pictureAspect
+        change(page, after = { selectLast(page, MarkKind.STAMP) }) { s.addPicture(page, Box(x - w / 2, y - h / 2, x + w / 2, y + h / 2), path) }
+    }
     fun pickShape(k: ShapeKind) { shape = k }
     /** Black out: words (snapping to them, like a highlight) or any area drawn as a box. */
     var redactArea by mutableStateOf(false)
@@ -960,6 +1005,8 @@ class Reader(
                 Tool.PEN, Tool.MARKER -> markAt(page, a.first, a.second, 0f)
                 in PlacingTools -> markAt(page, a.first, a.second, 0f)
                 Tool.TEXT, Tool.NOTE -> markAt(page, a.first, a.second, r)?.takeIf { it.kind == MarkKind.TEXT || it.kind == MarkKind.NOTE }
+                // Changing the page's own words: marks over them are not what was meant.
+                Tool.EDIT -> null
                 Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKE -> markAt(page, a.first, a.second, r)?.takeIf { it.parts.isNotEmpty() }
                 else -> markAt(page, a.first, a.second, r)
             }
@@ -1022,6 +1069,8 @@ class Reader(
             Tool.TICK, Tool.CROSS, Tool.DOT -> if (!moved) placeMark(page, a.first, a.second, gestureTool)
             Tool.DATE -> if (!moved) placeDate(page, a.first, a.second)
             Tool.NOTE -> if (!moved) textAsk = TextAsk(page, a.first, a.second, note = true)
+            Tool.EDIT -> if (!moved) editAt(page, a.first, a.second)
+            Tool.PICTURE -> if (!moved) placePicture(page, a.first, a.second)
             Tool.ERASER -> {
                 val gone = erased.toList().sortedDescending()
                 erased.clear()
