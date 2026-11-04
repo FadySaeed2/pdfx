@@ -16,8 +16,45 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.withFrameNanos
 import kotlin.math.abs
 
-/** What the screen needs drawn right now. [fast]: scrolling quickly, so soft pictures will do until it slows. */
-data class Want(val range: IntRange, val focus: Int, val widthPx: Int, val seq: Int = 0, val fast: Boolean = false)
+/**
+ * What the screen needs drawn right now: [range] the pages to have ready, [onScreen] the ones
+ * showing. [fast]: scrolling quickly, so soft pictures will do until it slows.
+ */
+data class Want(val range: IntRange, val focus: Int, val widthPx: Int, val seq: Int = 0, val fast: Boolean = false, val onScreen: IntRange = range)
+
+/**
+ * Whether the pages are going by quickly, measured over the last [WINDOW_NS] rather than frame to
+ * frame: single frames arrive unevenly, and a slow scroll measured that way read as fast now and
+ * then, which swapped sharp pictures for soft ones and back while reading. Fast past [UP] screens
+ * a second, slow again under [DOWN], so it never wavers between the two.
+ */
+class ScrollSpeed {
+    private val times = ArrayDeque<Long>()
+    private val places = ArrayDeque<Float>()
+    var fast = false
+        private set
+
+    /** One look at the scroll: when ([nanos]), how far down ([pos], pixels) and the screen's height. Returns [fast]. */
+    fun add(nanos: Long, pos: Float, screen: Float): Boolean {
+        times.addLast(nanos); places.addLast(pos)
+        while (times.size > 2 && nanos - times.first() > WINDOW_NS) { times.removeFirst(); places.removeFirst() }
+        val span = nanos - times.first()
+        if (span < MIN_SPAN_NS) return fast
+        val speed = kotlin.math.abs(pos - places.first()) / (span / 1e9f) / screen.coerceAtLeast(1f)
+        fast = if (fast) speed > DOWN else speed > UP
+        return fast
+    }
+
+    /** The scroll stopped. */
+    fun stop() { times.clear(); places.clear(); fast = false }
+
+    companion object {
+        const val WINDOW_NS = 200_000_000L
+        const val MIN_SPAN_NS = 80_000_000L
+        const val UP = 4f
+        const val DOWN = 2f
+    }
+}
 
 /**
  * Pictures of pages, each page in a state of its own: a new picture for page 7 redraws page 7 and
@@ -171,7 +208,10 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
         // the sharp one follows. A third of the width draws in about a ninth of the time.
         for (i in order) {
             if (session.closed) return
-            if (images.containsKey(i)) continue
+            // Soft pictures only where one is needed now: a page showing with none, or any page while
+            // scrolling quickly. Pages being got ready off screen get their sharp picture straight
+            // away, so a slow scroll never sees a soft one turn sharp.
+            if (images.containsKey(i) || (!w.fast && i !in w.onScreen)) continue
             val soft = (widthFor(i, w.widthPx) / 3).coerceAtLeast(64)
             val bmp = runCatching { session.render(i, soft, ::reuse) }.getOrNull() ?: continue
             show(i, bmp)

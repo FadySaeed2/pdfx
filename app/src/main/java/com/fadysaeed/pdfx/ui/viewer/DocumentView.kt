@@ -170,36 +170,25 @@ fun DocumentView(
             delay(220)
             settledZoom = zoom
         }
-        // How fast the pages go by, in screens a second, eased over a few frames. Past three a
-        // second only soft pictures are drawn; under one and a half (or once it stops) the sharp
-        // ones follow. The gap between the two keeps it from flickering between them.
+        // Whether the pages go by quickly (see ScrollSpeed): then only soft pictures are drawn.
         var fast by remember { mutableStateOf(false) }
         LaunchedEffect(listState, viewportH) {
             val gap = with(density) { 6.dp.toPx() }
-            var lastPos = Float.NaN
-            var lastT = 0L
-            var speed = 0f
+            val speed = ScrollSpeed()
             snapshotFlow {
                 val info = listState.layoutInfo
                 val first = info.visibleItemsInfo.firstOrNull()
                 listState.isScrollInProgress to (first?.let { it.index * (it.size + gap) - (it.offset - info.viewportStartOffset) } ?: 0f)
             }.collect { (moving, pos) ->
-                val t = System.nanoTime()
-                if (!moving) {
-                    speed = 0f; lastPos = Float.NaN; fast = false
-                    return@collect
-                }
-                if (!lastPos.isNaN() && t > lastT) {
-                    val v = abs(pos - lastPos) / ((t - lastT) / 1e9f) / viewportH.coerceAtLeast(1f)
-                    speed = speed * 0.6f + v * 0.4f
-                    fast = if (fast) speed > 1.5f else speed > 3f
-                }
-                lastPos = pos
-                lastT = t
+                if (!moving) { speed.stop(); fast = false; return@collect }
+                fast = speed.add(System.nanoTime(), pos, viewportH)
             }
         }
         LaunchedEffect(listState, pageCount, viewportPx) {
-            snapshotFlow { Want(visibleRange(listState, pageCount), centreItem(listState), (viewportPx * bucket(settledZoom)).roundToInt(), fast = fast) }
+            snapshotFlow {
+                val shown = listState.layoutInfo.visibleItemsInfo.let { v -> if (v.isEmpty()) IntRange.EMPTY else v.first().index..v.last().index }
+                Want(visibleRange(listState, pageCount), centreItem(listState), (viewportPx * bucket(settledZoom)).roundToInt(), fast = fast, onScreen = shown)
+            }
                 .collectLatest { w ->
                     if (w.range.isEmpty()) return@collectLatest
                     want(w)
