@@ -283,7 +283,7 @@ fun DocumentView(
                     .offset { IntOffset(-panX.roundToInt(), 0) },
             ) {
                 items(pageCount, key = { it }) { i ->
-                    SideEffect { PageComposeCounts.hit(i) }
+                    SideEffect { PageComposeCounts.hit(i); ScrollCheck.event("composed p$i") }
                     val aspect = aspects.getOrNull(i)?.takeIf { it > 0f } ?: 0.707f
                     LaunchedEffect(i) { reader.loadLinks(i); reader.loadMarks(i) }
                     // A loupe over the finger while a selection handle is dragged.

@@ -967,6 +967,28 @@ fun ViewerContent(
     var askFlatten by remember { mutableStateOf(false) }
     var flash by remember { mutableStateOf<String?>(null) }
     val showBars = reader.chrome || reader.searchOpen || reader.marking
+    // The scroll check: when it started (0: not running), and its report once done.
+    var checkStart by remember { mutableStateOf(0L) }
+    var checkLeft by remember { mutableStateOf(0) }
+    var checkReport by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(checkStart) {
+        if (checkStart == 0L) return@LaunchedEffect
+        val activity = generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }.firstOrNull { it is android.app.Activity } as? android.app.Activity
+        if (activity == null) { checkStart = 0L; return@LaunchedEffect }
+        reader.chrome = false
+        ScrollCheck.start(activity)
+        var halfDone = false
+        while (true) {
+            val gone = System.currentTimeMillis() - checkStart
+            if (!halfDone && gone >= ScrollCheck.HALF_MS) { ScrollCheck.secondHalf(); halfDone = true }
+            if (gone >= 2 * ScrollCheck.HALF_MS) break
+            checkLeft = ((2 * ScrollCheck.HALF_MS - gone + 999) / 1000).toInt()
+            delay(250)
+        }
+        checkReport = ScrollCheck.stop()
+        checkStart = 0L
+    }
+    DisposableEffect(Unit) { onDispose { if (ScrollCheck.running) ScrollCheck.stop() } }
 
     BackHandler {
         when {
@@ -1144,6 +1166,14 @@ fun ViewerContent(
                 }
                 Spacer(Modifier.height(10.dp))
             }
+            if (checkStart != 0L) {
+                Text(
+                    "Scroll check: scroll slowly up and down, as you read · $checkLeft s",
+                    style = Type.note.copy(color = Ink.Black),
+                    modifier = Modifier.background(Ink.Amber, Corner).padding(horizontal = 14.dp, vertical = 9.dp),
+                )
+                Spacer(Modifier.height(10.dp))
+            }
             val msg = flash
             if (msg != null) {
                 Text(msg, style = Type.note.copy(color = Ink.Bone), modifier = Modifier.background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(horizontal = 14.dp, vertical = 9.dp))
@@ -1254,6 +1284,30 @@ fun ViewerContent(
         )
     }
 
+    checkReport?.let { report ->
+        AlertDialog(
+            onDismissRequest = { checkReport = null },
+            containerColor = Ink.Field,
+            title = { Text("Scroll check", style = Type.title) },
+            text = {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    Text("Copy this and paste it in the chat: it shows which part of drawing makes the stutter.", style = Type.small)
+                    Spacer(Modifier.height(8.dp))
+                    Text(report, style = Type.small.copy(fontSize = 11.sp, color = Ink.Bone))
+                }
+            },
+            confirmButton = {
+                AmberButton("Copy report", {
+                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("PDFx scroll check", report))
+                    checkReport = null
+                    flash = "Report copied"
+                })
+            },
+            dismissButton = { GhostButton("Close", { checkReport = null }, minHeight = 52.dp) },
+        )
+    }
+
     val open = sheet
     if (open != null) {
         val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1286,6 +1340,7 @@ fun ViewerContent(
                         SheetRow(Glyph.REFLOW, if (reader.reflow) "Show the pages" else "Read as flowing text", { then { toggleReflow() } }, note = if (reader.reflow) "Back to the pages as they are" else "Just the words, sized for the phone")
                         SheetRow(Glyph.MOON, "Page colours and text size", { sheet = ViewerSheet.DISPLAY }, note = "Paper, night or sepia; reflowed text settings")
                         if (reader.canMark) SheetRow(Glyph.TOOLS, "File tools", { sheet = ViewerSheet.TOOLS }, note = "Convert, protect, pages, size")
+                        if (!reader.reflow) SheetRow(Glyph.INFO, "Check scrolling smoothness", { then { checkStart = System.currentTimeMillis() } }, note = "Twenty seconds of slow scrolling, then a report to copy")
                     }
                     ViewerSheet.TOOLS -> Column(Modifier.verticalScroll(rememberScrollState())) {
                         // Everything that changes or makes a file, in four kinds; taller than most phones, so it scrolls.

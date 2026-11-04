@@ -179,9 +179,10 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
     fun drawCount(page: Int): Int = drawn.value[page] ?: 0
 
     /** Puts a picture on page [i] in place of the one there, which goes to [spare]. */
-    private fun show(i: Int, bmp: Bitmap) {
+    private fun show(i: Int, bmp: Bitmap, sharp: Boolean) {
+        ScrollCheck.event((if (sharp) "sharp " else "soft ") + (if (bmp === reusedLast) "reused" else "new") + " p$i")
         // Sent to the graphics memory now, in the background, rather than in the frame it first shows.
-        bmp.prepareToDraw()
+        if (ScrollCheck.prepare) bmp.prepareToDraw()
         images[i] = bmp.asImageBitmap()
         raw.put(i, bmp)?.let { if (it !== bmp) retire(it) }
         bytes[i] = bmp.allocationByteCount.toLong()
@@ -197,10 +198,14 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
      * it (asked on the document's thread).
      */
     private fun reuse(w: Int, h: Int): Bitmap? = synchronized(spare) {
+        if (!ScrollCheck.reuse) return@synchronized null
         val now = System.currentTimeMillis()
         val k = spare.indexOfFirst { (b, at) -> b.width == w && b.height == h && now - at >= SPARE_AFTER_MS }
-        if (k < 0) null else spare.removeAt(k).first
+        if (k < 0) null else spare.removeAt(k).first.also { reusedLast = it }
     }
+
+    /** The last picture handed out to be drawn into again, for the scroll check's report. */
+    @Volatile private var reusedLast: Bitmap? = null
 
     private suspend fun renderFor(w: Want) {
         val order = w.range.sortedBy { abs(it - w.focus) }
@@ -214,7 +219,7 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
             if (images.containsKey(i) || (!w.fast && i !in w.onScreen)) continue
             val soft = (widthFor(i, w.widthPx) / 3).coerceAtLeast(64)
             val bmp = runCatching { session.render(i, soft, ::reuse) }.getOrNull() ?: continue
-            show(i, bmp)
+            show(i, bmp, sharp = false)
             renderedWidth[i] = soft
             trim(w)
         }
@@ -225,7 +230,7 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
             val target = widthFor(i, w.widthPx)
             if (renderedWidth[i] == target) continue
             val bmp = runCatching { session.render(i, target, ::reuse) }.getOrNull() ?: continue
-            show(i, bmp)
+            show(i, bmp, sharp = true)
             renderedWidth[i] = target
             drawn.value = drawn.value + (i to ((drawn.value[i] ?: 0) + 1))
             trim(w)
@@ -248,6 +253,7 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
         for (v in victims) {
             if (total <= BUDGET_BYTES) break
             total -= bytes.remove(v) ?: 0
+            ScrollCheck.event("dropped p$v")
             images.remove(v)
             raw.remove(v)?.let(::retire)
             renderedWidth.remove(v)
