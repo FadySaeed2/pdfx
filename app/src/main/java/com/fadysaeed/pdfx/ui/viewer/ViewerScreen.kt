@@ -2368,6 +2368,27 @@ internal fun BoxStyleFields(text: String, style: BoxStyle, recent: List<Int>, on
         textAlign = when (style.align) { BoxAlign.AUTO -> TextAlign.Start; BoxAlign.LEFT -> TextAlign.Left; BoxAlign.CENTER -> TextAlign.Center; BoxAlign.RIGHT -> TextAlign.Right },
         textDirection = when (style.dir) { BoxDir.AUTO -> TextDirection.Content; BoxDir.RTL -> TextDirection.Rtl; BoxDir.LTR -> TextDirection.Ltr },
     )
+    // The words with the style of each run that differs from the box: bold, italic, underlined, coloured.
+    fun styled(withColour: Boolean): androidx.compose.ui.text.AnnotatedString = androidx.compose.ui.text.buildAnnotatedString {
+        append(text)
+        for (sp in style.spans) {
+            val a = sp.start.coerceIn(0, text.length)
+            val b = sp.end.coerceIn(a, text.length)
+            if (a >= b) continue
+            addStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    fontWeight = sp.bold?.let { if (it) FontWeight.Bold else FontWeight.Normal },
+                    fontStyle = sp.italic?.let { if (it) androidx.compose.ui.text.font.FontStyle.Italic else androidx.compose.ui.text.font.FontStyle.Normal },
+                    textDecoration = sp.underline?.let { if (it) TextDecoration.Underline else TextDecoration.None },
+                    color = if (withColour) sp.color?.let { Color(it) } ?: Color.Unspecified else Color.Unspecified,
+                ),
+                a, b,
+            )
+        }
+    }
+    var field by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(text)) }
+    if (field.text != text) field = field.copy(text = text)
+    val picked = field.selection.let { if (it.collapsed) null else minOf(it.start, it.end) until maxOf(it.start, it.end) }
     Text("PREVIEW", style = Type.eyebrow)
     Spacer(Modifier.height(6.dp))
     Box(Modifier.fillMaxWidth().background(Ink.Paper, Corner).padding(14.dp)) {
@@ -2377,13 +2398,29 @@ internal fun BoxStyleFields(text: String, style: BoxStyle, recent: List<Int>, on
                 .then(if (style.border) Modifier.border(1.dp, Color(style.color)) else Modifier)
                 .padding(8.dp),
         ) {
-            Text(text.ifBlank { "Your words, as they will sit on the page" }, style = shown, modifier = Modifier.fillMaxWidth())
+            if (text.isBlank()) Text("Your words, as they will sit on the page", style = shown, modifier = Modifier.fillMaxWidth())
+            else Text(styled(withColour = true), style = shown, modifier = Modifier.fillMaxWidth())
         }
     }
     Spacer(Modifier.height(12.dp))
     BasicTextField(
-        value = text,
-        onValueChange = onText,
+        value = field,
+        onValueChange = { v ->
+            if (v.text != text) {
+                // Styled words move with the edit: the changed stretch is what lies between the
+                // part both share at the start and the part both share at the end.
+                val old = text
+                val new = v.text
+                var p = 0
+                while (p < old.length && p < new.length && old[p] == new[p]) p++
+                var e = 0
+                while (e < old.length - p && e < new.length - p && old[old.length - 1 - e] == new[new.length - 1 - e]) e++
+                onStyle(style.copy(spans = BoxStyle.shift(style.spans, p, old.length - e, new.length - e)))
+                onText(new)
+            }
+            field = v
+        },
+        visualTransformation = { _ -> androidx.compose.ui.text.input.TransformedText(styled(withColour = false), androidx.compose.ui.text.input.OffsetMapping.Identity) },
         textStyle = Type.body.copy(color = Ink.Bone, fontSize = 16.sp, textDirection = TextDirection.Content),
         cursorBrush = SolidColor(Ink.Amber),
         modifier = Modifier.fillMaxWidth().heightIn(min = 84.dp),
@@ -2394,6 +2431,28 @@ internal fun BoxStyleFields(text: String, style: BoxStyle, recent: List<Int>, on
             }
         },
     )
+    if (picked == null) {
+        Text("Select words to make just those bold, italic, underlined or another colour.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
+    } else {
+        // The words picked in the box, styled on their own.
+        val attrs = BoxStyle.charsOf(style.spans, text.length)
+        fun applyPicked(f: (BoxStyle.Companion.Attr) -> BoxStyle.Companion.Attr) {
+            val next = attrs.copyOf()
+            for (i in picked) if (i in next.indices) next[i] = f(next[i])
+            onStyle(style.copy(spans = BoxStyle.spansOf(next)))
+        }
+        val inRange = picked.filter { it in attrs.indices }
+        val allBold = inRange.isNotEmpty() && inRange.all { attrs[it].bold ?: style.bold }
+        val allItalic = inRange.isNotEmpty() && inRange.all { attrs[it].italic ?: style.italic }
+        val allUnder = inRange.isNotEmpty() && inRange.all { attrs[it].underline ?: style.underline }
+        StyleRow("SELECTED WORDS") {
+            StyleToggle("Bold selected words", allBold, { applyPicked { it.copy(bold = !allBold) } }) { Text("B", style = Type.bodyStrong.copy(fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, color = it)) }
+            StyleToggle("Italic selected words", allItalic, { applyPicked { it.copy(italic = !allItalic) } }) { Text("I", style = Type.body.copy(fontSize = 18.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, fontFamily = androidx.compose.ui.text.font.FontFamily.Serif, color = it)) }
+            StyleToggle("Underline selected words", allUnder, { applyPicked { it.copy(underline = !allUnder) } }) { Text("U", style = Type.body.copy(fontSize = 17.sp, textDecoration = TextDecoration.Underline, color = it)) }
+            PenColors.forEach { c -> Swatch(c, inRange.isNotEmpty() && inRange.all { i -> ((attrs[i].color ?: style.color) and 0xFFFFFF) == (c and 0xFFFFFF) }, size = 34.dp) { applyPicked { it.copy(color = c) } } }
+            Chip("As the box", { applyPicked { BoxStyle.Companion.Attr() } })
+        }
+    }
     StyleRow("FONT") { BoxFont.entries.forEach { f -> Chip(f.label, { onStyle(style.copy(font = f)) }, selected = style.font == f) } }
     StyleRow("SIZE") {
         GhostButton("−", { onStyle(style.copy(size = nextSize(style.size, false))) }, minHeight = 44.dp)

@@ -1052,7 +1052,7 @@ class PdfSession private constructor(
         val fill = runCatching { a.color?.takeIf { it.isNotEmpty() }?.let { argb(it) } }.getOrNull()
         val border = runCatching { a.borderWidth > 0.05f }.getOrDefault(false)
         val rtl = rc?.let { r -> if (r.contains("dir=\"rtl\"")) true else if (r.contains("dir=\"ltr\"")) false else null }
-        val parsed = BoxStyle.parse(ds, text, size, color, fill, border, rtl)
+        val parsed = BoxStyle.parse(ds, text, size, color, fill, border, rtl).copy(spans = BoxStyle.spansIn(rc, text)).let { it.tidySpans(text.length) }
         // Without a stored style, the font still shows in the plain appearance string.
         if (ds.isNullOrBlank()) {
             val f = runCatching { a.defaultAppearance?.font }.getOrNull()
