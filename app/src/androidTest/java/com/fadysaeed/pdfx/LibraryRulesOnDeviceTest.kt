@@ -49,6 +49,42 @@ class LibraryRulesOnDeviceTest {
     private fun pdf(rel: String, bytes: Int = 2048): File =
         File(root, rel).apply { parentFile?.mkdirs(); writeBytes(ByteArray(bytes) { (it % 251).toByte() }) }
 
+    /** A renamed file stays in Recent, keeps its place, and is called what the user named it, even over a title inside. */
+    @Test
+    fun aRenamedFileStaysInRecentUnderItsNewName() = runBlocking {
+        pdf("Download/scan0042.pdf")
+        lib.scan()
+        val d = db.dao().all().single()
+        db.dao().update(d.copy(lastOpened = 1_000L, lastPage = 7, title = "دليل علاج الاكتئاب"))
+        val stale = d // as a list on screen might still hold it
+        val r = lib.rename(stale, "مراجعة الاكتئاب").getOrThrow()
+        assertEquals("مراجعة الاكتئاب.pdf", r.name)
+        lib.scan()
+        val now = db.dao().all().single()
+        assertEquals(d.id, now.id)
+        assertEquals(1_000L, now.lastOpened)
+        assertEquals(7, now.lastPage)
+        assertNull("the user's name wins over the title inside", now.title)
+        assertTrue(File(root, "Download/مراجعة الاكتئاب.pdf").exists())
+    }
+
+    /** Renamed in another app while its fingerprint was being read again: still the same file, under the new name. */
+    @Test
+    fun aFileRenamedElsewhereIsStillTheSameFile() = runBlocking {
+        val f = pdf("Download/report.pdf")
+        lib.scan()
+        val d = db.dao().all().single()
+        db.dao().update(d.copy(lastOpened = 5_000L, fingerprint = null, title = "Quarterly report"))
+        val to = File(f.parentFile, "Q3 report.pdf")
+        assertTrue(f.renameTo(to))
+        lib.scan()
+        val now = db.dao().all().single()
+        assertEquals(d.id, now.id)
+        assertEquals("Q3 report.pdf", now.name)
+        assertEquals(5_000L, now.lastOpened)
+        assertNull(now.title)
+    }
+
     @Test
     fun scanFindsPdfsAndSkipsHiddenAndAppData() = runBlocking {
         pdf("Download/a.pdf")

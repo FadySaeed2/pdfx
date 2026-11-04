@@ -354,7 +354,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             val now = library.dao.byId(d.id) ?: continue
             // A file of that name there already (often the same paper kept twice): "Name (2)".
             val free = library.freeName(now, name)
-            library.rename(now, free).fold({ ok++ }, { if (why == null) why = it.message })
+            library.rename(now, free, byUser = false).fold({ ok++ }, { if (why == null) why = it.message })
         }
         val failed = list.size - ok
         say(

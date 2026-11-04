@@ -10,6 +10,7 @@ import android.provider.OpenableColumns
 import androidx.room.withTransaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import java.io.File
 import java.io.IOException
@@ -83,8 +84,17 @@ class Library(
      * same document: it keeps its tags, star, bookmarks and reading place. It is matched by its
      * fingerprint, or, for one known before fingerprints, by its name and size.
      */
-    suspend fun scan(roots: List<File> = listOf(root)): ScanResult = withContext(Dispatchers.IO) {
-        if (!hasAllFilesAccess()) return@withContext ScanResult(0, 0, 0)
+    /**
+     * Held while files are looked through or moved, renamed or trashed by PDFx. A rename that fell
+     * between a look round the phone and the library reading what it knew made the file look gone
+     * (and a new one appear in its place), so it dropped out of Recent and lost its tags.
+     */
+    private val fileOps = kotlinx.coroutines.sync.Mutex()
+
+    suspend fun scan(roots: List<File> = listOf(root)): ScanResult = withContext(Dispatchers.IO) { fileOps.withLock { scanNow(roots) } }
+
+    private suspend fun scanNow(roots: List<File>): ScanResult {
+        if (!hasAllFilesAccess()) return ScanResult(0, 0, 0)
         val files = HashMap<String, File>()
         roots.forEach { walk(it, files) }
         val rootPaths = roots.map { it.absolutePath }
@@ -103,12 +113,19 @@ class Library(
                 val fp = prints[path]
                 val was = gone.firstOrNull { fp != null && it.fingerprint == fp }
                     ?: gone.firstOrNull { it.fingerprint == null && it.name == f.name && it.size == f.length() }
+                    // Renamed (here or in another app) while its fingerprint was being read again: a
+                    // rename keeps the size and the time it last changed.
+                    ?: gone.firstOrNull { (it.fingerprint == null || fp == null) && it.size == f.length() && it.modified == f.lastModified() }
                 if (was != null) {
                     gone.remove(was)
+                    // Renamed where it lies (by someone, in a file manager): that name is what it is called now.
+                    val renamed = was.name != f.name && was.folder == f.parent
                     dao.update(was.copy(
                         key = f.absolutePath, path = f.absolutePath, uri = Uri.fromFile(f).toString(), name = f.name,
                         folder = f.parent, size = f.length(), modified = f.lastModified(), fingerprint = fp ?: was.fingerprint,
+                        title = if (renamed) null else was.title,
                     ))
+                    if (renamed) { markNamed(was.id); keepNames(listOf(was.id)) }
                     moved++
                 } else {
                     insertFile(f, fp); added++
@@ -128,7 +145,7 @@ class Library(
             for (d in gone) { forgetNow(d); removed++ }
         }
         fillFingerprints()
-        ScanResult(files.size, added, removed, moved)
+        return ScanResult(files.size, added, removed, moved)
     }
 
     /** Reads the fingerprints of files known without one (from before fingerprints, or changed since), a batch at a time. */
@@ -305,7 +322,9 @@ class Library(
         n
     }
 
-    suspend fun rename(d: Doc, newName: String): Result<Doc> = io {
+    suspend fun rename(d0: Doc, newName: String, byUser: Boolean = true): Result<Doc> = locked {
+        // As the library has it now, not as the screen last showed it.
+        val d = dao.byId(d0.id) ?: d0
         val src = fileOf(d)
         val clean = newName.trim().removeSuffix(".pdf").removeSuffix(".PDF").trim()
         require(clean.isNotEmpty() && !clean.contains('/')) { "That name can't be used." }
@@ -313,7 +332,13 @@ class Library(
         if (dst.absolutePath == src.absolutePath) return@io d
         if (dst.exists()) throw IOException("There is already a file called ${dst.name} in this folder.")
         if (!src.renameTo(dst)) throw IOException("The file could not be renamed.")
-        moved(d, src, dst)
+        val m = moved(d, src, dst)
+        if (!byUser) return@locked m
+        // The name the user gave is what the lists show from now on, in place of the title read from
+        // inside the file; and the tidy does not offer to change it back.
+        markNamed(d.id)
+        keepNames(listOf(d.id))
+        m.copy(title = null).also { dao.update(it) }
     }
 
     /** [name], or "name (2)" and on when a file of that name is in the file's folder already. */
@@ -328,7 +353,8 @@ class Library(
         return "$clean ($k)"
     }
 
-    suspend fun move(d: Doc, dir: File): Result<Doc> = io {
+    suspend fun move(d0: Doc, dir: File): Result<Doc> = locked {
+        val d = dao.byId(d0.id) ?: d0
         val src = fileOf(d)
         if (src.parentFile?.absolutePath == dir.absolutePath) return@io d
         dir.mkdirs()
@@ -347,7 +373,7 @@ class Library(
     }
 
     /** Moves a file into PDFx's trash. It comes back with [restore] for 30 days. */
-    suspend fun trash(d: Doc): Result<Doc> = io {
+    suspend fun trash(d: Doc): Result<Doc> = locked {
         val src = fileOf(d)
         trashDir.mkdirs()
         File(trashDir, ".nomedia").let { if (!it.exists()) it.createNewFile() }
@@ -366,7 +392,7 @@ class Library(
         t
     }
 
-    suspend fun restore(d: Doc): Result<Doc> = io {
+    suspend fun restore(d: Doc): Result<Doc> = locked {
         val src = fileOf(d)
         val origin = File(d.trashOrigin ?: File(homeDir, d.name).absolutePath)
         val dir = origin.parentFile ?: homeDir
@@ -474,6 +500,9 @@ class Library(
 
     private suspend fun <T> io(block: suspend () -> T): Result<T> = withContext(Dispatchers.IO) { runCatching { block() } }
 
+    /** Like [io], one at a time with the look round the phone. */
+    private suspend fun <T> locked(block: suspend () -> T): Result<T> = withContext(Dispatchers.IO) { fileOps.withLock { runCatching { block() } } }
+
     // ---------------------------------------------------------------- folders
 
     /**
@@ -559,6 +588,13 @@ class Library(
     }
 
     /** Files whose code names are to stay as they are: offered once and left unticked. */
+    /** Files the user renamed in PDFx: their name, not the title inside, is what they are called. */
+    fun namedByUser(): Set<Long> = prefs.getStringSet("named_by_user", emptySet()).orEmpty().mapNotNull { it.toLongOrNull() }.toSet()
+
+    private fun markNamed(id: Long) {
+        prefs.edit().putStringSet("named_by_user", prefs.getStringSet("named_by_user", emptySet()).orEmpty() + id.toString()).apply()
+    }
+
     fun namesKept(): Set<Long> = prefs.getStringSet("names_kept", emptySet()).orEmpty().mapNotNull { it.toLongOrNull() }.toSet()
 
     fun keepNames(ids: Collection<Long>) {

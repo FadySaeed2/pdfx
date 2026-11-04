@@ -108,7 +108,9 @@ class TextIndexer(private val context: Context, private val library: Library) {
     private suspend fun markDone(d: Doc, pages: Int, locked: Boolean, facts: com.fadysaeed.pdfx.engine.DocFacts? = null, kind: String = com.fadysaeed.pdfx.engine.DocKind.OTHER.name) {
         val now = library.dao.byId(d.id) ?: return
         var next = now.copy(indexedAt = d.modified, infoAt = d.modified, pages = if (pages > 0) pages else now.pages, locked = locked, kind = kind)
-        if (facts != null) next = next.copy(title = facts.title, author = facts.author, year = facts.year, doi = facts.doi)
+        // A file the user renamed keeps their name in the lists; the rest of what was read still counts.
+        val named = d.id in library.namedByUser()
+        if (facts != null) next = next.copy(title = if (named) now.title else facts.title, author = facts.author, year = facts.year, doi = facts.doi)
         library.dao.update(next)
     }
 
