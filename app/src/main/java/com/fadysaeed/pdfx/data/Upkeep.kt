@@ -563,8 +563,8 @@ class Upkeep(
             ))
             n++
         }
-        val names = o.optJSONArray("names")
-        if (names != null && names.length() > 0 && names.names().isEmpty()) names.set((0 until names.length()).map { names.getString(it) })
+        val saved = o.optJSONArray("names")
+        if (saved != null && saved.length() > 0 && names.names().isEmpty()) names.set((0 until saved.length()).map { saved.getString(it) })
         val pins = o.optJSONArray("pins")
         if (pins != null && pins.length() > 0) {
             val p = context.getSharedPreferences("library", Context.MODE_PRIVATE)
