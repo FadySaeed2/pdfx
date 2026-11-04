@@ -107,16 +107,18 @@ internal class FlowWalker : StructuredTextWalker {
 
     /** Where each letter of the line sits across the page (its middle), in the order the file gave them. */
     private val xs = ArrayList<Float>()
+    /** Letters with no width of their own: the second letter of a ligature, drawn as one shape with the first. */
+    private val joined = ArrayList<Boolean>()
 
     override fun beginLine(bbox: Rect, wmode: Int, dir: Point?) {
-        sb.setLength(0); bold.clear(); italic.clear(); xs.clear(); sizeSum = 0f
+        sb.setLength(0); bold.clear(); italic.clear(); xs.clear(); joined.clear(); sizeSum = 0f
         lineBox = bbox
     }
 
     override fun endLine() {
         val r = lineBox ?: return
         if (sb.isNotEmpty() && sb.isNotBlank()) {
-            val ordered = Bidi.logical(sb.toString(), bold.toBooleanArray(), italic.toBooleanArray(), xs.toFloatArray())
+            val ordered = Bidi.logical(sb.toString(), bold.toBooleanArray(), italic.toBooleanArray(), xs.toFloatArray(), joined.toBooleanArray())
             lines?.add(RawLine(ordered.text, ordered.bold, ordered.italic, sizeSum / bold.size.coerceAtLeast(1), r.y0, r.y1, r.x0, r.x1))
         }
     }
@@ -131,8 +133,10 @@ internal class FlowWalker : StructuredTextWalker {
         val b = lastBold || (flags and StructuredText.CHAR_FLAGS_BOLD) != 0
         val units = Character.toChars(c)
         val x = q?.let { (minOf(it.ul_x, it.ll_x) + maxOf(it.ur_x, it.lr_x)) / 2f } ?: xs.lastOrNull() ?: 0f
-        units.forEach { u ->
-            sb.append(u); bold += b; italic += lastItalic; xs += x
+        // The engine gives the further letters of one shape (a lam-meem, a feh-yeh) no width.
+        val none = q == null || (maxOf(q.ur_x, q.lr_x) - minOf(q.ul_x, q.ll_x)) < 0.05f
+        units.forEachIndexed { k, u ->
+            sb.append(u); bold += b; italic += lastItalic; xs += x; joined += (none || k > 0)
         }
         sizeSum += size * units.size
     }
@@ -316,7 +320,10 @@ internal object Bidi {
         val ltr get() = !rtl && text.any { isLtr(it) }
     }
 
-    fun logical(text: String, bold: BooleanArray, italic: BooleanArray, xs: FloatArray): Line {
+    /** Brackets and quotes drawn as they look: in a line stored as drawn, each stands for its mirror. */
+    private val MIRROR = mapOf('(' to ')', ')' to '(', '[' to ']', ']' to '[', '{' to '}', '}' to '{', '<' to '>', '>' to '<', '«' to '»', '»' to '«', '‹' to '›', '›' to '‹')
+
+    fun logical(text: String, bold: BooleanArray, italic: BooleanArray, xs: FloatArray, joined: BooleanArray? = null): Line {
         if (text.none { isRtl(it) } || xs.size != text.length) return Line(text, bold, italic)
         // Letters and their marks, kept together; a letter made of two units (outside the basic plane) is one.
         val clusters = ArrayList<Cluster>()
@@ -325,10 +332,17 @@ internal object Bidi {
             val c = text[i]
             val n = if (Character.isHighSurrogate(c) && i + 1 < text.length) 2 else 1
             val piece = text.substring(i, i + n)
-            if (isMark(c) && clusters.isNotEmpty()) clusters.last().text.append(piece)
+            // Marks, and the letters a ligature carries after its first, stay with the letter before.
+            if ((isMark(c) || joined?.getOrNull(i) == true) && clusters.isNotEmpty()) clusters.last().text.append(piece)
             else clusters += Cluster(StringBuilder(piece), xs[i], clusters.size, bold.getOrElse(i) { false }, italic.getOrElse(i) { false })
             i += n
         }
+        // Stored as drawn (left to right) rather than as read: then brackets and quotes are mirrored.
+        val rtlRun = clusters.filter { it.rtl }
+        var rising = 0
+        var falling = 0
+        for (k in 1 until rtlRun.size) { val d = rtlRun[k].x - rtlRun[k - 1].x; if (d > 0.01f) rising++ else if (d < -0.01f) falling++ }
+        val drawnOrder = rising > falling
         val rtlCount = clusters.count { it.rtl }
         val ltrCount = clusters.count { it.text.any { ch -> Character.getDirectionality(ch) == Character.DIRECTIONALITY_LEFT_TO_RIGHT } }
         val rtlLine = rtlCount >= ltrCount
@@ -354,7 +368,8 @@ internal object Bidi {
         val it2 = ArrayList<Boolean>()
         for (c in out) {
             // Presentation forms (the shaped letters some files store) back to the letters themselves.
-            val t = c.text.toString().let { if (it.any { ch -> ch.code in 0xFB50..0xFDFF || ch.code in 0xFE70..0xFEFF }) java.text.Normalizer.normalize(it, java.text.Normalizer.Form.NFKC) else it }
+            var t = c.text.toString().let { if (it.any { ch -> ch.code in 0xFB50..0xFDFF || ch.code in 0xFE70..0xFEFF }) java.text.Normalizer.normalize(it, java.text.Normalizer.Form.NFKC) else it }
+            if (drawnOrder && rtlLine && t.length == 1) MIRROR[t[0]]?.let { t = it.toString() }
             sb.append(t)
             repeat(t.length) { b += c.bold; it2 += c.italic }
         }

@@ -38,6 +38,25 @@ class BidiTest {
         assertEquals("مرحبا", line(stored, listOf(4f, 3f, 2f, 1f, 0f)))
     }
 
+    /** As in a real book: "إلى المطر" drawn from the left, the lam-yeh and lam-meem each one shape whose second letter has no width. */
+    @Test
+    fun aLigatureKeepsItsLettersInOrder() {
+        // Drawn left to right: [مطر: ر ط], [لم lig: ل then م with no width], [ا], space, [لى lig: ل then ى], [إ]
+        val stored = "رط" + "لم" + "ا" + " " + "لى" + "إ"
+        val xs = listOf(0f, 1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f)
+        val joined = BooleanArray(stored.length).also { it[3] = true; it[7] = true }
+        val got = Bidi.logical(stored, BooleanArray(stored.length), BooleanArray(stored.length), xs.toFloatArray(), joined).text
+        assertEquals("إلى المطر", got)
+    }
+
+    /** Stored as drawn, a bracket that looks like ")" at the right is the opening one. */
+    @Test
+    fun bracketsInALineStoredAsDrawnAreTurned() {
+        // "اختصارًا (م)" drawn from the left: "(", "م", ")", space, then the word backwards.
+        val stored = "(م) اراصتخا"
+        assertEquals("اختصارا (م)", line(stored, stored.indices.map { it.toFloat() }))
+    }
+
     @Test
     fun anEnglishLineIsLeftAlone() {
         val stored = "Lithium levels, 12 hours"
