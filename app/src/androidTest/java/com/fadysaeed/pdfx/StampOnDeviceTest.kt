@@ -65,7 +65,7 @@ class StampOnDeviceTest {
         val d = Document.openDocument(out.absolutePath)
         try {
             assertEquals(4, d.countPages())
-            assertTrue("the cover has no number", find(d, 0, "Page") == null)
+            assertTrue("the cover has no number", find(d, 0, " of 3") == null)
             for ((i, n) in listOf(1 to 1, 2 to 2, 3 to 3)) {
                 val (r, b) = find(d, i, "Page $n of 3") ?: error("no number on page ${i + 1}")
                 // Bottom right of the page as shown, the right way up (wider than tall).

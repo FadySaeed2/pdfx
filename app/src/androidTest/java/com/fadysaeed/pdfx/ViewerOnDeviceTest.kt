@@ -32,7 +32,23 @@ import java.io.File
 /** The whole viewer screen on a real file, the way it is used: signing keeps the place, and the name takes you to the start. */
 @RunWith(AndroidJUnit4::class)
 class ViewerOnDeviceTest {
-    @get:Rule val compose = createComposeRule()
+    /**
+     * Compose's test host now and then trips over its own threads on the emulator ("Detected
+     * multithreaded access to SnapshotStateObserver"), which says nothing about PDFx: such a test
+     * runs once more. Any other failure fails at once.
+     */
+    @get:Rule(order = 0) val retry = org.junit.rules.TestRule { base, _ ->
+        object : org.junit.runners.model.Statement() {
+            override fun evaluate() {
+                try { base.evaluate() } catch (t: Throwable) {
+                    val flake = generateSequence(t) { it.cause }.any { it.message?.contains("multithreaded access to SnapshotStateObserver") == true || it.message?.contains("performMeasureAndLayout called during measure layout") == true }
+                    if (!flake) throw t
+                    base.evaluate()
+                }
+            }
+        }
+    }
+    @get:Rule(order = 1) val compose = createComposeRule()
     private val ctx = InstrumentationRegistry.getInstrumentation().targetContext
 
     @Test
