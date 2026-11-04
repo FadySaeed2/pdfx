@@ -377,11 +377,17 @@ class PdfSession private constructor(
         val parts = ArrayList<Selection>()
         for (p in pa..last) {
             val st = stext(p)
-            val size = sizeNow(p)
-            val (x0, y0) = if (p == pa) ax to ay else 0f to 0f
-            val (x1, y1) = if (p == last) bx to by else size.width to size.height
-            if (p == pa || p == last) runCatching { st.snapSelection(Point(x0, y0), Point(x1, y1), StructuredText.SELECT_WORDS) }
-            selectionNow(p, st, x0, y0, x1, y1)?.let { parts += it }
+            // A page's own first and last line: a part that runs from the top, or to the end, starts
+            // or stops there (a point in the margin finds no words to start from).
+            val lines = runCatching { st.blocks.flatMap { b -> b.lines?.toList().orEmpty() } }.getOrDefault(emptyList()).filter { it.bbox != null }
+            if (lines.isEmpty()) continue
+            val top = lines.minWith(compareBy({ it.bbox.y0 }, { it.bbox.x0 }))
+            val end = lines.maxWith(compareBy({ it.bbox.y1 }, { it.bbox.x1 }))
+            val a = if (p == pa) Point(ax, ay) else Point(top.bbox.x0 + 0.5f, (top.bbox.y0 + top.bbox.y1) / 2)
+            val b = if (p == last) Point(bx, by) else Point(end.bbox.x1 - 0.5f, (end.bbox.y0 + end.bbox.y1) / 2)
+            // Whole words at the ends the user placed.
+            if (p == pa || p == last) runCatching { st.snapSelection(a, b, StructuredText.SELECT_WORDS) }
+            selectionNow(p, st, a.x, a.y, b.x, b.y)?.let { parts += it }
         }
         if (parts.isEmpty()) return@onDoc null
         val text = parts.joinToString("\n") { it.text.trimEnd() }
