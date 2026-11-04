@@ -197,11 +197,30 @@ class PdfSession private constructor(
     }
 
     /** Draws one page so that it is [widthPx] pixels wide. */
-    suspend fun render(index: Int, widthPx: Int): Bitmap = onDoc {
+    suspend fun render(index: Int, widthPx: Int): Bitmap = render(index, widthPx) { _, _ -> null }
+
+    /**
+     * Draws one page [widthPx] pixels wide into a picture [reuse] hands over for that size (one no
+     * longer shown), or a new one when it has none: fewer big pictures made and thrown away while
+     * scrolling means fewer pauses for the phone to clear memory.
+     */
+    suspend fun render(index: Int, widthPx: Int, reuse: (Int, Int) -> Bitmap?): Bitmap = onDoc {
         val p = page(index)
         val s = sizeNow(index)
-        val scale = widthPx / s.width
-        AndroidDrawDevice.drawPage(p, Matrix(scale))
+        val ctm = Matrix(widthPx / s.width)
+        val box = com.artifex.mupdf.fitz.RectI(p.bounds.transform(ctm))
+        val w = (box.x1 - box.x0).coerceAtLeast(1)
+        val h = (box.y1 - box.y0).coerceAtLeast(1)
+        val bmp = reuse(w, h)?.takeIf { it.width == w && it.height == h && it.isMutable && !it.isRecycled }
+            ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val dev = AndroidDrawDevice(bmp, box.x0, box.y0, true)
+        try {
+            p.run(dev, ctm, null)
+            dev.close()
+        } finally {
+            dev.destroy()
+        }
+        bmp
     }
 
     /**

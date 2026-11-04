@@ -11,6 +11,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.geometry.Offset
 import com.fadysaeed.pdfx.ui.viewer.Tool
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -113,6 +115,66 @@ class EngineOnDeviceTest {
         } finally {
             s.close()
         }
+    }
+
+    /**
+     * Smooth scrolling: a page's new picture composes that page alone, and a quick scroll through
+     * sixty pages composes each page only a few times (it was every page on screen for every
+     * picture drawn anywhere).
+     */
+    @Test
+    fun aNewPictureRedrawsOnlyItsOwnPage() {
+        val file = samplePdf(60)
+        val session = runBlocking { PdfSession.open(ctx, Uri.fromFile(file)) }
+        var reader: Reader? = null
+        var list: androidx.compose.foundation.lazy.LazyListState? = null
+        compose.setContent {
+            PdfxTheme {
+                val scope = rememberCoroutineScope()
+                val r = remember { Reader(session, session.pageCount, scope).also { reader = it } }
+                val pages = r.pages!!
+                val state = rememberLazyListState().also { list = it }
+                ViewerContent(
+                    name = "Scroll check", reader = r, aspects = pages.aspects, widths = pages.widths,
+                    image = { pages.images[it] }, tile = { pages.tiles[it] }, listState = state,
+                    onWant = pages::want, onTiles = pages::wantTiles, onBack = {},
+                )
+            }
+        }
+        val pages = { reader!!.pages!! }
+        compose.waitUntil(20_000) { pages().images.size >= 3 && pages().drawCount(0) > 0 && pages().drawCount(1) > 0 }
+        compose.waitForIdle()
+        val shown = list!!.layoutInfo.visibleItemsInfo.map { it.index }
+        assertTrue("two pages or more on screen: $shown", shown.size >= 2)
+        // Every page on screen and the two after drawn sharp, and the drawing settled.
+        compose.waitUntil(20_000) { (0..(shown.max() + 2)).all { pages().drawCount(it) > 0 } }
+        Thread.sleep(800)
+        compose.waitForIdle()
+        com.fadysaeed.pdfx.ui.viewer.PageComposeCounts.reset()
+        // Page 0 drawn again (as after a mark): page 0 composes, the others on screen do not.
+        val before = pages().drawCount(0)
+        compose.runOnIdle { pages().invalidate(listOf(0)) }
+        compose.waitUntil(10_000) { pages().drawCount(0) > before }
+        compose.waitForIdle()
+        val others = shown.filter { it != 0 }.sumOf { com.fadysaeed.pdfx.ui.viewer.PageComposeCounts.of(it) }
+        assertTrue("page 0 composed again", com.fadysaeed.pdfx.ui.viewer.PageComposeCounts.of(0) >= 1)
+        assertEquals("the other pages on screen were left alone", 0, others)
+
+        // A quick scroll to the end and back: how often each page composed on the way.
+        com.fadysaeed.pdfx.ui.viewer.PageComposeCounts.reset()
+        repeat(6) {
+            compose.onRoot().performTouchInput { swipeUp(startY = bottom - 40f, endY = top + 40f, durationMillis = 60) }
+        }
+        compose.waitForIdle()
+        Thread.sleep(1500)
+        compose.waitForIdle()
+        val passed = list!!.firstVisibleItemIndex
+        val total = com.fadysaeed.pdfx.ui.viewer.PageComposeCounts.total()
+        File(ctx.filesDir, "shots").apply { mkdirs() }.resolve("scroll-compositions.txt")
+            .writeText("pages passed: $passed\ncompositions: $total\nper page: ${if (passed > 0) total.toFloat() / passed else 0f}\n")
+        assertTrue("the scroll went somewhere: $passed", passed >= 10)
+        assertTrue("about four compositions a page at most, not $total for $passed pages", total <= (passed + 6) * 4)
+        session.close()
     }
 
     @Test

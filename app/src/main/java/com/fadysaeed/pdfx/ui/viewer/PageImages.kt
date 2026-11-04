@@ -1,9 +1,10 @@
 package com.fadysaeed.pdfx.ui.viewer
 
-import androidx.compose.runtime.mutableStateMapOf
+import android.graphics.Bitmap
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
-import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.fadysaeed.pdfx.engine.PdfSession
@@ -15,8 +16,28 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.withFrameNanos
 import kotlin.math.abs
 
-/** What the screen needs drawn right now. */
-data class Want(val range: IntRange, val focus: Int, val widthPx: Int, val seq: Int = 0)
+/** What the screen needs drawn right now. [fast]: scrolling quickly, so soft pictures will do until it slows. */
+data class Want(val range: IntRange, val focus: Int, val widthPx: Int, val seq: Int = 0, val fast: Boolean = false)
+
+/**
+ * Pictures of pages, each page in a state of its own: a new picture for page 7 redraws page 7 and
+ * nothing else. (One shared map made every page on screen draw again for any page's new picture,
+ * many times a second in a quick scroll.)
+ */
+class PageSlots<T : Any> {
+    private val slots = HashMap<Int, MutableState<T?>>()
+    private fun slot(i: Int) = slots.getOrPut(i) { mutableStateOf(null) }
+
+    operator fun get(i: Int): T? = slot(i).value
+    operator fun set(i: Int, v: T) { slot(i).value = v }
+    fun remove(i: Int): T? { val s = slots[i] ?: return null; val v = s.value; s.value = null; return v }
+    fun containsKey(i: Int): Boolean = slots[i]?.value != null
+    val keys: Set<Int> get() = slots.filterValues { it.value != null }.keys
+    val size: Int get() = slots.values.count { it.value != null }
+    fun toMap(): Map<Int, T> = slots.mapNotNull { (k, v) -> v.value?.let { k to it } }.toMap()
+    fun putAll(m: Map<Int, T>) = m.forEach { (k, v) -> set(k, v) }
+    fun clear() = slots.values.forEach { it.value = null }
+}
 
 /** A sharp patch of a page for deep zoom: the part on screen, drawn at the column's full size. */
 data class TileReq(val page: Int, val columnPx: Int, val x: Int, val y: Int, val w: Int, val h: Int)
@@ -34,13 +55,13 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
      * threw the reader back to page 1) and nothing blinks while the pages are drawn again.
      */
     private val carried: PageImages? = seed?.takeIf { it.aspects.size == session.pageCount && it.widths.size == session.pageCount }
-    val images: SnapshotStateMap<Int, ImageBitmap> = mutableStateMapOf<Int, ImageBitmap>().apply { carried?.images?.toMap()?.let { putAll(it) } }
+    val images: PageSlots<ImageBitmap> = PageSlots<ImageBitmap>().apply { carried?.images?.toMap()?.let { putAll(it) } }
     /** Width over height for every page; starts as page 1's shape and settles as pages are measured. */
     val aspects: SnapshotStateList<Float> = mutableStateListOf<Float>().apply { carried?.aspects?.toList()?.let { addAll(it) } }
     /** Page widths in PDF points, to place highlights and selections on the page. */
     val widths: SnapshotStateList<Float> = mutableStateListOf<Float>().apply { carried?.widths?.toList()?.let { addAll(it) } }
     /** At most one sharp patch per page, for whatever is on screen when zoomed in deep. */
-    val tiles = mutableStateMapOf<Int, Tile>()
+    val tiles = PageSlots<Tile>()
     private val wantedTiles = MutableStateFlow<Pair<Int, List<TileReq>>>(0 to emptyList())
     private var seq = 0
     /** Counts redraws per page, so a change can wait for its page to be drawn again. */
@@ -48,6 +69,10 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
 
     private val renderedWidth = HashMap<Int, Int>()
     private val bytes = HashMap<Int, Long>()
+    /** The pictures behind [images] that this drew, so they can be drawn into again once off screen. */
+    private val raw = HashMap<Int, Bitmap>()
+    /** Pictures no longer shown, with when they left, kept to draw new pages into. */
+    private val spare = ArrayDeque<Pair<Bitmap, Long>>()
     private val wanted = MutableStateFlow<Want?>(null)
 
     init {
@@ -116,6 +141,30 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
 
     fun drawCount(page: Int): Int = drawn.value[page] ?: 0
 
+    /** Puts a picture on page [i] in place of the one there, which goes to [spare]. */
+    private fun show(i: Int, bmp: Bitmap) {
+        // Sent to the graphics memory now, in the background, rather than in the frame it first shows.
+        bmp.prepareToDraw()
+        images[i] = bmp.asImageBitmap()
+        raw.put(i, bmp)?.let { if (it !== bmp) retire(it) }
+        bytes[i] = bmp.allocationByteCount.toLong()
+    }
+
+    private fun retire(b: Bitmap) = synchronized(spare) {
+        spare.addLast(b to System.currentTimeMillis())
+        while (spare.size > SPARE_MAX) spare.removeFirst()
+    }
+
+    /**
+     * A picture of exactly [w] × [h] that left the screen long enough ago that nothing still draws
+     * it (asked on the document's thread).
+     */
+    private fun reuse(w: Int, h: Int): Bitmap? = synchronized(spare) {
+        val now = System.currentTimeMillis()
+        val k = spare.indexOfFirst { (b, at) -> b.width == w && b.height == h && now - at >= SPARE_AFTER_MS }
+        if (k < 0) null else spare.removeAt(k).first
+    }
+
     private suspend fun renderFor(w: Want) {
         val order = w.range.sortedBy { abs(it - w.focus) }
         // A quick soft picture first for pages with none, so a fast scroll never shows a blank page;
@@ -124,23 +173,21 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
             if (session.closed) return
             if (images.containsKey(i)) continue
             val soft = (widthFor(i, w.widthPx) / 3).coerceAtLeast(64)
-            val bmp = runCatching { session.render(i, soft) }.getOrNull() ?: continue
-            bmp.prepareToDraw()
-            images[i] = bmp.asImageBitmap()
+            val bmp = runCatching { session.render(i, soft, ::reuse) }.getOrNull() ?: continue
+            show(i, bmp)
             renderedWidth[i] = soft
-            bytes[i] = bmp.allocationByteCount.toLong()
+            trim(w)
         }
+        // Scrolling quickly: the pages go by too fast to read, so the sharp pictures wait until it slows.
+        if (w.fast) return
         for (i in order) {
             if (session.closed) return
             val target = widthFor(i, w.widthPx)
             if (renderedWidth[i] == target) continue
-            val bmp = runCatching { session.render(i, target) }.getOrNull() ?: continue
-            // Sent to the graphics memory now, in the background, rather than in the frame it first shows.
-            bmp.prepareToDraw()
-            images[i] = bmp.asImageBitmap()
+            val bmp = runCatching { session.render(i, target, ::reuse) }.getOrNull() ?: continue
+            show(i, bmp)
             renderedWidth[i] = target
             drawn.value = drawn.value + (i to ((drawn.value[i] ?: 0) + 1))
-            bytes[i] = bmp.allocationByteCount.toLong()
             trim(w)
         }
     }
@@ -162,12 +209,16 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
             if (total <= BUDGET_BYTES) break
             total -= bytes.remove(v) ?: 0
             images.remove(v)
+            raw.remove(v)?.let(::retire)
             renderedWidth.remove(v)
         }
     }
 
     private companion object {
         const val BUDGET_BYTES = 220L * 1024 * 1024
+        /** Pictures kept to draw into again, and how long after leaving the screen one may be. */
+        const val SPARE_MAX = 6
+        const val SPARE_AFTER_MS = 400L
         const val MAX_PAGE_PIXELS = 18_000_000f
     }
 }

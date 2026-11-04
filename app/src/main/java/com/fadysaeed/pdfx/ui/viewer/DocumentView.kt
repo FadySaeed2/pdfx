@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -169,12 +170,39 @@ fun DocumentView(
             delay(220)
             settledZoom = zoom
         }
+        // How fast the pages go by, in screens a second, eased over a few frames. Past three a
+        // second only soft pictures are drawn; under one and a half (or once it stops) the sharp
+        // ones follow. The gap between the two keeps it from flickering between them.
+        var fast by remember { mutableStateOf(false) }
+        LaunchedEffect(listState, viewportH) {
+            val gap = with(density) { 6.dp.toPx() }
+            var lastPos = Float.NaN
+            var lastT = 0L
+            var speed = 0f
+            snapshotFlow {
+                val info = listState.layoutInfo
+                val first = info.visibleItemsInfo.firstOrNull()
+                listState.isScrollInProgress to (first?.let { it.index * (it.size + gap) - (it.offset - info.viewportStartOffset) } ?: 0f)
+            }.collect { (moving, pos) ->
+                val t = System.nanoTime()
+                if (!moving) {
+                    speed = 0f; lastPos = Float.NaN; fast = false
+                    return@collect
+                }
+                if (!lastPos.isNaN() && t > lastT) {
+                    val v = abs(pos - lastPos) / ((t - lastT) / 1e9f) / viewportH.coerceAtLeast(1f)
+                    speed = speed * 0.6f + v * 0.4f
+                    fast = if (fast) speed > 1.5f else speed > 3f
+                }
+                lastPos = pos
+                lastT = t
+            }
+        }
         LaunchedEffect(listState, pageCount, viewportPx) {
-            snapshotFlow { Triple(visibleRange(listState, pageCount), centreItem(listState), settledZoom) }
-                .collectLatest { (range, focus, z) ->
-                    if (range.isEmpty()) return@collectLatest
-                    val render = (viewportPx * bucket(z)).roundToInt()
-                    want(Want(range, focus, render))
+            snapshotFlow { Want(visibleRange(listState, pageCount), centreItem(listState), (viewportPx * bucket(settledZoom)).roundToInt(), fast = fast) }
+                .collectLatest { w ->
+                    if (w.range.isEmpty()) return@collectLatest
+                    want(w)
                 }
         }
         // Deep zoom: once the view is still, draw just what is on screen at full size.
@@ -266,6 +294,7 @@ fun DocumentView(
                     .offset { IntOffset(-panX.roundToInt(), 0) },
             ) {
                 items(pageCount, key = { it }) { i ->
+                    SideEffect { PageComposeCounts.hit(i) }
                     val aspect = aspects.getOrNull(i)?.takeIf { it > 0f } ?: 0.707f
                     LaunchedEffect(i) { reader.loadLinks(i); reader.loadMarks(i) }
                     // A loupe over the finger while a selection handle is dragged.
@@ -664,3 +693,16 @@ fun centreItem(state: LazyListState): Int {
 
 /** Pens and their erasers draw; fingers and mice do whatever the tool says. */
 fun PointerType.isPen(): Boolean = this == PointerType.Stylus || this == PointerType.Eraser
+
+/**
+ * How many times each page was composed. A page should compose when it comes on screen and when
+ * its own picture or marks change, never for another page's: the tests that keep scrolling smooth
+ * read this.
+ */
+object PageComposeCounts {
+    private val counts = java.util.concurrent.ConcurrentHashMap<Int, Int>()
+    fun hit(page: Int) { counts.merge(page, 1, Int::plus) }
+    fun of(page: Int): Int = counts[page] ?: 0
+    fun total(): Int = counts.values.sum()
+    fun reset() = counts.clear()
+}
