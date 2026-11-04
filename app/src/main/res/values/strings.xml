@@ -6,4 +6,5 @@
     <string name="shortcut_last_long">Open the last file</string>
     <string name="shortcut_search">Search</string>
     <string name="shortcut_search_long">Search your files</string>
+    <string name="widget_description">Your last files and a Scan button</string>
 </resources>

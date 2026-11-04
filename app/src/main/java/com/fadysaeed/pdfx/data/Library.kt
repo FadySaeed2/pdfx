@@ -59,12 +59,19 @@ class Library(
     suspend fun recordOpen(id: Long, pages: Int, locked: Boolean) {
         val d = dao.byId(id) ?: return
         dao.update(d.copy(lastOpened = System.currentTimeMillis(), pages = if (pages > 0) pages else d.pages, locked = locked && pages == 0))
+        // The home-screen widget lists the files opened last.
+        runCatching { com.fadysaeed.pdfx.widget.RecentWidget.refresh(context) }
     }
 
     suspend fun updatePage(id: Long, page: Int) {
         val d = dao.byId(id) ?: return
         if (d.lastPage != page) dao.update(d.copy(lastPage = page))
+        // The widget shows the page each file was left at; a few seconds behind is close enough.
+        val now = System.currentTimeMillis()
+        if (now - widgetAt > 15_000) { widgetAt = now; runCatching { com.fadysaeed.pdfx.widget.RecentWidget.refresh(context) } }
     }
+
+    @Volatile private var widgetAt = 0L
 
     // ---------------------------------------------------------------- finding files
 

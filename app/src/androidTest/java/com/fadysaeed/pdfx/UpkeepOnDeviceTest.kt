@@ -129,8 +129,12 @@ class UpkeepOnDeviceTest {
         lib.setTag(a.id, tag, true)
         db.dao().update(db.dao().byId(a.id)!!.copy(starred = true, reading = 1))
         lib.bookmarks.set(a.id, 3, true)
+        ctx.getSharedPreferences("reader", 0).edit().putString("stamps", "SEEN BY FS|4290047488").commit()
         val backup = upkeep.backUp()
         assertTrue(backup.isFile)
+        // Reading settings go with it (own stamps among them).
+        val saved = org.json.JSONObject(backup.readText()).getJSONObject("prefs").getJSONObject("reader")
+        assertEquals("SEEN BY FS|4290047488", saved.getJSONObject("stamps").getString("v"))
 
         // The app removed and put back: an empty library over the same files.
         val db2 = LibraryDb.inMemory(ctx)

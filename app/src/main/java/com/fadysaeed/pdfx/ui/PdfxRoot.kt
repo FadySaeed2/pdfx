@@ -184,7 +184,12 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit, shortcut: Stri
                 if (last != null) open = OpenRequest(Uri.parse(last.uri), last.lastPage)
                 else vm.notice.value = Notice("No file has been opened yet.")
             }
-            else -> { open = null; libraryAsk = s }
+            else -> if (s.startsWith("open:")) {
+                val id = s.removePrefix("open:").toLongOrNull()
+                val d = id?.let { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.library.dao.byId(it) } }
+                if (d != null && !d.inTrash) open = OpenRequest(Uri.parse(d.uri), d.lastPage)
+                else vm.notice.value = Notice("That file is no longer in the library.")
+            } else { open = null; libraryAsk = s }
         }
     }
 

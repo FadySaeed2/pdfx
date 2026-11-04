@@ -42,6 +42,8 @@ class MainActivity : ComponentActivity() {
         "com.fadysaeed.pdfx.action.SCAN" -> "scan"
         "com.fadysaeed.pdfx.action.LAST" -> "last"
         "com.fadysaeed.pdfx.action.SEARCH" -> "search"
+        // A file tapped on the home-screen widget.
+        "com.fadysaeed.pdfx.action.OPEN" -> intent?.data?.lastPathSegment?.toLongOrNull()?.let { "open:$it" }
         else -> null
     }
 

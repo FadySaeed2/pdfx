@@ -940,7 +940,7 @@ fun ViewerScreen(
 private enum class ViewerSheet { CONTENTS, DISPLAY, MORE, TOOLS }
 
 /** The reader: pages or reflowed text, with its bars, search, selection, contents and display menus. */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ViewerContent(
     name: String,

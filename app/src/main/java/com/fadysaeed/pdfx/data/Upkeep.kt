@@ -495,6 +495,9 @@ class Upkeep(
         }
         out.put("docs", docs)
         out.put("names", JSONArray(names.names()))
+        // Reading settings (paper colour, reflow text, own stamps, two pages when turned) and the
+        // library's (sorting, grid, pinned folders), as they are.
+        out.put("prefs", JSONObject().apply { for (n in PREFS) put(n, prefsToJson(context.getSharedPreferences(n, Context.MODE_PRIVATE))) })
         out.put("pins", JSONArray(context.getSharedPreferences("library", Context.MODE_PRIVATE).getStringSet("pinned_folders", emptySet()).orEmpty().toList()))
         val dir = backupDir.apply { mkdirs() }
         val day = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(Date())
@@ -503,6 +506,15 @@ class Upkeep(
         tmp.writeText(out.toString(1))
         if (!tmp.renameTo(latest)) { tmp.copyTo(latest, overwrite = true); tmp.delete() }
         latest.copyTo(File(dir, "PDFx library $day.json"), overwrite = true)
+        // Saved signatures and initials, drawn or photographed.
+        runCatching {
+            val signs = File(context.filesDir, "signatures.json")
+            val to = File(dir, "Signatures").apply { mkdirs() }
+            if (signs.isFile) {
+                signs.copyTo(File(to, "signatures.json"), overwrite = true)
+                File(context.filesDir, "signatures").listFiles()?.forEach { f -> if (f.isFile) f.copyTo(File(to, f.name), overwrite = true) }
+            }
+        }
         dir.listFiles { f -> f.name.matches(Regex("PDFx library \\d{4}-\\d{2}-\\d{2}\\.json")) }
             ?.sortedByDescending { it.name }?.drop(7)?.forEach { it.delete() }
         latest
@@ -565,6 +577,19 @@ class Upkeep(
         }
         val saved = o.optJSONArray("names")
         if (saved != null && saved.length() > 0 && names.names().isEmpty()) names.set((0 until saved.length()).map { saved.getString(it) })
+        o.optJSONObject("prefs")?.let { all ->
+            for (n in PREFS) all.optJSONObject(n)?.let { jsonToPrefs(it, context.getSharedPreferences(n, Context.MODE_PRIVATE)) }
+        }
+        // Signatures, when this install has none of its own yet.
+        runCatching {
+            val from = File(file.parentFile, "Signatures")
+            val here = File(context.filesDir, "signatures.json")
+            if (!here.exists() && File(from, "signatures.json").isFile) {
+                val pics = File(context.filesDir, "signatures").apply { mkdirs() }
+                from.listFiles()?.forEach { f -> if (f.isFile && f.name != "signatures.json") f.copyTo(File(pics, f.name), overwrite = true) }
+                File(from, "signatures.json").copyTo(here, overwrite = true)
+            }
+        }
         val pins = o.optJSONArray("pins")
         if (pins != null && pins.length() > 0) {
             val p = context.getSharedPreferences("library", Context.MODE_PRIVATE)
@@ -608,7 +633,45 @@ class Upkeep(
         return n
     }
 
+    /** A preferences file as JSON: each key with its type, so it comes back as it was. */
+    private fun prefsToJson(p: android.content.SharedPreferences): JSONObject {
+        val o = JSONObject()
+        for ((k, v) in p.all) {
+            val e = when (v) {
+                is Boolean -> JSONObject().put("t", "b").put("v", v)
+                is Int -> JSONObject().put("t", "i").put("v", v)
+                is Long -> JSONObject().put("t", "l").put("v", v)
+                is Float -> JSONObject().put("t", "f").put("v", v.toDouble())
+                is String -> JSONObject().put("t", "s").put("v", v)
+                is Set<*> -> JSONObject().put("t", "set").put("v", JSONArray(v.map { it.toString() }))
+                else -> null
+            } ?: continue
+            o.put(k, e)
+        }
+        return o
+    }
+
+    /** Puts back the keys this install has not set itself. */
+    private fun jsonToPrefs(o: JSONObject, p: android.content.SharedPreferences) {
+        val e = p.edit()
+        for (k in o.keys()) {
+            if (p.contains(k)) continue
+            val x = o.getJSONObject(k)
+            when (x.optString("t")) {
+                "b" -> e.putBoolean(k, x.getBoolean("v"))
+                "i" -> e.putInt(k, x.getInt("v"))
+                "l" -> e.putLong(k, x.getLong("v"))
+                "f" -> e.putFloat(k, x.getDouble("v").toFloat())
+                "s" -> e.putString(k, x.getString("v"))
+                "set" -> e.putStringSet(k, x.getJSONArray("v").let { a -> (0 until a.length()).map { a.getString(it) }.toSet() })
+            }
+        }
+        e.apply()
+    }
+
     companion object {
+        /** The preference files the backup carries: reading settings and the library's. */
+        private val PREFS = listOf("reader", "library")
         private const val HOUR = 3_600_000L
         private const val DAY = 24 * HOUR
         /** How alike two files must be (cosine of their weighed words) for one to vote on the other's tags. */
