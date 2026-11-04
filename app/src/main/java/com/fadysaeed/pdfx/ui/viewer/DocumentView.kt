@@ -14,6 +14,9 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.key
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
@@ -138,6 +141,23 @@ fun DocumentView(
         val paper = paperColor(reader.mode)
 
         fun pageWidthPt(i: Int) = widths.getOrNull(i)?.takeIf { it > 0f } ?: 595f
+
+        // Two pages side by side while the phone is on its side, one otherwise. The list scrolls by
+        // rows; page i sits in row i / perRow, at place i % perRow.
+        val perRow = if (viewportPx > viewportH && pageCount > 1 && reader.spreads) 2 else 1
+        val gapPx = with(density) { 6.dp.toPx() }
+        val rows = (pageCount + perRow - 1) / perRow
+        SideEffect { reader.spreadRow = perRow }
+        // Turning the phone keeps the page being read at the top.
+        val keep = remember { RowKeeper(1, listState.firstVisibleItemIndex) }
+        if (keep.perRow != perRow) {
+            val page = keep.page
+            keep.perRow = perRow
+            SideEffect { listState.requestScrollToItem(page / perRow) }
+        }
+        LaunchedEffect(listState, perRow) { snapshotFlow { listState.firstVisibleItemIndex }.collect { keep.page = it * perRow } }
+        /** One page's width in pixels at zoom [z]. */
+        fun cellPx(z: Float) = (viewportPx * z - gapPx * (perRow - 1)) / perRow
         fun clampX(x: Float) = x.coerceIn(0f, (viewportPx * (zoom - 1f)).coerceAtLeast(0f))
 
         /** Scales about [focus] and moves by [pan], keeping the point under the fingers in place. */
@@ -162,8 +182,8 @@ fun DocumentView(
         /** Where a point on page [i] is on screen, for a double tap that lands on a page. */
         fun onScreen(i: Int, p: Offset): Offset? {
             val info = listState.layoutInfo
-            val it = info.visibleItemsInfo.firstOrNull { it.index == i } ?: return null
-            return Offset(p.x - panX, (it.offset - info.viewportStartOffset) + p.y)
+            val it = info.visibleItemsInfo.firstOrNull { it.index == i / perRow } ?: return null
+            return Offset((i % perRow) * (cellPx(zoom) + gapPx) + p.x - panX, (it.offset - info.viewportStartOffset) + p.y)
         }
 
         LaunchedEffect(zoom) {
@@ -184,10 +204,11 @@ fun DocumentView(
                 fast = speed.add(System.nanoTime(), pos, viewportH)
             }
         }
-        LaunchedEffect(listState, pageCount, viewportPx) {
+        LaunchedEffect(listState, pageCount, viewportPx, perRow) {
             snapshotFlow {
-                val shown = listState.layoutInfo.visibleItemsInfo.let { v -> if (v.isEmpty()) IntRange.EMPTY else v.first().index..v.last().index }
-                Want(visibleRange(listState, pageCount), centreItem(listState), (viewportPx * bucket(settledZoom)).roundToInt(), fast = fast, onScreen = shown)
+                val shown = listState.layoutInfo.visibleItemsInfo.let { v -> if (v.isEmpty()) IntRange.EMPTY else (v.first().index * perRow)..minOf(pageCount - 1, v.last().index * perRow + perRow - 1) }
+                val near = visibleRange(listState, rows).let { r -> if (r.isEmpty()) r else (r.first * perRow)..minOf(pageCount - 1, r.last * perRow + perRow - 1) }
+                Want(near, centreItem(listState) * perRow, cellPx(bucket(settledZoom)).roundToInt(), fast = fast, onScreen = shown)
             }
                 .collectLatest { w ->
                     if (w.range.isEmpty()) return@collectLatest
@@ -195,7 +216,7 @@ fun DocumentView(
                 }
         }
         // Deep zoom: once the view is still, draw just what is on screen at full size.
-        LaunchedEffect(listState, viewportPx, viewportH) {
+        LaunchedEffect(listState, viewportPx, viewportH, perRow) {
             snapshotFlow {
                 val info = listState.layoutInfo
                 Triple(info.visibleItemsInfo.map { Triple(it.index, it.offset - info.viewportStartOffset, it.size) }, panX, settledZoom to zoom)
@@ -204,13 +225,20 @@ fun DocumentView(
                 .collectLatest { (items, px, zs) ->
                     val (z, live) = zs
                     if (z <= TILE_FROM || z != live) { wantTiles(emptyList()); return@collectLatest }
-                    val colPx = (viewportPx * z).roundToInt()
-                    val reqs = items.mapNotNull { (index, top, size) ->
-                        val x0 = px.roundToInt().coerceIn(0, colPx)
-                        val x1 = (px + viewportPx).roundToInt().coerceIn(0, colPx)
-                        val y0 = (-top).coerceIn(0, size)
-                        val y1 = (viewportH.roundToInt() - top).coerceIn(0, size)
-                        if (x1 - x0 < 8 || y1 - y0 < 8) null else TileReq(index, colPx, x0, y0, x1 - x0, y1 - y0)
+                    val cell = cellPx(z)
+                    val cellW = cell.roundToInt()
+                    val reqs = items.flatMap { (row, top, size) ->
+                        (0 until perRow).mapNotNull { c ->
+                            val page = row * perRow + c
+                            if (page >= pageCount) return@mapNotNull null
+                            val cx = c * (cell + gapPx)
+                            val pageH = (cell / (aspects.getOrNull(page)?.takeIf { it > 0f } ?: 0.707f)).roundToInt().coerceAtMost(size)
+                            val x0 = (px - cx).roundToInt().coerceIn(0, cellW)
+                            val x1 = (px + viewportPx - cx).roundToInt().coerceIn(0, cellW)
+                            val y0 = (-top).coerceIn(0, pageH)
+                            val y1 = (viewportH.roundToInt() - top).coerceIn(0, pageH)
+                            if (x1 - x0 < 8 || y1 - y0 < 8) null else TileReq(page, cellW, x0, y0, x1 - x0, y1 - y0)
+                        }
                     }
                     wantTiles(reqs)
                 }
@@ -218,10 +246,10 @@ fun DocumentView(
         // Search results, links in contents and bookmarks all arrive here as a jump.
         LaunchedEffect(reader.jump) {
             val j = reader.jump ?: return@LaunchedEffect
-            val k = (viewportPx * zoom) / pageWidthPt(j.page)
+            val k = cellPx(zoom) / pageWidthPt(j.page)
             val y = (j.y * k - viewportH / 3f).roundToInt().coerceAtLeast(0)
-            listState.scrollToItem(j.page, y)
-            if (j.x != null && zoom > 1.01f) panX = clampX(j.x * k - viewportPx / 2f)
+            listState.scrollToItem(j.page / perRow, y)
+            if (j.x != null && zoom > 1.01f) panX = clampX((j.page % perRow) * (cellPx(zoom) + gapPx) + j.x * k - viewportPx / 2f)
         }
 
         Box(
@@ -271,7 +299,7 @@ fun DocumentView(
                 },
         ) {
             val columnWidth = with(density) { (viewportPx * zoom).toDp() }
-            val colPx = (viewportPx * zoom).roundToInt()
+            val cellW = cellPx(zoom).roundToInt()
             LazyColumn(
                 state = listState,
                 contentPadding = contentPadding,
@@ -282,7 +310,11 @@ fun DocumentView(
                     .fillMaxHeight()
                     .offset { IntOffset(-panX.roundToInt(), 0) },
             ) {
-                items(pageCount, key = { it }) { i ->
+                items(rows, key = { it }) { row ->
+                  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.Top) {
+                   for (c in 0 until perRow) {
+                    val i = row * perRow + c
+                    if (i >= pageCount) Spacer(Modifier.weight(1f)) else Box(Modifier.weight(1f)) { key(i) {
                     SideEffect { PageComposeCounts.hit(i); ScrollCheck.event("composed p$i") }
                     val aspect = aspects.getOrNull(i)?.takeIf { it > 0f } ?: 0.707f
                     LaunchedEffect(i) { reader.loadLinks(i); reader.loadMarks(i) }
@@ -457,7 +489,7 @@ fun DocumentView(
                             Image(img, contentDescription = null, contentScale = ContentScale.FillBounds, colorFilter = filter, modifier = Modifier.fillMaxSize())
                         }
                         val t = tile(i)
-                        if (t != null && t.req.columnPx == colPx) {
+                        if (t != null && t.req.columnPx == cellW) {
                             val r = t.req
                             Image(
                                 t.image, contentDescription = null, contentScale = ContentScale.FillBounds, colorFilter = filter,
@@ -467,18 +499,25 @@ fun DocumentView(
                         PageMarks(reader, i, pageWidthPt(i), img)
                         val sel = reader.selection
                         if (sel != null && sel.page == i && !reader.marking && sel.boxes.isNotEmpty()) {
-                            val k = viewportPx * zoom / pageWidthPt(i)
+                            val k = cellPx(zoom) / pageWidthPt(i)
                             val top = sel.boxes.minOf { it.y0 } * k
                             val bottom = sel.boxes.maxOf { it.y1 } * k
                             val centre = (sel.boxes.minOf { it.x0 } + sel.boxes.maxOf { it.x1 }) / 2f * k
-                            FloatOver(top, bottom, centre, panX, panX + viewportPx, selectionBar)
+                            val cx = c * (cellPx(zoom) + gapPx)
+                            FloatOver(top, bottom, centre, panX - cx, panX - cx + viewportPx, selectionBar)
                         }
                     }
+                    } }
+                   }
+                  }
                 }
             }
         }
     }
 }
+
+/** Which pages were in a row the last time the list was laid out, and the page then at the top. */
+private class RowKeeper(var perRow: Int, var page: Int)
 
 /** Search hits, the current hit, and the text selection with its two handles, drawn over a page. */
 @Composable

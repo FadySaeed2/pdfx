@@ -294,7 +294,7 @@ fun ViewerScreen(
             val listState = rememberLazyListState(initialFirstVisibleItemIndex = start)
             LaunchedEffect(listState, doc?.id) {
                 val id = doc?.id ?: return@LaunchedEffect
-                snapshotFlow { centreItem(listState) }
+                snapshotFlow { reader.firstPageOf(centreItem(listState)) }
                     .distinctUntilChanged()
                     .debounce(400)
                     .collect { library.updatePage(id, it) }
@@ -719,7 +719,7 @@ fun ViewerScreen(
                 reader.openPages = ::openPages
                 reader.openTool = ::openTool
                 reader.hasPassword = password != null
-                onReader?.invoke(reader) { centreItem(listState) }
+                onReader?.invoke(reader) { reader.firstPageOf(centreItem(listState)) }
             }
             LaunchedEffect(reader) {
                 val (i, o) = spot ?: return@LaunchedEffect
@@ -959,7 +959,7 @@ fun ViewerContent(
     val pageCount = reader.pageCount
     // The page being read, as state that only the small things showing it read: reading it here
     // would compose this whole screen, the pages with it, at every page turned while scrolling.
-    val currentState = remember(listState) { derivedStateOf { centreItem(listState) } }
+    val currentState = remember(listState, reader) { derivedStateOf { reader.firstPageOf(centreItem(listState)) } }
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     var sheet by remember { mutableStateOf<ViewerSheet?>(null) }
@@ -1007,7 +1007,7 @@ fun ViewerContent(
         val line = info.viewportStartOffset + (info.viewportEndOffset - info.viewportStartOffset) / 3
         val item = info.visibleItemsInfo.firstOrNull { it.offset <= line && it.offset + it.size > line }
             ?: info.visibleItemsInfo.firstOrNull() ?: return null
-        return item.index to ((line - item.offset).toFloat() / item.size.coerceAtLeast(1)).coerceIn(0f, 1f)
+        return reader.firstPageOf(item.index) to ((line - item.offset).toFloat() / item.size.coerceAtLeast(1)).coerceIn(0f, 1f)
     }
     fun toggleReflow() = reader.toggleReflow(spot())
 
@@ -1027,10 +1027,11 @@ fun ViewerContent(
     LaunchedEffect(reader.reflow) {
         val (page, frac) = reader.readingSpot ?: return@LaunchedEffect
         reader.readingSpot = null
-        listState.scrollToItem(page)
+        val row = reader.rowOf(page)
+        listState.scrollToItem(row)
         if (reader.reflow) snapshotFlow { reader.paragraphs[page] }.filterNotNull().first()
         withFrameNanos { }
-        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == page } ?: return@LaunchedEffect
+        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == row } ?: return@LaunchedEffect
         val info = listState.layoutInfo
         val line = info.viewportStartOffset + (info.viewportEndOffset - info.viewportStartOffset) / 3
         listState.scrollBy(item.offset + item.size * frac - line)
@@ -1142,7 +1143,7 @@ fun ViewerContent(
 
         AnimatedVisibility(showBars && pageCount > 1 && !reader.marking, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterEnd)) {
             Scrubber(currentState.value, pageCount, Modifier.padding(top = top + 72.dp, bottom = bottom + 80.dp)) { p ->
-                scope.launch { listState.scrollToItem(p) }
+                scope.launch { listState.scrollToItem(reader.rowOf(p)) }
             }
         }
 
@@ -1162,7 +1163,7 @@ fun ViewerContent(
                         .padding(horizontal = 16.dp, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Back to page ${back.first + 1}", style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 14.sp))
+                    Text("Back to page ${reader.firstPageOf(back.first) + 1}", style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 14.sp))
                 }
                 Spacer(Modifier.height(10.dp))
             }
@@ -1213,7 +1214,9 @@ fun ViewerContent(
                             Modifier
                                 .background(Ink.Black, Corner)
                                 .border(1.dp, Ink.Edge, Corner)
-                                .clickable { askPage = true }
+                                // A tap goes to a page; a long press starts the scroll check (twenty seconds
+                                // of scrolling measured on this phone, then a report to copy).
+                                .combinedClickable(onClick = { askPage = true }, onLongClick = { checkStart = System.currentTimeMillis() })
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
                         ) {
                             Text("${currentState.value + 1} / $pageCount", style = Type.figure)
@@ -1327,8 +1330,8 @@ fun ViewerContent(
                 }
                 when (open) {
                     ViewerSheet.CONTENTS -> ContentsSheetOnTab(reader, null, currentState.value, name) { p, y -> sheet = null; reader.go(p, y) }
-                    ViewerSheet.DISPLAY -> DisplaySheet(reader, onFlatten = { sheet = null; askFlatten = true }, onReflow = ::toggleReflow)
-                    ViewerSheet.MORE -> {
+                    ViewerSheet.DISPLAY -> Column(Modifier.verticalScroll(rememberScrollState())) { DisplaySheet(reader, onFlatten = { sheet = null; askFlatten = true }, onReflow = ::toggleReflow) }
+                    ViewerSheet.MORE -> Column(Modifier.verticalScroll(rememberScrollState())) {
                         val marked = currentState.value in reader.bookmarks
                         SheetRow(
                             if (marked) Glyph.BOOKMARK_FILLED else Glyph.BOOKMARK,
@@ -1340,7 +1343,6 @@ fun ViewerContent(
                         SheetRow(Glyph.REFLOW, if (reader.reflow) "Show the pages" else "Read as flowing text", { then { toggleReflow() } }, note = if (reader.reflow) "Back to the pages as they are" else "Just the words, sized for the phone")
                         SheetRow(Glyph.MOON, "Page colours and text size", { sheet = ViewerSheet.DISPLAY }, note = "Paper, night or sepia; reflowed text settings")
                         if (reader.canMark) SheetRow(Glyph.TOOLS, "File tools", { sheet = ViewerSheet.TOOLS }, note = "Convert, protect, pages, size")
-                        if (!reader.reflow) SheetRow(Glyph.INFO, "Check scrolling smoothness", { then { checkStart = System.currentTimeMillis() } }, note = "Twenty seconds of slow scrolling, then a report to copy")
                     }
                     ViewerSheet.TOOLS -> Column(Modifier.verticalScroll(rememberScrollState())) {
                         // Everything that changes or makes a file, in four kinds; taller than most phones, so it scrolls.
@@ -1588,6 +1590,17 @@ internal fun DisplaySheet(reader: Reader, onFlatten: () -> Unit = {}, onReflow: 
         }
     }
     Spacer(Modifier.height(8.dp))
+    Hairline(color = Ink.Rule)
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { reader.changeSpreads(!reader.spreads) }.padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Two pages when turned", style = Type.body.copy(color = if (reader.spreads) Ink.Amber else Ink.Bone))
+            Text("With the phone on its side, pages sit side by side like an open book.", style = Type.small)
+        }
+        Chip(if (reader.spreads) "On" else "Off", { reader.changeSpreads(!reader.spreads) }, selected = reader.spreads)
+    }
     Hairline(color = Ink.Rule)
     Row(
         Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(onClick = onReflow).padding(horizontal = 20.dp),

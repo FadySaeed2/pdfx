@@ -176,6 +176,18 @@ class Reader(
         private set
     /** A thin line with the page number where each page starts. */
     var reflowPageMarks by mutableStateOf(prefs?.getBoolean("reflow_page_marks", true) ?: true)
+    /** Two pages side by side while the phone is turned on its side. */
+    var spreads by mutableStateOf(prefs?.getBoolean("spreads", true) ?: true)
+    fun changeSpreads(on: Boolean) { spreads = on; prefs?.edit()?.putBoolean("spreads", on)?.apply() }
+    /**
+     * Pages in each row of the page list: two side by side, else one. The page view sets it from
+     * the screen's shape; rows, not pages, are what the list scrolls by.
+     */
+    var spreadRow by mutableIntStateOf(1)
+    /** Pages a row now: always one in the reflowed text. */
+    val perRow: Int get() = if (reflow) 1 else spreadRow
+    fun rowOf(page: Int) = page / perRow
+    fun firstPageOf(row: Int) = row * perRow
         private set
     /** A picture or table from reflowed text opened full screen to zoom: its page and place. */
     var zoomFigure by mutableStateOf<Pair<Int, Box>?>(null)

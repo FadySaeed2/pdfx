@@ -338,6 +338,9 @@ class ScreensTest {
 
     @Test fun viewer() = viewerShot("09_viewer.png") {}
 
+    /** The phone on its side: two pages side by side. */
+    @Test @Config(qualifiers = "w832dp-h384dp-xxhdpi") fun viewerSpread() = viewerShot("60_viewer_spread.png") {}
+
     @Test fun viewerSearch() = viewerShot("11_viewer_search.png") { r ->
         r.showHits(
             "lithium",
