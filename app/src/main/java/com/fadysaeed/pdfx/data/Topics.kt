@@ -1,6 +1,7 @@
 package com.fadysaeed.pdfx.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 
 /** A topic that runs through several files: a tag to make, and the files it would go on. */
@@ -224,10 +225,18 @@ object Topics {
         val sign = listOf(System.identityHashCode(lib.text).toLong(), v, docs.size.toLong(), docs.sumOf { it.id }, docs.sumOf { (it.title ?: it.name).hashCode().toLong() + it.pages }, have.hashCode().toLong())
         answer?.takeIf { it.first == sign }?.let { return@withContext it.second }
         val kept = cache?.takeIf { it.first === lib.text && it.second == v }?.third
-        val hits = HashMap<String, Map<Long, Int>>()
-        for ((k, c) in Concepts.all.withIndex()) {
-            progress(0.5f + 0.5f * k / Concepts.all.size, c.name)
-            hits[c.name] = kept?.get(c.name) ?: lib.text.pagesMatching(ftsQuery(c.terms), raw = true)
+        val hits = java.util.concurrent.ConcurrentHashMap<String, Map<Long, Int>>()
+        // Four topics at a time: the database answers several readers at once.
+        val done = java.util.concurrent.atomic.AtomicInteger(0)
+        kotlinx.coroutines.coroutineScope {
+            Concepts.all.chunked((Concepts.all.size + 3) / 4).map { part ->
+                async(Dispatchers.IO) {
+                    for (c in part) {
+                        hits[c.name] = kept?.get(c.name) ?: lib.text.pagesMatching(ftsQuery(c.terms), raw = true)
+                        progress(0.5f + 0.5f * done.incrementAndGet() / Concepts.all.size, c.name)
+                    }
+                }
+            }.forEach { it.await() }
         }
         cache = Triple(lib.text, v, hits)
         progress(1f, "the topics in your titles")
