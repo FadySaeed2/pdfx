@@ -396,7 +396,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
                         SheetRow(Glyph.STAR, "Star", { sheet = null; vm.starMany() })
                         SheetRow(Glyph.BOOKMARK, "To read", { sheet = null; vm.readingMany(1) })
                         SheetRow(Glyph.CHECK, "Mark done", { sheet = null; vm.readingMany(2) })
-                        if (ui.picked.size >= 2) SheetRow(Glyph.PLUS, "Merge into one file…", { sheet = null; mergingMany = vm.takePicked() }, note = "In the order picked; you can change it")
+                        if (ui.picked.size >= 2) SheetRow(Glyph.MERGE, "Merge into one file…", { sheet = null; mergingMany = vm.takePicked() }, note = "In the order picked; you can change it")
                     }
                     is Sheet.FolderMenu -> {
                         val path = current.row.path!!
@@ -407,7 +407,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
                             SheetRow(Glyph.RENAME, "Rename", { sheet = null; ask = Ask.RenameFolder(path) })
                             SheetRow(Glyph.MOVE, "Move to…", { sheet = Sheet.FolderPlaces(path) }, note = "With everything in it")
                         }
-                        SheetRow(Glyph.PLUS, "New folder inside", { sheet = null; ask = Ask.NewFolderIn(path) })
+                        SheetRow(Glyph.FOLDER_PLUS, "New folder inside", { sheet = null; ask = Ask.NewFolderIn(path) })
                         SheetRow(Glyph.TRASH, "Delete", { sheet = null; vm.deleteFolder(path) }, note = "Only when it is empty")
                     }
                     is Sheet.FolderPlaces -> PlacesSheet(
@@ -527,8 +527,8 @@ fun ActionsSheet(d: Doc, label: String, versions: Int = 0, pick: (DocAction) -> 
                 SheetRow(if (d.starred) Glyph.STAR_FILLED else Glyph.STAR, if (d.starred) "Remove star" else "Star", { pick(DocAction.STAR) })
                 SheetRow(Glyph.TAG, "Tags", { pick(DocAction.TAGS) })
                 SheetRow(Glyph.SHARE, "Share", { pick(DocAction.SHARE) })
-                SheetRow(Glyph.PLUS, "Merge with other files…", { pick(DocAction.MERGE) }, note = "Into a new file, in Documents/PDFx")
-                SheetRow(Glyph.GRID, "Split into files…", { pick(DocAction.SPLIT) })
+                SheetRow(Glyph.MERGE, "Merge with other files…", { pick(DocAction.MERGE) }, note = "Into a new file, in Documents/PDFx")
+                SheetRow(Glyph.SCISSORS, "Split into files…", { pick(DocAction.SPLIT) })
                 SheetRow(Glyph.CLOSE, "Remove from the list", { pick(DocAction.FORGET) }, note = "The original stays in the other app")
             }
             else -> {
@@ -548,8 +548,8 @@ fun ActionsSheet(d: Doc, label: String, versions: Int = 0, pick: (DocAction) -> 
                 SheetRow(Glyph.COPY, "Copy to…", { pick(DocAction.COPY) })
                 SheetRow(Glyph.FOLDER, "Show its folder", { pick(DocAction.FOLDER) }, note = label)
                 SheetRow(Glyph.SHARE, "Share", { pick(DocAction.SHARE) })
-                SheetRow(Glyph.PLUS, "Merge with other files…", { pick(DocAction.MERGE) }, note = "Into a new file beside this one")
-                SheetRow(Glyph.GRID, "Split into files…", { pick(DocAction.SPLIT) }, note = "Every few pages, by pages, or by size")
+                SheetRow(Glyph.MERGE, "Merge with other files…", { pick(DocAction.MERGE) }, note = "Into a new file beside this one")
+                SheetRow(Glyph.SCISSORS, "Split into files…", { pick(DocAction.SPLIT) }, note = "Every few pages, by pages, or by size")
                 if (versions > 0) SheetRow(Glyph.RESTORE, "Earlier versions", { pick(DocAction.VERSIONS) }, note = if (versions == 1) "1 saved before your last change" else "$versions saved before your last changes")
                 SheetRow(Glyph.TRASH, "Move to trash", { pick(DocAction.TRASH) }, note = "Kept for 30 days")
             }
@@ -565,7 +565,7 @@ private fun DestinationSheet(doc: Doc, copy: Boolean, places: List<FolderRow>, c
             val here = f.path == currentFolder
             SheetRow(Glyph.FOLDER, f.label, { if (!here || copy) onPick(File(f.path!!)) }, note = if (here) "It's here now" else null, color = if (here && !copy) Ink.Ash else Ink.Bone)
         }
-        SheetRow(Glyph.PLUS, "New folder…", onNewFolder, color = Ink.Amber)
+        SheetRow(Glyph.FOLDER_PLUS, "New folder…", onNewFolder, color = Ink.Amber)
     }
 }
 
@@ -698,7 +698,7 @@ private fun PlacesSheet(title: String, places: List<FolderRow>, onPick: (File) -
     SheetTitle(title, null)
     Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
         places.filter { it.path != null }.forEach { f -> SheetRow(Glyph.FOLDER, f.label, { onPick(File(f.path!!)) }) }
-        if (onNewFolder != null) SheetRow(Glyph.PLUS, "New folder…", onNewFolder, color = Ink.Amber)
+        if (onNewFolder != null) SheetRow(Glyph.FOLDER_PLUS, "New folder…", onNewFolder, color = Ink.Amber)
     }
 }
 

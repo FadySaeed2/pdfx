@@ -1281,26 +1281,26 @@ fun ViewerContent(
                         SheetRow(Glyph.MOON, "Page colours and text size", { sheet = ViewerSheet.DISPLAY }, note = "Paper, night or sepia; reflowed text settings")
                         if (reader.canMark) SheetRow(Glyph.TOOLS, "File tools", { sheet = ViewerSheet.TOOLS }, note = "Convert, protect, pages, size")
                     }
-                    ViewerSheet.TOOLS -> {
-                        // Everything that changes or makes a file, in four kinds.
+                    ViewerSheet.TOOLS -> Column(Modifier.verticalScroll(rememberScrollState())) {
+                        // Everything that changes or makes a file, in four kinds; taller than most phones, so it scrolls.
                         ToolsHeader("Convert")
-                        SheetRow(Glyph.SHARE, "Save as Word, Excel or text", { then { reader.openTool?.invoke("export") } }, note = "Word to edit, the tables in Excel, or plain text")
-                        SheetRow(Glyph.PAGE, "Save pages as pictures", { then { reader.openTool?.invoke("pictures") } }, note = "PNG or JPEG, one a page")
+                        SheetRow(Glyph.EXPORT, "Save as Word, Excel or text", { then { reader.openTool?.invoke("export") } }, note = "Word to edit, the tables in Excel, or plain text")
+                        SheetRow(Glyph.IMAGE, "Save pages as pictures", { then { reader.openTool?.invoke("pictures") } }, note = "PNG or JPEG, one a page")
                         ToolsHeader("Protect")
                         SheetRow(Glyph.LOCK, if (reader.hasPassword) "Password" else "Lock with a password", { then { reader.openTool?.invoke("password") } }, note = if (reader.hasPassword) "Change it or take it off" else "AES-256; it opens only with the password")
-                        if (!reader.reflow) SheetRow(Glyph.EDIT_TEXT, "Black out (redact)", { then { reader.startMarking(); reader.pickTool(Tool.REDACT) } }, note = if (reader.redactions > 0) "${reader.redactions} marked; black them out for good" else "Mark names, numbers or areas, then take them out for good")
-                        SheetRow(Glyph.TRASH, "Remove hidden details", { then { reader.openTool?.invoke("details") } }, note = "Author, programs, dates and editing history")
-                        SheetRow(Glyph.RENAME, "Watermark", { then { reader.openTool?.invoke("watermark") } }, note = "CONFIDENTIAL, DRAFT or your own words across the pages")
-                        SheetRow(Glyph.CHECK, "Flatten marks", { then { askFlatten = true } }, note = "Highlights, drawings and notes become part of the page")
+                        if (!reader.reflow) SheetRow(Glyph.REDACT, "Black out (redact)", { then { reader.startMarking(); reader.pickTool(Tool.REDACT) } }, note = if (reader.redactions > 0) "${reader.redactions} marked; black them out for good" else "Mark names, numbers or areas, then take them out for good")
+                        SheetRow(Glyph.EYE_OFF, "Remove hidden details", { then { reader.openTool?.invoke("details") } }, note = "Author, programs, dates and editing history")
+                        SheetRow(Glyph.WATERMARK, "Watermark", { then { reader.openTool?.invoke("watermark") } }, note = "CONFIDENTIAL, DRAFT or your own words across the pages")
+                        SheetRow(Glyph.LAYERS, "Flatten marks", { then { askFlatten = true } }, note = "Highlights, drawings and notes become part of the page")
                         ToolsHeader("Pages")
                         if (!reader.reflow) SheetRow(Glyph.GRID, "Arrange pages", { then { reader.openPages?.invoke() } }, note = "Put them in order, turn, add or take out, save some as a new file")
-                        SheetRow(Glyph.LIST, "Page numbers", { then { reader.openTool?.invoke("numbers") } }, note = "Where you want them, from the page you want")
-                        if (!reader.reflow) SheetRow(Glyph.PAGE, "Trim white margins", { then { reader.openTool?.invoke("trim") } }, note = "Bigger words on a phone; whole pages can come back")
-                        SheetRow(Glyph.EXTRACT, "Split into files", { then { reader.openTool?.invoke("split") } }, note = "Every few pages, by pages, or by size")
-                        SheetRow(Glyph.PLUS, "Merge with other files", { then { reader.openTool?.invoke("merge") } }, note = "Into a new file beside this one")
-                        ToolsHeader("Improve")
-                        if (!reader.reflow) SheetRow(Glyph.SEARCH, "Make searchable", { then { reader.openTool?.invoke("read") } }, note = "Reads the words on scanned pages, on the phone")
-                        SheetRow(Glyph.DOWN, "Make smaller", { then { reader.openTool?.invoke("shrink") } }, note = "Shows the size before and after")
+                        SheetRow(Glyph.HASH, "Page numbers", { then { reader.openTool?.invoke("numbers") } }, note = "Where you want them, from the page you want")
+                        if (!reader.reflow) SheetRow(Glyph.CROP, "Trim white margins", { then { reader.openTool?.invoke("trim") } }, note = "Bigger words on a phone; whole pages can come back")
+                        SheetRow(Glyph.SCISSORS, "Split into files", { then { reader.openTool?.invoke("split") } }, note = "Every few pages, by pages, or by size")
+                        SheetRow(Glyph.MERGE, "Merge with other files", { then { reader.openTool?.invoke("merge") } }, note = "Into a new file beside this one")
+                        ToolsHeader("Search and size")
+                        if (!reader.reflow) SheetRow(Glyph.SCAN_TEXT, "Make searchable", { then { reader.openTool?.invoke("read") } }, note = "Reads the words on scanned pages, on the phone")
+                        SheetRow(Glyph.COMPRESS, "Make smaller", { then { reader.openTool?.invoke("shrink") } }, note = "Shows the size before and after")
                     }
                 }
             }

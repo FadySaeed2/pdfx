@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -80,9 +81,83 @@ fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
 }
 
 enum class Glyph {
-    BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK,
-    BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN, PEN, UNDO, REDO, REFLOW, GRID, TURN_LEFT, TURN_RIGHT, EXTRACT,
-    TOOLS, POINTER, HIGHLIGHTER, SIGNATURE, EDIT_TEXT, SELECT_MANY,
+    BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER,
+    FOLDER_PLUS, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT,
+    CHECK, BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN, PEN, UNDO, REDO,
+    REFLOW, GRID, TURN_LEFT, TURN_RIGHT, EXTRACT, TOOLS, POINTER, HIGHLIGHTER, SIGNATURE, EDIT_TEXT,
+    SELECT_MANY, EXPORT, IMAGE, REDACT, EYE_OFF, WATERMARK, LAYERS, HASH, CROP, SCISSORS,
+    MERGE, SCAN_TEXT, COMPRESS, CAMERA, PAGE_PLUS, INFO,
+}
+
+/**
+ * Each glyph as outline path data on a 24-unit grid, with any part that is filled in. One stroke
+ * weight, round ends and corners, so every icon in the app looks drawn by the same hand.
+ */
+private val GLYPH_PATHS: Map<Glyph, Pair<String, String?>> = mapOf(
+    Glyph.BACK to ("M15 18l-6-6 6-6" to null),
+    Glyph.CLOSE to ("M18 6L6 18M6 6l12 12" to null),
+    Glyph.PLUS to ("M12 5v14M5 12h14" to null),
+    Glyph.PAGE to ("M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" to null),
+    Glyph.LOCK to ("M7 11V8a5 5 0 0 1 10 0v3M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1zM12 15v2" to null),
+    Glyph.STAR to ("M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" to null),
+    Glyph.STAR_FILLED to ("M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" to "M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"),
+    Glyph.MORE to ("M12 5h.01M12 12h.01M12 19h.01" to null),
+    Glyph.SEARCH to ("M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM20 20l-4.8-4.8" to null),
+    Glyph.FOLDER to ("M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" to null),
+    Glyph.FOLDER_PLUS to ("M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 11v6M9 14h6" to null),
+    Glyph.TAG to ("M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9zM7.5 7.5h.01" to null),
+    Glyph.TRASH to ("M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" to null),
+    Glyph.RESTORE to ("M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2" to null),
+    Glyph.RENAME to ("M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16zM13.5 6.5l4 4" to null),
+    Glyph.MOVE to ("M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM9 14h6M13 11.5l2.5 2.5-2.5 2.5" to null),
+    Glyph.COPY to ("M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1zM5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" to null),
+    Glyph.SHARE to ("M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 13.5l6.8 4M15.4 6.5l-6.8 4" to null),
+    Glyph.OPEN to ("M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" to null),
+    Glyph.SORT to ("M4 6h16M7 12h10M10 18h4" to null),
+    Glyph.CHECK to ("M5 12.5l4.5 4.5L19 7" to null),
+    Glyph.BOOKMARK to ("M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17l-6-4-6 4z" to null),
+    Glyph.BOOKMARK_FILLED to ("M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17l-6-4-6 4z" to "M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17l-6-4-6 4z"),
+    Glyph.LIST to ("M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" to null),
+    Glyph.MOON to ("M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" to null),
+    Glyph.UP to ("M6 15l6-6 6 6" to null),
+    Glyph.DOWN to ("M6 9l6 6 6-6" to null),
+    Glyph.PEN to ("M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16zM13.5 6.5l4 4" to null),
+    Glyph.UNDO to ("M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" to null),
+    Glyph.REDO to ("M15 14l5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13" to null),
+    Glyph.REFLOW to ("M4 6h16M4 12h13a3 3 0 0 1 0 6h-4M15 16l-2 2 2 2M4 18h5" to null),
+    Glyph.GRID to ("M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" to null),
+    Glyph.TURN_LEFT to ("M3 4v5h5M3.5 9A8.5 8.5 0 1 1 5 17" to null),
+    Glyph.TURN_RIGHT to ("M21 4v5h-5M20.5 9A8.5 8.5 0 1 0 19 17" to null),
+    Glyph.EXTRACT to ("M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M12 18v-6M9.5 14.5L12 12l2.5 2.5" to null),
+    Glyph.TOOLS to ("M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z" to null),
+    Glyph.POINTER to ("M5 3l14 7.5-6 1.5-2.5 6z" to null),
+    Glyph.HIGHLIGHTER to ("M9 11l-5 5v3h6l2-2M9 11l6-6 4 4-6 6zM15 21h6" to null),
+    Glyph.SIGNATURE to ("M3 17c3-1 5-9 7-9s-1 9 1 9 3-5 4.5-5 1 3 2.5 3 2-1 3-1M3 21h18" to null),
+    Glyph.EDIT_TEXT to ("M5 6V4h12v2M11 4v16M8.5 20h5M17 12v8M15 12h4M15 20h4" to null),
+    Glyph.SELECT_MANY to ("M4 5h3v3H4zM4 11h3v3H4zM4 17h3v3H4zM10 6.5h10M10 12.5h10M10 18.5h10" to "M4 5h3v3H4zM4 11h3v3H4z"),
+    Glyph.EXPORT to ("M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4M14 3v5h5v3M15 18h6M18.5 15.5L21 18l-2.5 2.5" to null),
+    Glyph.IMAGE to ("M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM20 15l-4.5-4.5L6 20M9 10.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" to null),
+    Glyph.REDACT to ("M4 6h16M4 18h9M4 10.5h16v3H4z" to "M4 10.5h16v3H4z"),
+    Glyph.EYE_OFF to ("M3 3l18 18M10.6 5.1A9.6 9.6 0 0 1 12 5c5 0 8.5 4.5 9.5 7a13 13 0 0 1-2.4 3.6M6.6 6.6C4.4 8 3 10.2 2.5 12c1 2.5 4.5 7 9.5 7a9.4 9.4 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2" to null),
+    Glyph.WATERMARK to ("M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11zM9.5 15a2.5 2.5 0 0 0 2.5 2.5" to null),
+    Glyph.LAYERS to ("M12 3l9 4.5-9 4.5-9-4.5zM3 12l9 4.5 9-4.5M3 16.5L12 21l9-4.5" to null),
+    Glyph.HASH to ("M5 9h15M4 15h15M10 3L8 21M16 3l-2 18" to null),
+    Glyph.CROP to ("M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2" to null),
+    Glyph.SCISSORS to ("M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12" to null),
+    Glyph.MERGE to ("M6 3v3a6 6 0 0 0 6 6 6 6 0 0 0 6-6V3M12 12v9M9 18l3 3 3-3" to null),
+    Glyph.SCAN_TEXT to ("M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M8 9V8h8v1M12 8v8M10.5 16h3" to null),
+    Glyph.COMPRESS to ("M8 3v5H3M16 3v5h5M8 21v-5H3M16 21v-5h5" to null),
+    Glyph.CAMERA to ("M4 8a1 1 0 0 1 1-1h2.5L9 5h6l1.5 2H19a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM12 16a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" to null),
+    Glyph.PAGE_PLUS to ("M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M12 11v6M9 14h6" to null),
+    Glyph.INFO to ("M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8h.01" to null),
+)
+
+private val glyphCache = java.util.concurrent.ConcurrentHashMap<Glyph, Pair<Path, Path?>>()
+
+private fun glyphPaths(g: Glyph): Pair<Path, Path?> = glyphCache.getOrPut(g) {
+    val (stroke, fill) = GLYPH_PATHS.getValue(g)
+    androidx.compose.ui.graphics.vector.PathParser().parsePathString(stroke).toPath() to
+        fill?.let { androidx.compose.ui.graphics.vector.PathParser().parsePathString(it).toPath() }
 }
 
 /** Line glyphs drawn in code, so every icon shares one stroke weight and the app ships no icon font. */
@@ -90,212 +165,15 @@ enum class Glyph {
 fun GlyphIcon(glyph: Glyph, color: Color, size: Dp = 22.dp) {
     Canvas(Modifier.size(size)) {
         val s = this.size.minDimension
-        val w = 1.9.dp.toPx()
-        fun line(x1: Float, y1: Float, x2: Float, y2: Float) =
-            drawLine(color, Offset(s * x1, s * y1), Offset(s * x2, s * y2), w, cap = StrokeCap.Round)
-        when (glyph) {
-            Glyph.BACK -> { line(0.62f, 0.2f, 0.32f, 0.5f); line(0.32f, 0.5f, 0.62f, 0.8f) }
-            Glyph.CLOSE -> { line(0.25f, 0.25f, 0.75f, 0.75f); line(0.75f, 0.25f, 0.25f, 0.75f) }
-            Glyph.PLUS -> { line(0.5f, 0.2f, 0.5f, 0.8f); line(0.2f, 0.5f, 0.8f, 0.5f) }
-            Glyph.PAGE -> {
-                val p = Path().apply {
-                    moveTo(s * 0.24f, s * 0.12f); lineTo(s * 0.6f, s * 0.12f); lineTo(s * 0.78f, s * 0.3f)
-                    lineTo(s * 0.78f, s * 0.88f); lineTo(s * 0.24f, s * 0.88f); close()
-                }
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-                line(0.36f, 0.5f, 0.66f, 0.5f); line(0.36f, 0.66f, 0.58f, 0.66f)
-            }
-            Glyph.LOCK -> {
-                drawRoundRect(color, Offset(s * 0.22f, s * 0.44f), Size(s * 0.56f, s * 0.42f), style = Stroke(width = w))
-                drawArc(color, 180f, 180f, false, Offset(s * 0.32f, s * 0.16f), Size(s * 0.36f, s * 0.5f), style = Stroke(width = w, cap = StrokeCap.Round))
-            }
-            Glyph.STAR, Glyph.STAR_FILLED -> {
-                val p = Path()
-                for (i in 0 until 10) {
-                    val r = if (i % 2 == 0) 0.42f else 0.18f
-                    val a = Math.toRadians((-90 + i * 36).toDouble())
-                    val x = s * (0.5f + r * Math.cos(a).toFloat())
-                    val y = s * (0.53f + r * Math.sin(a).toFloat())
-                    if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
-                }
-                p.close()
-                if (glyph == Glyph.STAR_FILLED) drawPath(p, color)
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-            }
-            Glyph.MORE -> listOf(0.22f, 0.5f, 0.78f).forEach { drawCircle(color, w * 0.95f, Offset(s * 0.5f, s * it)) }
-            Glyph.SEARCH -> {
-                drawCircle(color, s * 0.24f, Offset(s * 0.44f, s * 0.44f), style = Stroke(width = w))
-                line(0.62f, 0.62f, 0.82f, 0.82f)
-            }
-            Glyph.FOLDER -> {
-                val p = Path().apply {
-                    moveTo(s * 0.14f, s * 0.26f); lineTo(s * 0.4f, s * 0.26f); lineTo(s * 0.48f, s * 0.34f)
-                    lineTo(s * 0.86f, s * 0.34f); lineTo(s * 0.86f, s * 0.8f); lineTo(s * 0.14f, s * 0.8f); close()
-                }
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-            }
-            Glyph.TAG -> {
-                val p = Path().apply {
-                    moveTo(s * 0.16f, s * 0.16f); lineTo(s * 0.5f, s * 0.16f); lineTo(s * 0.86f, s * 0.52f)
-                    lineTo(s * 0.52f, s * 0.86f); lineTo(s * 0.16f, s * 0.5f); close()
-                }
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-                drawCircle(color, w * 0.9f, Offset(s * 0.33f, s * 0.33f))
-            }
-            Glyph.TRASH -> {
-                line(0.18f, 0.26f, 0.82f, 0.26f); line(0.4f, 0.26f, 0.42f, 0.16f); line(0.42f, 0.16f, 0.58f, 0.16f); line(0.58f, 0.16f, 0.6f, 0.26f)
-                val p = Path().apply { moveTo(s * 0.26f, s * 0.26f); lineTo(s * 0.32f, s * 0.86f); lineTo(s * 0.68f, s * 0.86f); lineTo(s * 0.74f, s * 0.26f) }
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-            }
-            Glyph.RESTORE -> {
-                drawArc(color, 200f, 290f, false, Offset(s * 0.2f, s * 0.2f), Size(s * 0.6f, s * 0.6f), style = Stroke(width = w, cap = StrokeCap.Round))
-                line(0.2f, 0.28f, 0.22f, 0.44f); line(0.22f, 0.44f, 0.37f, 0.4f)
-            }
-            Glyph.RENAME -> { line(0.22f, 0.78f, 0.7f, 0.3f); line(0.62f, 0.22f, 0.78f, 0.38f); line(0.2f, 0.84f, 0.36f, 0.82f) }
-            Glyph.MOVE -> { line(0.18f, 0.5f, 0.78f, 0.5f); line(0.58f, 0.3f, 0.8f, 0.5f); line(0.8f, 0.5f, 0.58f, 0.7f) }
-            Glyph.COPY -> {
-                drawRoundRect(color, Offset(s * 0.34f, s * 0.34f), Size(s * 0.46f, s * 0.48f), style = Stroke(width = w))
-                val p = Path().apply { moveTo(s * 0.24f, s * 0.68f); lineTo(s * 0.2f, s * 0.68f); lineTo(s * 0.2f, s * 0.18f); lineTo(s * 0.64f, s * 0.18f); lineTo(s * 0.64f, s * 0.26f) }
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-            }
-            Glyph.SHARE -> {
-                line(0.5f, 0.16f, 0.5f, 0.6f); line(0.34f, 0.3f, 0.5f, 0.16f); line(0.5f, 0.16f, 0.66f, 0.3f)
-                val p = Path().apply { moveTo(s * 0.3f, s * 0.46f); lineTo(s * 0.2f, s * 0.46f); lineTo(s * 0.2f, s * 0.84f); lineTo(s * 0.8f, s * 0.84f); lineTo(s * 0.8f, s * 0.46f); lineTo(s * 0.7f, s * 0.46f) }
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-            }
-            Glyph.OPEN -> { line(0.3f, 0.2f, 0.62f, 0.5f); line(0.62f, 0.5f, 0.3f, 0.8f); line(0.72f, 0.2f, 0.72f, 0.8f) }
-            Glyph.SORT -> { line(0.2f, 0.3f, 0.8f, 0.3f); line(0.2f, 0.5f, 0.62f, 0.5f); line(0.2f, 0.7f, 0.44f, 0.7f) }
-            Glyph.CHECK -> { line(0.2f, 0.52f, 0.42f, 0.74f); line(0.42f, 0.74f, 0.82f, 0.28f) }
-            Glyph.BOOKMARK, Glyph.BOOKMARK_FILLED -> {
-                val p = Path().apply {
-                    moveTo(s * 0.28f, s * 0.14f); lineTo(s * 0.72f, s * 0.14f); lineTo(s * 0.72f, s * 0.86f)
-                    lineTo(s * 0.5f, s * 0.68f); lineTo(s * 0.28f, s * 0.86f); close()
-                }
-                if (glyph == Glyph.BOOKMARK_FILLED) drawPath(p, color)
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-            }
-            Glyph.REFLOW -> {
-                // A page outline with lines of text flowing inside it.
-                drawRoundRect(color, Offset(s * 0.18f, s * 0.12f), androidx.compose.ui.geometry.Size(s * 0.64f, s * 0.76f), androidx.compose.ui.geometry.CornerRadius(s * 0.06f), style = Stroke(width = w))
-                line(0.32f, 0.34f, 0.68f, 0.34f)
-                line(0.32f, 0.5f, 0.68f, 0.5f)
-                line(0.32f, 0.66f, 0.54f, 0.66f)
-            }
-            Glyph.LIST -> {
-                listOf(0.28f, 0.5f, 0.72f).forEach { y ->
-                    drawCircle(color, w * 0.8f, Offset(s * 0.2f, s * y))
-                    line(0.34f, y, 0.82f, y)
-                }
-            }
-            Glyph.MOON -> {
-                val p = Path().apply {
-                    moveTo(s * 0.62f, s * 0.16f)
-                    cubicTo(s * 0.3f, s * 0.2f, s * 0.2f, s * 0.6f, s * 0.42f, s * 0.78f)
-                    cubicTo(s * 0.56f, s * 0.88f, s * 0.76f, s * 0.84f, s * 0.86f, s * 0.7f)
-                    cubicTo(s * 0.56f, s * 0.72f, s * 0.42f, s * 0.4f, s * 0.62f, s * 0.16f)
-                    close()
-                }
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-            }
-            Glyph.PEN -> {
-                // A pencil at 45 degrees: sharpened tip with its lead, a slim body, and the band
-                // that holds the eraser.
-                val r = 0.7071f
-                fun at(along: Float, side: Float) = Offset(s * (0.19f + (along + side) * r), s * (0.81f + (side - along) * r))
-                val half = 0.085f
-                val body = Path().apply {
-                    moveTo(at(0f, 0f).x, at(0f, 0f).y)
-                    lineTo(at(0.2f, half).x, at(0.2f, half).y)
-                    lineTo(at(0.86f, half).x, at(0.86f, half).y)
-                    quadraticTo(at(0.93f, half).x, at(0.93f, half).y, at(0.93f, 0f).x, at(0.93f, 0f).y)
-                    quadraticTo(at(0.93f, -half).x, at(0.93f, -half).y, at(0.86f, -half).x, at(0.86f, -half).y)
-                    lineTo(at(0.2f, -half).x, at(0.2f, -half).y)
-                    close()
-                }
-                drawPath(body, color, style = Stroke(width = w, join = StrokeJoin.Round))
-                val lead = Path().apply {
-                    moveTo(at(0f, 0f).x, at(0f, 0f).y)
-                    lineTo(at(0.075f, half * 0.38f).x, at(0.075f, half * 0.38f).y)
-                    lineTo(at(0.075f, -half * 0.38f).x, at(0.075f, -half * 0.38f).y)
-                    close()
-                }
-                drawPath(lead, color)
-                drawLine(color, at(0.2f, half), at(0.2f, -half), w, cap = StrokeCap.Round)
-                drawLine(color, at(0.7f, half), at(0.7f, -half), w, cap = StrokeCap.Round)
-            }
-            Glyph.UNDO, Glyph.REDO -> {
-                val flip = glyph == Glyph.REDO
-                fun fx(x: Float) = if (flip) 1f - x else x
-                drawArc(color, if (flip) 90f else 270f, 180f, false, Offset(s * (if (flip) 0.24f else 0.28f), s * 0.3f), Size(s * 0.48f, s * 0.42f), style = Stroke(width = w, cap = StrokeCap.Round))
-                line(fx(0.52f), 0.3f, fx(0.3f), 0.3f)
-                line(fx(0.3f), 0.3f, fx(0.4f), 0.2f); line(fx(0.3f), 0.3f, fx(0.4f), 0.4f)
-                line(fx(0.52f), 0.72f, fx(0.36f), 0.72f)
-            }
-            Glyph.GRID -> {
-                // Four pages in two rows: the pages of a file side by side.
-                listOf(0.16f to 0.14f, 0.54f to 0.14f, 0.16f to 0.54f, 0.54f to 0.54f).forEach { (x, y) ->
-                    drawRoundRect(color, Offset(s * x, s * y), Size(s * 0.3f, s * 0.32f), androidx.compose.ui.geometry.CornerRadius(s * 0.04f), style = Stroke(width = w))
-                }
-            }
-            Glyph.TURN_LEFT, Glyph.TURN_RIGHT -> {
-                // A page with a curved arrow over its top corner, turning the way it points.
-                val right = glyph == Glyph.TURN_RIGHT
-                fun fx(x: Float) = if (right) 1f - x else x
-                drawRoundRect(color, Offset(s * (if (right) 0.18f else 0.42f), s * 0.42f), Size(s * 0.4f, s * 0.44f), androidx.compose.ui.geometry.CornerRadius(s * 0.04f), style = Stroke(width = w))
-                drawArc(color, if (right) 180f else 270f, 90f, false, Offset(s * (if (right) 0.36f else 0.2f), s * 0.16f), Size(s * 0.44f, s * 0.44f), style = Stroke(width = w, cap = StrokeCap.Round))
-                line(fx(0.2f), 0.38f, fx(0.14f), 0.3f); line(fx(0.2f), 0.38f, fx(0.28f), 0.32f)
-            }
-            Glyph.EXTRACT -> {
-                // A page with an arrow leaving it: these pages as a file of their own.
-                val p = Path().apply { moveTo(s * 0.56f, s * 0.24f); lineTo(s * 0.2f, s * 0.24f); lineTo(s * 0.2f, s * 0.86f); lineTo(s * 0.66f, s * 0.86f); lineTo(s * 0.66f, s * 0.62f) }
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-                line(0.44f, 0.5f, 0.84f, 0.14f); line(0.84f, 0.14f, 0.64f, 0.14f); line(0.84f, 0.14f, 0.84f, 0.32f)
-            }
-            Glyph.TOOLS -> {
-                // A spanner: a ring with its jaw open at the top right, and its handle.
-                drawArc(color, 60f, 290f, false, Offset(s * 0.5f, s * 0.14f), Size(s * 0.34f, s * 0.34f), style = Stroke(width = w, cap = StrokeCap.Round))
-                line(0.56f, 0.44f, 0.2f, 0.8f)
-                line(0.26f, 0.86f, 0.14f, 0.74f)
-            }
-            Glyph.POINTER -> {
-                // An arrow pointer: picking a mark to move it.
-                val p = Path().apply {
-                    moveTo(s * 0.26f, s * 0.14f); lineTo(s * 0.26f, s * 0.78f); lineTo(s * 0.42f, s * 0.62f)
-                    lineTo(s * 0.54f, s * 0.86f); lineTo(s * 0.64f, s * 0.81f); lineTo(s * 0.52f, s * 0.58f); lineTo(s * 0.74f, s * 0.58f); close()
-                }
-                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
-            }
-            Glyph.HIGHLIGHTER -> {
-                // A line of words with a broad stroke over it.
-                drawRect(color.copy(alpha = 0.45f), Offset(s * 0.14f, s * 0.36f), Size(s * 0.72f, s * 0.24f))
-                line(0.2f, 0.48f, 0.8f, 0.48f)
-                line(0.2f, 0.76f, 0.62f, 0.76f)
-            }
-            Glyph.SIGNATURE -> {
-                // A signed loop over the line it is signed on.
-                val p = Path().apply {
-                    moveTo(s * 0.14f, s * 0.62f)
-                    cubicTo(s * 0.26f, s * 0.2f, s * 0.38f, s * 0.2f, s * 0.36f, s * 0.5f)
-                    cubicTo(s * 0.34f, s * 0.74f, s * 0.5f, s * 0.36f, s * 0.6f, s * 0.46f)
-                    cubicTo(s * 0.68f, s * 0.54f, s * 0.74f, s * 0.5f, s * 0.86f, s * 0.38f)
-                }
-                drawPath(p, color, style = Stroke(width = w, cap = StrokeCap.Round, join = StrokeJoin.Round))
-                line(0.14f, 0.8f, 0.86f, 0.8f)
-            }
-            Glyph.EDIT_TEXT -> {
-                // A T with a typing cursor beside it.
-                line(0.16f, 0.22f, 0.56f, 0.22f); line(0.36f, 0.22f, 0.36f, 0.8f)
-                line(0.72f, 0.3f, 0.72f, 0.82f); line(0.64f, 0.3f, 0.8f, 0.3f); line(0.64f, 0.82f, 0.8f, 0.82f)
-            }
-            Glyph.SELECT_MANY -> {
-                // Two ticked boxes: picking several.
-                drawRoundRect(color, Offset(s * 0.14f, s * 0.14f), Size(s * 0.32f, s * 0.32f), androidx.compose.ui.geometry.CornerRadius(s * 0.05f), style = Stroke(width = w))
-                drawRoundRect(color, Offset(s * 0.54f, s * 0.54f), Size(s * 0.32f, s * 0.32f), androidx.compose.ui.geometry.CornerRadius(s * 0.05f), style = Stroke(width = w))
-                line(0.2f, 0.3f, 0.28f, 0.38f); line(0.28f, 0.38f, 0.4f, 0.22f)
-                line(0.6f, 0.7f, 0.68f, 0.78f); line(0.68f, 0.78f, 0.8f, 0.62f)
-            }
-            Glyph.UP -> { line(0.24f, 0.62f, 0.5f, 0.36f); line(0.5f, 0.36f, 0.76f, 0.62f) }
-            Glyph.DOWN -> { line(0.24f, 0.38f, 0.5f, 0.64f); line(0.5f, 0.64f, 0.76f, 0.38f) }
+        val k = s / 24f
+        val (stroke, fill) = glyphPaths(glyph)
+        val w = 1.85.dp.toPx() / k
+        withTransform({
+            translate((this@Canvas.size.width - s) / 2f, (this@Canvas.size.height - s) / 2f)
+            scale(k, k, Offset.Zero)
+        }) {
+            if (fill != null) drawPath(fill, color)
+            drawPath(stroke, color, style = Stroke(width = w, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
     }
 }

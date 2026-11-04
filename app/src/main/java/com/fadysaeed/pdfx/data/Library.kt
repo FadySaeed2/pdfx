@@ -343,7 +343,14 @@ class Library(
         trashDir.mkdirs()
         File(trashDir, ".nomedia").let { if (!it.exists()) it.createNewFile() }
         val dst = uniqueTarget(trashDir, "${d.id}-${src.name}")
-        relocate(src, dst)
+        // Copied, then the original deleted, rather than renamed: a rename into this hidden folder
+        // leaves other apps (Samsung's My Files among them) listing the file where it was, and it
+        // will not open from there. A delete tells every app the file has gone.
+        copyVerified(src, dst)
+        if (!src.delete()) {
+            dst.delete()
+            throw IOException("The file could not be moved to the trash.")
+        }
         val t = d.copy(key = dst.absolutePath, path = dst.absolutePath, uri = Uri.fromFile(dst).toString(), folder = dst.parent, trashedAt = System.currentTimeMillis(), trashOrigin = src.absolutePath)
         dao.update(t)
         scanMedia(src)

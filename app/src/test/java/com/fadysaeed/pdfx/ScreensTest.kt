@@ -60,6 +60,8 @@ import com.fadysaeed.pdfx.ui.viewer.BoxStyleFields
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.draw.clip
@@ -147,6 +149,27 @@ class ScreensTest {
     }
 
     @Test fun recent() = shot(base.copy(unindexed = 37), "01_recent.png")
+
+    /** Every icon in the app on one sheet, to see them side by side. */
+    @Test fun glyphs() {
+        compose.setContent {
+            PdfxTheme {
+                androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.background(com.fadysaeed.pdfx.ui.theme.Ink.Black).padding(12.dp)) {
+                    com.fadysaeed.pdfx.ui.components.Glyph.entries.chunked(6).forEach { row ->
+                        androidx.compose.foundation.layout.Row {
+                            row.forEach { g ->
+                                androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.width(66.dp).padding(vertical = 8.dp), horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                                    com.fadysaeed.pdfx.ui.components.GlyphIcon(g, com.fadysaeed.pdfx.ui.theme.Ink.Bone)
+                                    androidx.compose.material3.Text(g.name.lowercase(), style = com.fadysaeed.pdfx.ui.theme.Type.small.copy(fontSize = 8.sp), maxLines = 1)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/59_glyphs.png")
+    }
 
     @Test fun picking() = shot(base.copy(picked = setOf(docs[0].doc.id, docs[2].doc.id), selecting = true, tidy = TidyCounts(duplicates = 2, codeNames = 14, loose = 31)), "48_picking.png")
 

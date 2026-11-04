@@ -374,10 +374,10 @@ fun PagesScreen(
                     if (o.picked.isEmpty()) "Add pages at the end" else "Add pages after the picked ones",
                     style = Type.title, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
                 )
-                com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.PAGE, "A blank page", { adding = false; onAddBlank() }, note = "The same size as the page before it")
+                com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.PAGE_PLUS, "A blank page", { adding = false; onAddBlank() }, note = "The same size as the page before it")
                 com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.FOLDER, "Pages from another PDF", { adding = false; onAddPdf() }, note = "All its pages; take out the ones you don't need")
-                com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.PAGE, "Scan pages", { adding = false; onAddScan() }, note = "Paper straight from the camera, edges found and cleaned")
-                com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.PLUS, "Photos", { adding = false; onAddPictures() }, note = "Each photo on a page of its own")
+                com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.CAMERA, "Scan pages", { adding = false; onAddScan() }, note = "Paper straight from the camera, edges found and cleaned")
+                com.fadysaeed.pdfx.ui.components.SheetRow(Glyph.IMAGE, "Photos", { adding = false; onAddPictures() }, note = "Each photo on a page of its own")
             }
         }
     }
