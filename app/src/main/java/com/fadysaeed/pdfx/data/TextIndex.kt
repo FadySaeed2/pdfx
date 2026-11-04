@@ -87,6 +87,76 @@ class TextIndex(private val db: LibraryDb) {
 
     fun clear(docId: Long) = replace(docId, emptyList())
 
+    /** Puts [pages] in, each in place of what that page had, leaving the file's other pages as they are. */
+    fun putPages(docId: Long, pages: List<PageText>) = synchronized(lock) {
+        val s = sql
+        s.beginTransaction()
+        try {
+            val insert = s.compileStatement("INSERT OR REPLACE INTO page_words(docid, body) VALUES (?, ?)")
+            for (p in pages) {
+                if (p.page < 0 || p.page >= SPAN) continue
+                insert.clearBindings()
+                insert.bindLong(1, docId * SPAN + p.page)
+                insert.bindString(2, p.body)
+                insert.executeInsert()
+            }
+            s.setTransactionSuccessful()
+        } finally {
+            s.endTransaction()
+        }
+        version++
+    }
+
+    /** The words of each file's first two pages, up to [chars] of them, for telling files apart. */
+    fun firstPages(docIds: List<Long>, chars: Int = 4000): Map<Long, String> {
+        val out = HashMap<Long, StringBuilder>()
+        for (chunk in docIds.chunked(300)) {
+            val ids = chunk.flatMap { listOf(it * SPAN, it * SPAN + 1) }
+            val marks = ids.joinToString(",") { "?" }
+            sql.query(SimpleSQLiteQuery("SELECT docid, body FROM page_words WHERE docid IN ($marks)", ids.map { it as Any }.toTypedArray())).use { c ->
+                while (c.moveToNext()) {
+                    val b = out.getOrPut(c.getLong(0) / SPAN) { StringBuilder() }
+                    if (b.length < chars) b.append(' ').append((c.getString(1) ?: "").take(chars - b.length))
+                }
+            }
+        }
+        return out.mapValues { it.value.toString() }
+    }
+
+    /** Whether SQLite finds the index whole. */
+    fun healthy(): Boolean = runCatching { sql.execSQL("INSERT INTO page_words(page_words) VALUES('integrity-check')"); true }.getOrDefault(false)
+
+    /** Throws the index away and starts it empty; every file is then read again. */
+    fun rebuild() = synchronized(lock) {
+        val s = sql
+        s.execSQL("DROP TABLE IF EXISTS page_vocab")
+        s.execSQL("DROP TABLE IF EXISTS page_words")
+        s.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS page_words USING fts4(body, tokenize=porter)")
+        s.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS page_vocab USING fts4aux(page_words)")
+        s.execSQL("DELETE FROM scan_words")
+        version++
+    }
+
+    /** Merges the index's pieces into one, which keeps searching quick. */
+    fun optimize() = synchronized(lock) { sql.execSQL("INSERT INTO page_words(page_words) VALUES('optimize')") }
+
+    /** Drops words, marks, bookmarks and the rest kept for files no longer in the library. Returns how many rows went. */
+    fun dropOrphans(): Int = synchronized(lock) {
+        val s = sql
+        var n = 0
+        fun gone(q: String) { n += s.compileStatement(q).executeUpdateDelete() }
+        gone("DELETE FROM page_words WHERE (docid / $SPAN) NOT IN (SELECT id FROM docs)")
+        gone("DELETE FROM marks WHERE doc NOT IN (SELECT id FROM docs)")
+        gone("DELETE FROM marks_read WHERE doc NOT IN (SELECT id FROM docs)")
+        gone("DELETE FROM bookmarks WHERE doc NOT IN (SELECT id FROM docs)")
+        gone("DELETE FROM scan_words WHERE doc NOT IN (SELECT id FROM docs)")
+        gone("DELETE FROM auto_tags WHERE doc NOT IN (SELECT id FROM docs) OR tag NOT IN (SELECT id FROM tags)")
+        gone("DELETE FROM auto_tag_no WHERE doc NOT IN (SELECT id FROM docs) OR tag NOT IN (SELECT id FROM tags)")
+        gone("DELETE FROM auto_tag_seen WHERE doc NOT IN (SELECT id FROM docs)")
+        if (n > 0) version++
+        n
+    }
+
     fun search(match: String, limit: Int = 400): List<TextHit> {
         val out = ArrayList<TextHit>()
         sql.query(SimpleSQLiteQuery(
@@ -175,6 +245,11 @@ class TextIndex(private val db: LibraryDb) {
             }
             db.execSQL("CREATE TABLE IF NOT EXISTS text_upgrade(last INTEGER NOT NULL)")
             db.execSQL("CREATE TABLE IF NOT EXISTS bookmarks(doc INTEGER NOT NULL, page INTEGER NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(doc, page))")
+            // The nightly upkeep: scanned pages read into search, and tags PDFx put on by itself.
+            db.execSQL("CREATE TABLE IF NOT EXISTS scan_words(doc INTEGER PRIMARY KEY, modified INTEGER NOT NULL, next INTEGER NOT NULL, found INTEGER NOT NULL)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS auto_tags(doc INTEGER NOT NULL, tag INTEGER NOT NULL, at INTEGER NOT NULL, reviewed INTEGER NOT NULL, PRIMARY KEY(doc, tag))")
+            db.execSQL("CREATE TABLE IF NOT EXISTS auto_tag_no(doc INTEGER NOT NULL, tag INTEGER NOT NULL, PRIMARY KEY(doc, tag))")
+            db.execSQL("CREATE TABLE IF NOT EXISTS auto_tag_seen(doc INTEGER PRIMARY KEY, modified INTEGER NOT NULL)")
         }
     }
 

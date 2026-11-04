@@ -64,6 +64,39 @@ object Reading {
     }.getOrNull()
 
     /**
+     * Reads the words on each picture-only page of [path] from page [from] on, handing each page's
+     * words to [each]. The file is only read, never written. Asks [stop] before each page and
+     * returns the page to carry on from, or -1 when every page is done.
+     */
+    fun readPages(path: String, from: Int, stop: () -> Boolean, each: (Int, String) -> Unit): Int {
+        val doc = Document.openDocument(path)
+        try {
+            if (doc.needsPassword()) return -1
+            val pdf = doc as? PDFDocument ?: return -1
+            val n = pdf.countPages()
+            for (i in from until n) {
+                if (stop()) return i
+                val p = pdf.loadPage(i) as PDFPage
+                try {
+                    if (TextLayer.needsReading(p)) {
+                        val b = p.bounds
+                        val scale = scaleFor(b.x1 - b.x0, b.y1 - b.y0, pictureScale(p))
+                        val bmp = AndroidDrawDevice.drawPage(p, Matrix(scale))
+                        val ws = try { words(bmp) } finally { bmp.recycle() }
+                        val text = ws.joinToString(" ") { it.text }.trim()
+                        if (text.isNotEmpty()) each(i, text)
+                    }
+                } finally {
+                    p.destroy()
+                }
+            }
+            return -1
+        } finally {
+            doc.destroy()
+        }
+    }
+
+    /**
      * Reads every page of [path] that is only a picture and writes the file again to [out] with the
      * words laid over those pages. [progress] hears (page being read, pages to read). Returns the
      * number of pages that got words.

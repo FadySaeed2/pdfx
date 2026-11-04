@@ -118,11 +118,25 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
 
     private suspend fun renderFor(w: Want) {
         val order = w.range.sortedBy { abs(it - w.focus) }
+        // A quick soft picture first for pages with none, so a fast scroll never shows a blank page;
+        // the sharp one follows. A third of the width draws in about a ninth of the time.
+        for (i in order) {
+            if (session.closed) return
+            if (images.containsKey(i)) continue
+            val soft = (widthFor(i, w.widthPx) / 3).coerceAtLeast(64)
+            val bmp = runCatching { session.render(i, soft) }.getOrNull() ?: continue
+            bmp.prepareToDraw()
+            images[i] = bmp.asImageBitmap()
+            renderedWidth[i] = soft
+            bytes[i] = bmp.allocationByteCount.toLong()
+        }
         for (i in order) {
             if (session.closed) return
             val target = widthFor(i, w.widthPx)
             if (renderedWidth[i] == target) continue
             val bmp = runCatching { session.render(i, target) }.getOrNull() ?: continue
+            // Sent to the graphics memory now, in the background, rather than in the frame it first shows.
+            bmp.prepareToDraw()
             images[i] = bmp.asImageBitmap()
             renderedWidth[i] = target
             drawn.value = drawn.value + (i to ((drawn.value[i] ?: 0) + 1))

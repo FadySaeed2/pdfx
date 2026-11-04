@@ -277,3 +277,13 @@ signatures, and a full pass on every screen for clarity.
   on scans the picture is painted over in the commonest light colour under the words. The file
   is then written whole (redactions forbid incremental saves). "Picture" tool: a chosen photo
   placed as a stamp mark, moved, resized and flattened like any mark. Paragraph reflow stays out.
+
+## Looking after itself (0.3.113)
+
+- Nightly upkeep (WorkManager, daily, while charging): looks for new files, reads them for search, empties the trash of what is 30 days old, clears half-written files from cut-short saves and old work files, and writes a one-line report shown at the end of All files.
+- Scanned pages are read into search only (the file is never written) and only while the screen is off; a long scan carries on over several rounds from the page it reached (`scan_words`).
+- Tags learnt from the user's own: a new file takes a tag when at least three of its five nearest tagged files carry it, each at least as near as the fifth nearest of all files and above a cosine of 0.22 (words of title, name, author and first two pages, weighed by rarity). Shown as "Tagged for you" to look over; a tag taken off is never put back on that file.
+- Extra copies: the same bytes in the same folder under a copy name ("(2)", "- Copy") go to the trash; the plain-named file takes their tags, star and bookmarks.
+- Daily backup of tags, stars, reading states, places, bookmarks, names on marks and pinned folders to Documents/PDFx/Backup (last seven days); brought back once on a fresh install. Certificates are left out on purpose.
+- Monthly health: FTS integrity check (rebuild when damaged), orphan rows and versions dropped, index optimised, VACUUM, first-page pictures kept under 100 MB.
+- Smooth scrolling: the page number is read only where it is shown (the whole viewer used to recompose at every page turned), the loupe exists only while a handle is held, two pages either side are drawn ahead, a soft picture first for pages with none, and bitmaps go to graphics memory before their first frame (`prepareToDraw`).

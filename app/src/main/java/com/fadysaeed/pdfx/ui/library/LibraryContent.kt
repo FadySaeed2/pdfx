@@ -114,6 +114,8 @@ class LibraryActions(
     val marksMine: (Boolean) -> Unit = {},
     /** Asks for the user's names on marks. */
     val names: () -> Unit = {},
+    /** Shows the tags PDFx put on new files by itself. */
+    val autoTags: () -> Unit = {},
 )
 
 @Composable
@@ -280,6 +282,23 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                 }
             }
         }
+        if (ui.autoTagged.isNotEmpty() && !nested && p.section in setOf(Section.RECENT, Section.ALL, Section.TAGS)) {
+            item(key = "auto-tags") {
+                val files = ui.autoTagged.map { it.doc.id }.distinct().size
+                Row(
+                    Modifier.fillMaxWidth().clickable(onClick = actions.autoTags).padding(horizontal = 20.dp).padding(bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(6.dp).background(Ink.Teal))
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "Tagged for you: " + (if (files == 1) "1 new file" else "$files new files") + " took tags from files like them.",
+                        style = Type.small, modifier = Modifier.weight(1f),
+                    )
+                    Text("Look", style = Type.bodyStrong.copy(color = Ink.Amber))
+                }
+            }
+        }
         item(key = "rule") { Hairline(Modifier.padding(horizontal = 20.dp), color = Ink.Rule) }
 
         when {
@@ -374,7 +393,10 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
             else -> {
                 if (ui.loaded && ui.items.isEmpty()) item { EmptyNote(emptyText(p)) }
                 docs(ui, actions, thumb, now, label, showFolder = p.section != Section.FOLDERS)
-                if (p.section == Section.ALL) trashRow(ui, actions)
+                if (p.section == Section.ALL) {
+                    trashRow(ui, actions)
+                    upkeepLine(ui)
+                }
             }
         }
         item { Spacer(Modifier.height(80.dp)) }
@@ -383,6 +405,15 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
 
 /** The sections across the top; Folders and Trash are reached from All files. */
 private val LIBRARY_CHIPS = listOf(Section.RECENT, Section.SHELVES, Section.ALL, Section.STARRED, Section.HIGHLIGHTS, Section.TAGS)
+
+/** What the nightly upkeep did last, at the very end of All files. */
+private fun androidx.compose.foundation.lazy.LazyListScope.upkeepLine(ui: LibraryUi) {
+    val line = ui.upkeep ?: return
+    if (ui.selecting) return
+    item(key = "upkeep") {
+        Text(line, style = Type.small.copy(color = Ink.Ash), modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp))
+    }
+}
 
 /** The trash, as a row at the end of All files. */
 private fun androidx.compose.foundation.lazy.LazyListScope.trashRow(ui: LibraryUi, actions: LibraryActions) {

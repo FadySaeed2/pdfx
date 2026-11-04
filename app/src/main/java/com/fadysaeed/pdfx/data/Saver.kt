@@ -30,6 +30,10 @@ class Versions(private val root: File) {
             ?: emptyList()
 
     fun clear(docId: Long) { File(root, docId.toString()).deleteRecursively() }
+
+    /** Drops the kept versions of files no longer in the library. Returns how many folders went. */
+    fun dropOrphans(ids: Set<Long>): Int =
+        root.listFiles()?.count { f -> f.isDirectory && f.name.toLongOrNull()?.let { it !in ids } == true && f.deleteRecursively() } ?: 0
 }
 
 /**

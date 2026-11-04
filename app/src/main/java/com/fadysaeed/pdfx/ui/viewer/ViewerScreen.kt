@@ -92,6 +92,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -956,7 +957,9 @@ fun ViewerContent(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val pageCount = reader.pageCount
-    val current by remember { derivedStateOf { centreItem(listState) } }
+    // The page being read, as state that only the small things showing it read: reading it here
+    // would compose this whole screen, the pages with it, at every page turned while scrolling.
+    val currentState = remember(listState) { derivedStateOf { centreItem(listState) } }
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     var sheet by remember { mutableStateOf<ViewerSheet?>(null) }
@@ -1044,7 +1047,7 @@ fun ViewerContent(
                     if (sel != null) SelectionFloat(
                         reader,
                         onCopy = { if (reader.copySelection(context)) flash = "Copied"; reader.clearSelection() },
-                        onFind = { val t = sel.text.trim(); reader.clearSelection(); reader.searchOpen = true; reader.search(t, current) },
+                        onFind = { val t = sel.text.trim(); reader.clearSelection(); reader.searchOpen = true; reader.search(t, currentState.value) },
                         onShare = {
                             val t = sel.text.trim()
                             runCatching { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, t), null)) }
@@ -1067,7 +1070,7 @@ fun ViewerContent(
                         IconButton(Glyph.REDO, "Redo", reader::redo, color = if (reader.canRedo) Ink.Bone else Ink.Slate, size = 44.dp)
                     }
                 } else if (reader.searchOpen) {
-                    SearchBar(reader, current)
+                    SearchBar(reader, currentState.value)
                 } else {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(Glyph.BACK, "Back to library", onBack)
@@ -1102,18 +1105,21 @@ fun ViewerContent(
         }
 
         // Where you are in the document: a thin amber line along the bottom edge, always visible.
-        val fraction = if (pageCount <= 1) 1f else current / (pageCount - 1f)
+        // Drawn from the page number at draw time, so turning pages redraws only this line.
         Box(
             Modifier
                 .align(Alignment.BottomStart)
                 .windowInsetsPadding(WindowInsets.navigationBars)
-                .fillMaxWidth(fraction.coerceIn(0.01f, 1f))
+                .fillMaxWidth()
                 .height(2.dp)
-                .background(Ink.Amber),
+                .drawBehind {
+                    val fraction = if (pageCount <= 1) 1f else currentState.value / (pageCount - 1f)
+                    drawRect(Ink.Amber, size = size.copy(width = size.width * fraction.coerceIn(0.01f, 1f)))
+                },
         )
 
         AnimatedVisibility(showBars && pageCount > 1 && !reader.marking, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterEnd)) {
-            Scrubber(current, pageCount, Modifier.padding(top = top + 72.dp, bottom = bottom + 80.dp)) { p ->
+            Scrubber(currentState.value, pageCount, Modifier.padding(top = top + 72.dp, bottom = bottom + 80.dp)) { p ->
                 scope.launch { listState.scrollToItem(p) }
             }
         }
@@ -1180,7 +1186,7 @@ fun ViewerContent(
                                 .clickable { askPage = true }
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
                         ) {
-                            Text("${current + 1} / $pageCount", style = Type.figure)
+                            Text("${currentState.value + 1} / $pageCount", style = Type.figure)
                         }
                         if (reader.hasForm && !reader.reflow) {
                             Spacer(Modifier.width(8.dp))
@@ -1266,14 +1272,14 @@ fun ViewerContent(
                     scope.launch { state.hide() }.invokeOnCompletion { sheet = null; action() }
                 }
                 when (open) {
-                    ViewerSheet.CONTENTS -> ContentsSheetOnTab(reader, null, current, name) { p, y -> sheet = null; reader.go(p, y) }
+                    ViewerSheet.CONTENTS -> ContentsSheetOnTab(reader, null, currentState.value, name) { p, y -> sheet = null; reader.go(p, y) }
                     ViewerSheet.DISPLAY -> DisplaySheet(reader, onFlatten = { sheet = null; askFlatten = true }, onReflow = ::toggleReflow)
                     ViewerSheet.MORE -> {
-                        val marked = current in reader.bookmarks
+                        val marked = currentState.value in reader.bookmarks
                         SheetRow(
                             if (marked) Glyph.BOOKMARK_FILLED else Glyph.BOOKMARK,
-                            if (marked) "Remove the bookmark on page ${current + 1}" else "Bookmark page ${current + 1}",
-                            { then { reader.toggleBookmark(current); flash = if (marked) "Bookmark removed" else "Page ${current + 1} bookmarked" } },
+                            if (marked) "Remove the bookmark on page ${currentState.value + 1}" else "Bookmark page ${currentState.value + 1}",
+                            { then { reader.toggleBookmark(currentState.value); flash = if (marked) "Bookmark removed" else "Page ${currentState.value + 1} bookmarked" } },
                             color = if (marked) Ink.Amber else Ink.Bone,
                         )
                         SheetRow(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS })

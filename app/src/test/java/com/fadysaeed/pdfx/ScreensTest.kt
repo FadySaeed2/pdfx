@@ -221,7 +221,11 @@ class ScreensTest {
     @Test fun folders() = shot(base.copy(place = Place(Section.FOLDERS), title = "All files", items = emptyList(), trashCount = 1), "03_folders.png")
 
     @Test fun allFiles() = shot(
-        base.copy(place = Place(Section.ALL), title = "All files", items = docs.sortedBy { it.doc.name }, sort = Sort(SortBy.NAME, false), trashCount = 3),
+        base.copy(
+            place = Place(Section.ALL), title = "All files", items = docs.sortedBy { it.doc.name }.take(2), sort = Sort(SortBy.NAME, false), trashCount = 3,
+            autoTagged = listOf(com.fadysaeed.pdfx.ui.library.AutoTagged(docs[0].doc, com.fadysaeed.pdfx.data.Tag(7, "Bipolar", 2))),
+            upkeep = "Looked after today at 3:12 am: 4 new files found, 4 files read for search, 2 scans read for search, 1 file tagged.",
+        ),
         "57_all_files.png",
     )
 

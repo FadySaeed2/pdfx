@@ -135,7 +135,14 @@ data class LibraryUi(
     val selecting: Boolean = false,
     /** Files in the trash, for the row at the end of All files. */
     val trashCount: Int = 0,
+    /** Tags PDFx put on new files by itself, waiting for the user's look. */
+    val autoTagged: List<AutoTagged> = emptyList(),
+    /** What the nightly upkeep did last, in a line. */
+    val upkeep: String? = null,
 )
+
+/** A tag PDFx put on a file by itself. */
+data class AutoTagged(val doc: Doc, val tag: Tag)
 
 data class Notice(val text: String, val undo: (() -> Unit)? = null, val id: Long = System.nanoTime())
 
@@ -182,10 +189,37 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         }
 
     private data class Extras(val res: SearchOut?, val access: Boolean, val picks: Set<Long>, val selecting: Boolean)
-    private data class View(val filter: SearchFilter, val grid: Boolean, val marks: Pair<List<MarkGroup>, Int>, val mine: Boolean, val names: List<String>)
+    private data class View(
+        val filter: SearchFilter, val grid: Boolean, val marks: Pair<List<MarkGroup>, Int>, val mine: Boolean, val names: List<String>,
+        val auto: List<com.fadysaeed.pdfx.data.AutoTags.Row> = emptyList(), val upkeep: String? = null,
+    )
+
+    /** Tags PDFx put on by itself and the upkeep's line, read again whenever tags or files change. */
+    private val autoFlow = combine(library.dao.observeDocTags(), library.dao.observeAll(), bump) { _, _, _ -> Unit }
+        .mapLatest {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { library.autoTags.pending() }.getOrDefault(emptyList()) to pdfx.upkeep.report().line()
+            }
+        }
 
     private val extras = combine(results, access, combine(picks, selecting, ::Pair), pins, bump) { r, a, pk, _, _ -> Extras(r, a, pk.first, pk.second) }
-    private val view = combine(filter, grid, marksFlow, marksMine, names) { f, g, m, mine, n -> View(f, g, m, mine, n) }
+    private val view = combine(filter, grid, marksFlow, combine(marksMine, names, ::Pair), autoFlow) { f, g, m, mn, a -> View(f, g, m, mn.first, mn.second, a.first, a.second) }
+
+    init {
+        // What a backup brought back on a fresh install, said once.
+        viewModelScope.launch {
+            pdfx.upkeep.news.collect { n -> if (n != null) { notice.value = Notice(n); pdfx.upkeep.news.value = null } }
+        }
+    }
+
+    /** Takes off a tag PDFx put on; it is not put back on that file. */
+    fun refuseAutoTag(a: AutoTagged) = launch { library.setTag(a.doc.id, a.tag.id, false); bump.value++ }
+
+    /** The user looked at the tags PDFx put on and keeps them. */
+    fun keepAutoTags() = launch {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { library.autoTags.reviewedAll() }
+        bump.value++
+    }
 
     val ui: StateFlow<LibraryUi> = combine(combine(raw, place, sorts) { r, p, s -> Triple(r, p, s) }, query, extras, view) { (r, p, s), q, x, v ->
         build(r, p, s[p.section] ?: defaultSort(p.section), q, x.res, x.access, v)
@@ -611,6 +645,13 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             unindexed = r.unindexed,
             loaded = true,
             trashCount = r.docs.count { it.inTrash },
+            autoTagged = v.auto.mapNotNull { a ->
+                val d = r.docs.firstOrNull { it.id == a.doc && !it.inTrash } ?: return@mapNotNull null
+                val t = tagsById[a.tag] ?: return@mapNotNull null
+                // Still on the file (the user may have taken it off some other way).
+                if (docTagIds[d.id]?.contains(t.id) != true) null else AutoTagged(d, t)
+            },
+            upkeep = v.upkeep,
             duplicates = duplicatesOf(live),
             shelves = if (p.section == Section.SHELVES && p.shelf == null) Shelf.entries.map { sh -> ShelfRow(sh, live.count { onShelf(it, sh) }) }.filter { it.count > 0 || it.shelf.ordinal < 3 } else emptyList(),
         )

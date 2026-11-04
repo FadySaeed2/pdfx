@@ -30,6 +30,8 @@ class Library(
     val text = TextIndex(db)
     val bookmarks = Bookmarks(db)
     val marks = Marks(db)
+    val scanWords = ScanWords(db)
+    val autoTags = AutoTags(db)
     val versions = Versions(File(context.filesDir, "versions"))
     val trashDir = File(root, ".pdfx-trash")
     /** Where copies saved from other apps go, and the default place for new folders. */
@@ -596,7 +598,11 @@ class Library(
     suspend fun createTag(name: String, color: Int): Long = dao.insertTag(Tag(name = name.trim(), color = color))
 
     suspend fun setTag(docId: Long, tagId: Long, on: Boolean) {
-        if (on) dao.tag(DocTag(docId, tagId)) else dao.untag(docId, tagId)
+        if (on) dao.tag(DocTag(docId, tagId)) else {
+            dao.untag(docId, tagId)
+            // A tag PDFx put on, taken off by the user, stays off that file.
+            withContext(Dispatchers.IO) { runCatching { autoTags.takenOff(docId, tagId) } }
+        }
     }
 
     /** Puts the tag [name] (made if new) on [docIds]. Returns how many files got it. */

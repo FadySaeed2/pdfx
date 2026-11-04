@@ -82,6 +82,8 @@ private sealed interface Sheet {
     data object ManyMore : Sheet
     data class FolderMenu(val row: FolderRow) : Sheet
     data class FolderPlaces(val path: String) : Sheet
+    /** Tags PDFx put on new files by itself. */
+    data object AutoTags : Sheet
 }
 
 private sealed interface Ask {
@@ -208,6 +210,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             filter = vm::setFilter,
             marksMine = vm::setMarksMine,
             names = { ask = Ask.Names },
+            autoTags = { sheet = Sheet.AutoTags },
         ),
     )
     merging?.let { start ->
@@ -387,6 +390,39 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
                         Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
                             ui.allTags.forEach { t -> SheetRow(Glyph.TAG, t.name, { sheet = null; vm.tagMany(t) }) }
                             SheetRow(Glyph.PLUS, "New tag…", { sheet = null; ask = Ask.NewTag(null) }, color = Ink.Amber)
+                        }
+                    }
+                    Sheet.AutoTags -> {
+                        SheetTitle("Tagged for you", "New files took the tags of the files most like them")
+                        Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+                            ui.autoTagged.groupBy { it.doc.id }.values.forEach { group ->
+                                val d = group.first().doc
+                                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
+                                    Text(LibraryModel.titleOf(d), style = Type.bodyStrong, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.clickable { sheet = null; onOpen(d, null) })
+                                    Spacer(Modifier.height(6.dp))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        group.forEach { a ->
+                                            Row(
+                                                Modifier.border(1.dp, Ink.Edge, RoundedCornerShape(4.dp)).clickable { vm.refuseAutoTag(a) }.padding(start = 10.dp, end = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                Box(Modifier.size(8.dp).background(com.fadysaeed.pdfx.ui.components.tagColor(a.tag.color)))
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(a.tag.name, style = Type.small.copy(color = Ink.Bone))
+                                                GlyphIcon(Glyph.CLOSE, Ink.Dust, size = 16.dp)
+                                                Spacer(Modifier.width(8.dp))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Text(
+                            "Tap a tag to take it off; PDFx will not put it back on that file. It only learns from tags you put on or kept.",
+                            style = Type.small, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                        )
+                        Box(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
+                            AmberButton("They look right", { sheet = null; vm.keepAutoTags() }, Modifier.fillMaxWidth())
                         }
                     }
                     Sheet.ManyMore -> {

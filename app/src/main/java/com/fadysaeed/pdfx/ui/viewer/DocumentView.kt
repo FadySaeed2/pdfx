@@ -276,12 +276,15 @@ fun DocumentView(
                             .aspectRatio(aspect)
                             .background(paper)
                             .semantics { contentDescription = "Page ${i + 1}" }
-                            .magnifier(
-                                sourceCenter = { lens },
-                                magnifierCenter = { if (lens.isSpecified) lens - Offset(0f, 64.dp.toPx()) else Offset.Unspecified },
-                                zoom = 1.8f,
-                                size = DpSize(150.dp, 52.dp),
-                                cornerRadius = 8.dp,
+                            // The loupe only while a handle is held: every page carrying one costs a little at every frame of a scroll.
+                            .then(
+                                if (lens.isSpecified) Modifier.magnifier(
+                                    sourceCenter = { lens },
+                                    magnifierCenter = { if (lens.isSpecified) lens - Offset(0f, 64.dp.toPx()) else Offset.Unspecified },
+                                    zoom = 1.8f,
+                                    size = DpSize(150.dp, 52.dp),
+                                    cornerRadius = 8.dp,
+                                ) else Modifier,
                             )
                             .pointerInput(i) {
                                 // The chosen mark: drag inside it to move it, drag a corner to resize it,
@@ -643,8 +646,9 @@ private fun bucket(z: Float): Float = when {
 private fun visibleRange(state: LazyListState, count: Int): IntRange {
     val items = state.layoutInfo.visibleItemsInfo
     if (items.isEmpty() || count == 0) return IntRange.EMPTY
-    val first = (items.first().index - 1).coerceAtLeast(0)
-    val last = (items.last().index + 1).coerceAtMost(count - 1)
+    // Two pages either side, so a quick scroll finds the next pages drawn already.
+    val first = (items.first().index - 2).coerceAtLeast(0)
+    val last = (items.last().index + 2).coerceAtMost(count - 1)
     return first..last
 }
 

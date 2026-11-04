@@ -11,6 +11,7 @@ import androidx.work.WorkerParameters
 import com.fadysaeed.pdfx.PdfxApp
 import com.fadysaeed.pdfx.engine.PdfSession
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -79,7 +80,11 @@ class TextIndexer(private val context: Context, private val library: Library) {
                         .replace(Regex("\\s+"), " ").trim()
                     if (text.isNotEmpty()) rows += PageText(page = p, body = text.take(MAX_CHARS_PER_PAGE))
                 }
-                withContext(Dispatchers.IO) { library.text.replace(d.id, rows) }
+                withContext(Dispatchers.IO) {
+                    library.text.replace(d.id, rows)
+                    // Words read off its scanned pages went with the rest: they are read again.
+                    library.scanWords.forget(d.id)
+                }
             }
             keepMarks(d, session)
             // Its real title, author and year, and its kind.
@@ -125,7 +130,7 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val app = applicationContext as PdfxApp
         // An index from an earlier PDFx is moved to the faster one first, once.
         runCatching { app.library.text.upgrade() }
-        app.indexer.runAll(stopIf = { isStopped })
+        app.work.withLock { app.indexer.runAll(stopIf = { isStopped }) }
         return Result.success()
     }
 }

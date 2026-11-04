@@ -24,7 +24,10 @@ class PdfxApp : Application() {
     val signatures: com.fadysaeed.pdfx.data.Signatures by lazy { com.fadysaeed.pdfx.data.Signatures(filesDir) }
     val certificates: com.fadysaeed.pdfx.data.Certificates by lazy { com.fadysaeed.pdfx.data.Certificates(filesDir) }
     val myNames: com.fadysaeed.pdfx.data.MyNames by lazy { com.fadysaeed.pdfx.data.MyNames(this) { certificates.list().map { it.name } } }
-    private val scanLock = Mutex()
+    val scanLock = Mutex()
+    /** One reader of files for search at a time: the indexer, or the nightly upkeep. */
+    val work = Mutex()
+    val upkeep: com.fadysaeed.pdfx.data.Upkeep by lazy { com.fadysaeed.pdfx.data.Upkeep(this, library, indexer, myNames, work, scanLock) }
 
     override fun onCreate() {
         super.onCreate()
@@ -34,6 +37,8 @@ class PdfxApp : Application() {
         // Arabic and other scripts in books and in PDFs that carry no font for them.
         runCatching { com.fadysaeed.pdfx.engine.Books.installSystemFonts() }
         watchStorage()
+        // Once a day while charging: new files, scans, tags, copies, trash, backup, health.
+        runCatching { com.fadysaeed.pdfx.data.Upkeep.schedule(this) }
     }
 
     private var settle: kotlinx.coroutines.Job? = null
@@ -74,6 +79,8 @@ class PdfxApp : Application() {
                     prepared = true
                 }
                 runCatching { library.scan() }
+                // A fresh install finds its tags, stars and bookmarks again in the backup, once.
+                runCatching { upkeep.restoreIfNew() }
                 // Files known only through another app become real files while that app still allows it.
                 runCatching { library.adoptShared() }
                 TextIndexer.schedule(this@PdfxApp)
