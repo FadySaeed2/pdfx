@@ -220,6 +220,9 @@ object Topics {
         val byId = docs.associateBy { it.id }
         val have = existing.map { it.lowercase() }.toSet()
         val v = lib.text.version
+        // Nothing changed since last time (words, files, titles, tags): the same answer, at once.
+        val sign = listOf(System.identityHashCode(lib.text).toLong(), v, docs.size.toLong(), docs.sumOf { it.id }, docs.sumOf { (it.title ?: it.name).hashCode().toLong() + it.pages }, have.hashCode().toLong())
+        answer?.takeIf { it.first == sign }?.let { return@withContext it.second }
         val kept = cache?.takeIf { it.first === lib.text && it.second == v }?.third
         val hits = HashMap<String, Map<Long, Int>>()
         for ((k, c) in Concepts.all.withIndex()) {
@@ -271,5 +274,9 @@ object Topics {
         }.take(20).toList().map { TopicSuggestion(it.label, it.docs.toList(), example(it.docs.toList())) }
         if (extra.isNotEmpty()) groups += TopicGroup("Other topics in your titles", emptyList(), extra)
         groups.sortedByDescending { g -> g.topics.sumOf { it.docIds.size } }.sortedBy { it.area == "Other topics in your titles" }
+            .also { answer = sign to it }
     }
+
+    /** The last answer and what it was worked out from. */
+    private var answer: Pair<List<Long>, List<TopicGroup>>? = null
 }
