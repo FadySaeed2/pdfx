@@ -543,9 +543,12 @@ class LibraryRulesOnDeviceTest {
         assertEquals(File(received, "Referral (2).pdf").absolutePath, other.path)
 
         // Already on the phone (WhatsApp keeps a copy in WhatsApp Documents): that file is used as it is.
-        pdf("Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents/Plan.pdf", 3000)
+        // Only when it is the same inside: the same name and size alone could be another file.
+        val planUri = shared("Plan.pdf", 3000)
+        val onPhone = File(root, "Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents/Plan.pdf").apply { parentFile?.mkdirs() }
+        InstrumentationRegistry.getInstrumentation().targetContext.contentResolver.openInputStream(planUri)!!.use { i -> onPhone.outputStream().use { i.copyTo(it) } }
         lib.scan()
-        val plan = lib.receive(shared("Plan.pdf", 3000))!!
+        val plan = lib.receive(planUri)!!
         assertTrue(plan.path!!.contains("WhatsApp Documents"))
 
         // Known only through another app: becomes a real file while that app still allows reading it.

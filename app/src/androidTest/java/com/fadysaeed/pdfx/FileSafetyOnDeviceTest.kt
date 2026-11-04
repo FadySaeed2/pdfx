@@ -80,7 +80,7 @@ class FileSafetyOnDeviceTest {
     }
 
     @Test
-    fun aSavedFileNoLongerPassesForItsUntouchedTwin() = runBlocking {
+    fun aSavedFileNoLongerPassesForItsUntouchedTwin(): Unit = runBlocking {
         val a = asset("coch.pdf", File(root, "Papers/a.pdf"))
         a.copyTo(File(root, "Papers/b.pdf"))
         lib.scan()
@@ -94,7 +94,7 @@ class FileSafetyOnDeviceTest {
     }
 
     @Test
-    fun copiesAreMergedOnlyWhenEveryByteIsTheSame() = runBlocking {
+    fun copiesAreMergedOnlyWhenEveryByteIsTheSame(): Unit = runBlocking {
         bytes(File(root, "Download/one.pdf"), 1)
         bytes(File(root, "Download/one (2).pdf"), 2)
         lib.scan()
@@ -109,7 +109,7 @@ class FileSafetyOnDeviceTest {
     }
 
     @Test
-    fun aSharedFileIsTakenForOneOnThePhoneOnlyWhenItIsTheSameInside() = runBlocking {
+    fun aSharedFileIsTakenForOneOnThePhoneOnlyWhenItIsTheSameInside(): Unit = runBlocking {
         val mine = bytes(File(root, "Download/Report.pdf"), 1)
         lib.scan()
         val outside = File(ctx.cacheDir, "share-${System.nanoTime()}/Report.pdf")
@@ -125,10 +125,11 @@ class FileSafetyOnDeviceTest {
         val same = lib.receive(FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", outside))!!
         assertEquals(mine.absolutePath, same.path)
         outside.parentFile?.deleteRecursively()
+        Unit
     }
 
     @Test
-    fun twoWritesToOneFileNeverMix() = runBlocking {
+    fun twoWritesToOneFileNeverMix(): Unit = runBlocking {
         val f = asset("coch.pdf", File(root, "Papers/a.pdf"))
         lib.scan()
         val d = db.dao().all().single()
@@ -147,7 +148,7 @@ class FileSafetyOnDeviceTest {
     }
 
     @Test
-    fun savingOntoAFileChangedMeanwhileWritesItAfresh() = runBlocking {
+    fun savingOntoAFileChangedMeanwhileWritesItAfresh(): Unit = runBlocking {
         val f = asset("coch.pdf", File(root, "Papers/a.pdf"))
         lib.scan()
         val d = db.dao().all().single()
@@ -199,7 +200,7 @@ class FileSafetyOnDeviceTest {
     }
 
     @Test
-    fun oldPagePicturesAreLetGoAfterASave() = runBlocking {
+    fun oldPagePicturesAreLetGoAfterASave(): Unit = runBlocking {
         val f = asset("coch.pdf", File(root, "Papers/a.pdf"))
         val session = PdfSession.openFile(f.absolutePath)
         val parent = CoroutineScope(SupervisorJob() + Dispatchers.Default)
