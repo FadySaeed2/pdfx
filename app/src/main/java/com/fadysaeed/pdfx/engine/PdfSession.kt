@@ -432,7 +432,7 @@ class PdfSession private constructor(
         try { st.walk(w) } finally { runCatching { st.destroy() } }
         val near = ((index - 2)..(index + 2)).filter { it != index && it in 0 until pageCount }.flatMap { bandLines(it) }.toSet()
         val parts = partsOn(index)
-        buildParas(placeTables(w.blocks, parts.tables, parts.figures), sizeNow(index).height, near)
+        buildParas(placeTables(joinBaselines(w.blocks), parts.tables, parts.figures), sizeNow(index).height, near)
     }
 
     private val tableCache = object : LinkedHashMap<Int, PageParts>(8, 0.75f, true) {

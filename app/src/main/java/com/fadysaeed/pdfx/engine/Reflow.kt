@@ -361,3 +361,70 @@ internal object Bidi {
         return Line(sb.toString(), b.toBooleanArray(), it2.toBooleanArray())
     }
 }
+
+/**
+ * Pieces of one line of print joined into one line. The engine sometimes reads a line as several
+ * (where the direction changes, or the words are spread out), or even as several blocks side by
+ * side; Arabic then came out in pieces in the wrong order. Pieces on the same line join in the
+ * order they sit: right to left when the line is mostly Arabic, left to right otherwise. Blocks
+ * join only when they come one after the other and sit close on the same line, so two columns
+ * stay apart.
+ */
+internal fun joinBaselines(blocks: List<RawBlock>): List<RawBlock> {
+    val within = blocks.map { b -> if (b.lines.size < 2 || b.image || b.table != null || b.figure != null) b else RawBlock(b.box, sameLine(b.lines), false) }
+    val out = ArrayList<RawBlock>()
+    for (b in within) {
+        val prev = out.lastOrNull()
+        if (prev != null && joinable(prev, b)) {
+            val line = merge(listOf(prev.lines.single(), b.lines.single()))
+            out[out.lastIndex] = RawBlock(Box(minOf(prev.box.x0, b.box.x0), minOf(prev.box.y0, b.box.y0), maxOf(prev.box.x1, b.box.x1), maxOf(prev.box.y1, b.box.y1)), listOf(line), false)
+        } else out += b
+    }
+    return out
+}
+
+private fun overlap(a0: Float, a1: Float, b0: Float, b1: Float): Float {
+    val o = minOf(a1, b1) - maxOf(a0, b0)
+    val h = minOf(a1 - a0, b1 - b0).coerceAtLeast(0.01f)
+    return o / h
+}
+
+private fun joinable(a: RawBlock, b: RawBlock): Boolean {
+    if (a.image || b.image || a.table != null || b.table != null || a.figure != null || b.figure != null) return false
+    if (a.lines.size != 1 || b.lines.size != 1) return false
+    val la = a.lines[0]
+    val lb = b.lines[0]
+    if (overlap(la.y0, la.y1, lb.y0, lb.y1) < 0.6f) return false
+    val gap = maxOf(lb.x0 - la.x1, la.x0 - lb.x1)
+    val size = maxOf(la.size, lb.size, 4f)
+    return gap < size * 3f && (la.text + lb.text).any { Character.getDirectionality(it) == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC || Character.getDirectionality(it) == Character.DIRECTIONALITY_RIGHT_TO_LEFT }
+}
+
+/** A block's lines with pieces of one printed line joined, top to bottom. */
+private fun sameLine(lines: List<RawLine>): List<RawLine> {
+    val groups = ArrayList<MutableList<RawLine>>()
+    for (l in lines.sortedBy { (it.y0 + it.y1) / 2 }) {
+        val g = groups.lastOrNull()
+        if (g != null && overlap(g.minOf { it.y0 }, g.maxOf { it.y1 }, l.y0, l.y1) >= 0.5f) g += l else groups += mutableListOf(l)
+    }
+    // Nothing to join: keep the lines exactly as the engine gave them (and in its order).
+    if (groups.size == lines.size) return lines
+    return groups.map { if (it.size == 1) it[0] else merge(it) }
+}
+
+private fun merge(pieces: List<RawLine>): RawLine {
+    val all = pieces.joinToString("") { it.text }
+    val rtl = all.count { Character.getDirectionality(it).let { d -> d == Character.DIRECTIONALITY_RIGHT_TO_LEFT || d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC } } >=
+        all.count { Character.getDirectionality(it) == Character.DIRECTIONALITY_LEFT_TO_RIGHT }
+    val ordered = if (rtl) pieces.sortedByDescending { it.x1 } else pieces.sortedBy { it.x0 }
+    val sb = StringBuilder()
+    val bold = ArrayList<Boolean>()
+    val italic = ArrayList<Boolean>()
+    ordered.forEachIndexed { k, l ->
+        if (k > 0 && !sb.endsWith(" ") && !l.text.startsWith(" ")) { sb.append(' '); bold += false; italic += false }
+        sb.append(l.text); l.bold.forEach { bold += it }; l.italic.forEach { italic += it }
+    }
+    val chars = pieces.sumOf { it.text.length }.coerceAtLeast(1)
+    val size = pieces.sumOf { (it.size * it.text.length).toDouble() }.toFloat() / chars
+    return RawLine(sb.toString(), bold.toBooleanArray(), italic.toBooleanArray(), size, pieces.minOf { it.y0 }, pieces.maxOf { it.y1 }, pieces.minOf { it.x0 }, pieces.maxOf { it.x1 })
+}

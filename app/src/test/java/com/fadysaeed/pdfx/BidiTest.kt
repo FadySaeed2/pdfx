@@ -52,3 +52,38 @@ class BidiTest {
         assertEquals("كَتَبَ", line(stored, xs))
     }
 }
+
+/** Pieces of one printed line, read as separate lines or blocks, joined in reading order. */
+class BaselinesTest {
+    private fun line(t: String, x0: Float, x1: Float, y0: Float = 100f, y1: Float = 112f) =
+        com.fadysaeed.pdfx.engine.RawLine(t, BooleanArray(t.length), BooleanArray(t.length), 12f, y0, y1, x0, x1)
+    private fun block(vararg ls: com.fadysaeed.pdfx.engine.RawLine) =
+        com.fadysaeed.pdfx.engine.RawBlock(com.fadysaeed.pdfx.engine.Box(ls.minOf { it.x0 }, ls.minOf { it.y0 }, ls.maxOf { it.x1 }, ls.maxOf { it.y1 }), ls.toList(), false)
+
+    @Test
+    fun arabicBlocksSideBySideJoinRightToLeft() {
+        // Drawn from the left: "مريض" then "عدد", each a block of its own.
+        val out = com.fadysaeed.pdfx.engine.joinBaselines(listOf(block(line("مريض", 0f, 40f)), block(line("عدد", 50f, 80f))))
+        assertEquals(1, out.size)
+        assertEquals("عدد مريض", out[0].lines.single().text)
+    }
+
+    @Test
+    fun piecesOfALineInOneBlockJoin() {
+        val out = com.fadysaeed.pdfx.engine.joinBaselines(listOf(block(line("مريض", 0f, 40f), line("عدد", 50f, 80f), line("سطر تاني", 0f, 80f, 130f, 142f))))
+        assertEquals(listOf("عدد مريض", "سطر تاني"), out.single().lines.map { it.text })
+    }
+
+    @Test
+    fun twoColumnsStayApart() {
+        val out = com.fadysaeed.pdfx.engine.joinBaselines(listOf(block(line("العمود الأول", 0f, 200f)), block(line("العمود الثاني", 320f, 520f))))
+        assertEquals(2, out.size)
+    }
+
+    @Test
+    fun englishLinesAreLeftAsTheyAre() {
+        val b = block(line("First line", 0f, 200f), line("Second line", 0f, 200f, 130f, 142f))
+        val out = com.fadysaeed.pdfx.engine.joinBaselines(listOf(b))
+        assertEquals(listOf("First line", "Second line"), out.single().lines.map { it.text })
+    }
+}

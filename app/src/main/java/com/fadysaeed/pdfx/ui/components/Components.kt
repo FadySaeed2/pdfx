@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -225,13 +226,23 @@ fun InkField(
     label: String? = null,
     secret: Boolean = false,
     onDone: (() -> Unit)? = null,
+    /** Opens with the keyboard up and the words already selected, so typing replaces them (a rename). */
+    selectAll: Boolean = false,
+    /** A button at the end that empties the field in one tap. */
+    clearable: Boolean = false,
 ) {
-    val style = Type.body.copy(fontSize = 16.sp)
+    val style = Type.body.copy(fontSize = 16.sp, textDirection = androidx.compose.ui.text.style.TextDirection.Content)
+    var field by remember {
+        mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(value, androidx.compose.ui.text.TextRange(if (selectAll) 0 else value.length, value.length)))
+    }
+    if (field.text != value) field = field.copy(text = value, selection = androidx.compose.ui.text.TextRange(value.length))
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    if (selectAll) androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     Column(modifier) {
         if (label != null) Text(label, style = Type.small, modifier = Modifier.padding(bottom = 6.dp))
         BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
+            value = field,
+            onValueChange = { v -> field = v; if (v.text != value) onValueChange(v.text) },
             singleLine = true,
             textStyle = style.copy(color = Ink.Bone),
             cursorBrush = SolidColor(Ink.Amber),
@@ -241,7 +252,7 @@ fun InkField(
                 imeAction = ImeAction.Done,
             ),
             keyboardActions = KeyboardActions(onDone = { onDone?.invoke() }),
-            modifier = Modifier.fillMaxWidth().semantics { contentDescription = label ?: placeholder },
+            modifier = Modifier.fillMaxWidth().focusRequester(focus).semantics { contentDescription = label ?: placeholder },
             decorationBox = { inner ->
                 Row(
                     Modifier
@@ -256,6 +267,13 @@ fun InkField(
                     Box(Modifier.weight(1f)) {
                         if (value.isEmpty()) Text(placeholder, style = style.copy(color = Ink.Ash), maxLines = 1)
                         inner()
+                    }
+                    if (clearable && value.isNotEmpty()) {
+                        IconButton(Glyph.CLOSE, "Clear: empty the field", {
+                            field = androidx.compose.ui.text.input.TextFieldValue("")
+                            onValueChange("")
+                            runCatching { focus.requestFocus() }
+                        }, color = Ink.Dust, size = 40.dp)
                     }
                 }
             },

@@ -655,7 +655,7 @@ private fun TextAsk(title: String, initial: String, confirm: String, onDismiss: 
         text = {
             Column {
                 if (note != null) { Text(note, style = Type.note); Spacer(Modifier.height(10.dp)) }
-                InkField(text, { text = it }, "Name", onDone = { if (text.isNotBlank()) onConfirm(text) })
+                InkField(text, { text = it }, "Name", onDone = { if (text.isNotBlank()) onConfirm(text) }, selectAll = true, clearable = true)
             }
         },
         confirmButton = { AmberButton(confirm, { onConfirm(text) }, enabled = text.isNotBlank()) },
