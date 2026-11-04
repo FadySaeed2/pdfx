@@ -269,3 +269,11 @@ signatures, and a full pass on every screen for clarity.
   content the right way up on turned and cropped pages. Polish: shortcuts on the app icon (last
   file, scan, search), a short fade between library and file, haptics on long press, old
   thumbnails cleared. Viewer tests retry once only on Compose's own threading slip.
+- 2026-11-04: phase 8. "Edit text" tool: a tap picks a run of like words (one font, size, colour,
+  no wide gap); the new words replace it as one undoable step: the old glyphs are taken out by a
+  text-only redaction (pictures and lines kept), the new written at the same baseline and
+  direction, in the file's own font when it encodes every letter (spaces as gaps when the subset
+  has none), else the nearest base-14 font of the same kind; up to 25% longer is squeezed to fit;
+  on scans the picture is painted over in the commonest light colour under the words. The file
+  is then written whole (redactions forbid incremental saves). "Picture" tool: a chosen photo
+  placed as a stamp mark, moved, resized and flattened like any mark. Paragraph reflow stays out.
