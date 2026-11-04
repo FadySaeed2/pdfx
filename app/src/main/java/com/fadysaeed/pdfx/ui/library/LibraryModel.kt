@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -221,10 +222,18 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         bump.value++
     }
 
+    /**
+     * The library as the screen shows it. Worked out away from the screen's thread (with thousands
+     * of files it takes a good part of a tenth of a second), and only while the library is on
+     * screen: an open file saves its page as you read, and each save used to work the whole
+     * library out again on the screen's thread, which held up the scrolling for a frame or six.
+     */
     val ui: StateFlow<LibraryUi> = combine(combine(raw, place, sorts) { r, p, s -> Triple(r, p, s) }, query, extras, view) { (r, p, s), q, x, v ->
+        com.fadysaeed.pdfx.ui.viewer.ScrollCheck.event("library worked out")
         build(r, p, s[p.section] ?: defaultSort(p.section), q, x.res, x.access, v)
             .copy(picked = x.picks, selecting = x.selecting || x.picks.isNotEmpty())
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, LibraryUi())
+    }.flowOn(kotlinx.coroutines.Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryUi())
 
     private fun groupMarks(rows: List<com.fadysaeed.pdfx.data.MarkRow>, docs: List<Doc>): List<MarkGroup> {
         val byId = docs.filter { !it.inTrash }.associateBy { it.id }
