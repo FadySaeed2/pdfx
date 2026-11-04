@@ -329,7 +329,7 @@ class Library(
         val clean = newName.trim().removeSuffix(".pdf").removeSuffix(".PDF").trim()
         require(clean.isNotEmpty() && !clean.contains('/')) { "That name can't be used." }
         val dst = File(src.parentFile, "$clean.pdf")
-        if (dst.absolutePath == src.absolutePath) return@io d
+        if (dst.absolutePath == src.absolutePath) return@locked d
         if (dst.exists()) throw IOException("There is already a file called ${dst.name} in this folder.")
         if (!src.renameTo(dst)) throw IOException("The file could not be renamed.")
         val m = moved(d, src, dst)
@@ -356,7 +356,7 @@ class Library(
     suspend fun move(d0: Doc, dir: File): Result<Doc> = locked {
         val d = dao.byId(d0.id) ?: d0
         val src = fileOf(d)
-        if (src.parentFile?.absolutePath == dir.absolutePath) return@io d
+        if (src.parentFile?.absolutePath == dir.absolutePath) return@locked d
         dir.mkdirs()
         val dst = uniqueTarget(dir, src.name)
         relocate(src, dst)
@@ -509,12 +509,12 @@ class Library(
      * Moves the folder [src], with everything in it, into [dstParent] under [newName] (a rename when
      * the parent stays). Every file the library knows inside it follows, keeping its tags and place.
      */
-    suspend fun moveFolder(src: File, dstParent: File, newName: String = src.name): Result<File> = io {
+    suspend fun moveFolder(src: File, dstParent: File, newName: String = src.name): Result<File> = locked {
         val clean = newName.trim()
         require(clean.isNotEmpty() && !clean.contains('/') && !clean.startsWith(".")) { "That name can't be used." }
         require(src.isDirectory) { "That folder is no longer there." }
         val dst = File(dstParent, clean)
-        if (dst.absolutePath == src.absolutePath) return@io src
+        if (dst.absolutePath == src.absolutePath) return@locked src
         require(!dst.exists()) { "There is already a folder called $clean there." }
         require(!(dst.absolutePath + "/").startsWith(src.absolutePath + "/")) { "A folder can't go inside itself." }
         dstParent.mkdirs()
