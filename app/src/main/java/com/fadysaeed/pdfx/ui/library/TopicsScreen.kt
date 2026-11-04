@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -92,7 +93,8 @@ fun TopicsScreen(load: suspend ((Float, String) -> Unit) -> List<TopicGroup>, on
                             if (g.areaDocIds.isNotEmpty()) Text("${g.areaDocIds.size}", style = Type.figure)
                         }
                     }
-                    items(g.topics, key = { g.area + "/" + it.term }) { t ->
+                    // Two topics can read alike ("Antipsychotic" from two spellings): their place keeps them apart.
+                    itemsIndexed(g.topics, key = { i, t -> g.area + "/" + i + "/" + t.term }) { _, t ->
                         val on = t.term in picked
                         Row(
                             Modifier.fillMaxWidth().clickable { if (on) picked.remove(t.term) else picked.add(t.term) }.padding(start = 36.dp, end = 20.dp, top = 11.dp, bottom = 11.dp),

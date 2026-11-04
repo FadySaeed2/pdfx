@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -323,7 +324,8 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                             }
                         }
                     }
-                    items(g.marks, key = { m -> "m:${g.doc.id}:${m.page}:${m.quote.hashCode()}:${m.note.hashCode()}" }) { m -> MarkLine(m) { actions.open(g.doc, m.page) } }
+                    // Two marks can be alike in every way (a note copied, a highlight made twice): their place in the list tells them apart.
+                    itemsIndexed(g.marks, key = { i, _ -> "m:${g.doc.id}:$i" }) { _, m -> MarkLine(m) { actions.open(g.doc, m.page) } }
                     item(key = "mr:${g.doc.id}") { Hairline(Modifier.padding(start = 20.dp, top = 8.dp), color = Ink.Rule) }
                 }
             }
