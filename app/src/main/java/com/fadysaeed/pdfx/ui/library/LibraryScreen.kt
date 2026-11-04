@@ -95,6 +95,8 @@ private sealed interface Ask {
     data class NewFolderIn(val parent: String?) : Ask
     /** A new folder for the picked files, moved or copied there. */
     data class NewFolderForMany(val copy: Boolean) : Ask
+    /** The user's names on marks. */
+    data object Names : Ask
 }
 
 /** The library with all its menus. [onOpen] opens a document, optionally at a page. */
@@ -203,6 +205,8 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             peek = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); sheet = Sheet.Peek(it) },
             grid = vm::setGrid,
             filter = vm::setFilter,
+            marksMine = vm::setMarksMine,
+            names = { ask = Ask.Names },
         ),
     )
     merging?.let { start ->
@@ -462,6 +466,16 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
         ) { name ->
             val dir = vm.newFolder(name)
             if (dir != null) { if (a.copy) vm.copyMany(dir) else vm.moveMany(dir) }
+            ask = null
+        }
+        Ask.Names -> TextAsk(
+            title = "Your name on marks",
+            note = "New marks carry the first name, so other apps show who made them. Add the names other apps put on your marks too (as in Adobe or Xodo), with commas between, so the Highlights page knows them as yours.",
+            initial = ui.myNames.joinToString(", "),
+            confirm = "Save",
+            onDismiss = { ask = null },
+        ) { text ->
+            vm.setNames(text.split(','))
             ask = null
         }
         is Ask.NewTag -> NewTagAsk(onDismiss = { ask = null }) { name, color -> vm.createTag(name, color, a.doc); ask = null }

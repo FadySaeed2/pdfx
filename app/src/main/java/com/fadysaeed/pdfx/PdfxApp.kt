@@ -23,11 +23,14 @@ class PdfxApp : Application() {
     val scanReading: com.fadysaeed.pdfx.data.ScanReading by lazy { com.fadysaeed.pdfx.data.ScanReading(scope, library, saver) { TextIndexer.schedule(this) } }
     val signatures: com.fadysaeed.pdfx.data.Signatures by lazy { com.fadysaeed.pdfx.data.Signatures(filesDir) }
     val certificates: com.fadysaeed.pdfx.data.Certificates by lazy { com.fadysaeed.pdfx.data.Certificates(filesDir) }
+    val myNames: com.fadysaeed.pdfx.data.MyNames by lazy { com.fadysaeed.pdfx.data.MyNames(this) { certificates.list().map { it.name } } }
     private val scanLock = Mutex()
 
     override fun onCreate() {
         super.onCreate()
         com.fadysaeed.pdfx.data.CrashReports.install(this)
+        // New marks carry the user's name.
+        runCatching { myNames.apply() }
         // Arabic and other scripts in books and in PDFs that carry no font for them.
         runCatching { com.fadysaeed.pdfx.engine.Books.installSystemFonts() }
         watchStorage()

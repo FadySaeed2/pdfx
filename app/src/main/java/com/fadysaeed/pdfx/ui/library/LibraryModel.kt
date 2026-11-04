@@ -125,6 +125,12 @@ data class LibraryUi(
     val grid: Boolean = false,
     /** Every file's highlights and notes, on the Highlights page. */
     val marks: List<MarkGroup> = emptyList(),
+    /** Only the user's own marks on the Highlights page, not those that came in files from others. */
+    val marksMine: Boolean = true,
+    /** The names that are the user's on marks. */
+    val myNames: List<String> = emptyList(),
+    /** Marks left out for being others'. */
+    val othersMarks: Int = 0,
 )
 
 data class Notice(val text: String, val undo: (() -> Unit)? = null, val id: Long = System.nanoTime())
@@ -154,19 +160,27 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
 
     private val filter = MutableStateFlow(SearchFilter())
     private val grid = MutableStateFlow(prefs.getBoolean("grid", false))
+    private val marksMine = MutableStateFlow(prefs.getBoolean("marks_mine", true))
+    private val names = MutableStateFlow(pdfx.myNames.names())
 
     private val results = combine(query.debounce(180).distinctUntilChanged(), library.dao.observeUnindexed()) { q, _ -> q }
         .mapLatest { q -> if (q.isBlank()) null else search(q) }
 
     /** The Highlights page's marks, read only while it is open. */
-    private val marksFlow = combine(place, library.dao.observeAll()) { p, docs -> (p.section == Section.HIGHLIGHTS) to docs }
-        .mapLatest { (on, docs) -> if (!on) emptyList() else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { groupMarks(library.marks.all(), docs) } }
+    private val marksFlow = combine(place, library.dao.observeAll(), marksMine, names) { p, docs, mine, _ -> Triple(p.section == Section.HIGHLIGHTS, docs, mine) }
+        .mapLatest { (on, docs, mine) ->
+            if (!on) emptyList<MarkGroup>() to 0 else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val all = library.marks.all()
+                val shown = if (mine) all.filter { pdfx.myNames.mine(it.author) } else all
+                groupMarks(shown, docs) to (all.size - shown.size)
+            }
+        }
 
     private data class Extras(val res: SearchOut?, val access: Boolean, val picks: Set<Long>)
-    private data class View(val filter: SearchFilter, val grid: Boolean, val marks: List<MarkGroup>)
+    private data class View(val filter: SearchFilter, val grid: Boolean, val marks: Pair<List<MarkGroup>, Int>, val mine: Boolean, val names: List<String>)
 
     private val extras = combine(results, access, picks, pins, bump) { r, a, pk, _, _ -> Extras(r, a, pk) }
-    private val view = combine(filter, grid, marksFlow) { f, g, m -> View(f, g, m) }
+    private val view = combine(filter, grid, marksFlow, marksMine, names) { f, g, m, mine, n -> View(f, g, m, mine, n) }
 
     val ui: StateFlow<LibraryUi> = combine(combine(raw, place, sorts) { r, p, s -> Triple(r, p, s) }, query, extras, view) { (r, p, s), q, x, v ->
         build(r, p, s[p.section] ?: defaultSort(p.section), q, x.res, x.access, v)
@@ -182,6 +196,12 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     fun setFilter(f: SearchFilter) { filter.value = f }
 
     fun setGrid(on: Boolean) { grid.value = on; prefs.edit().putBoolean("grid", on).apply() }
+
+    /** Only the user's own marks on the Highlights page, or everyone's. */
+    fun setMarksMine(on: Boolean) { marksMine.value = on; prefs.edit().putBoolean("marks_mine", on).apply() }
+
+    /** The user's names on marks: the first goes into new marks. */
+    fun setNames(list: List<String>) { pdfx.myNames.set(list); names.value = pdfx.myNames.names() }
 
     fun refresh() {
         val had = access.value
@@ -571,7 +591,10 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             searchNote = out?.corrected?.takeIf { q.isNotBlank() },
             filter = v.filter,
             grid = v.grid,
-            marks = v.marks,
+            marks = v.marks.first,
+            othersMarks = v.marks.second,
+            marksMine = v.mine,
+            myNames = v.names,
             sort = s,
             hasAccess = access,
             unindexed = r.unindexed,

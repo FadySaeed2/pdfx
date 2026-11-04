@@ -167,6 +167,12 @@ class TextIndex(private val db: LibraryDb) {
             db.execSQL("CREATE TABLE IF NOT EXISTS marks(doc INTEGER NOT NULL, page INTEGER NOT NULL, kind TEXT NOT NULL, color INTEGER NOT NULL, quote TEXT NOT NULL, note TEXT NOT NULL)")
             db.execSQL("CREATE INDEX IF NOT EXISTS marks_doc ON marks(doc)")
             db.execSQL("CREATE TABLE IF NOT EXISTS marks_read(doc INTEGER PRIMARY KEY, modified INTEGER NOT NULL)")
+            // Marks kept before they knew their author: add the column, and have every file's marks read again.
+            val hasAuthor = db.query("PRAGMA table_info(marks)").use { c -> var found = false; while (c.moveToNext()) if (c.getString(1) == "author") found = true; found }
+            if (!hasAuthor) {
+                db.execSQL("ALTER TABLE marks ADD COLUMN author TEXT NOT NULL DEFAULT ''")
+                db.execSQL("DELETE FROM marks_read")
+            }
             db.execSQL("CREATE TABLE IF NOT EXISTS text_upgrade(last INTEGER NOT NULL)")
             db.execSQL("CREATE TABLE IF NOT EXISTS bookmarks(doc INTEGER NOT NULL, page INTEGER NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(doc, page))")
         }
@@ -227,7 +233,7 @@ object TextMath {
 }
 
 /** A highlight, underline, note or text box in a file, as the library keeps it for finding again. */
-data class MarkRow(val doc: Long, val page: Int, val kind: String, val color: Int, val quote: String, val note: String)
+data class MarkRow(val doc: Long, val page: Int, val kind: String, val color: Int, val quote: String, val note: String, val author: String = "")
 
 /**
  * Every highlight and note across the library, read from the files themselves (where PDFx and
@@ -242,8 +248,8 @@ class Marks(private val db: LibraryDb) {
         try {
             s.execSQL("DELETE FROM marks WHERE doc = ?", arrayOf<Any>(docId))
             for (m in marks) s.execSQL(
-                "INSERT INTO marks(doc, page, kind, color, quote, note) VALUES (?, ?, ?, ?, ?, ?)",
-                arrayOf<Any>(docId, m.page, m.kind, m.color, m.quote, m.note),
+                "INSERT INTO marks(doc, page, kind, color, quote, note, author) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                arrayOf<Any>(docId, m.page, m.kind, m.color, m.quote, m.note, m.author),
             )
             s.execSQL("INSERT OR REPLACE INTO marks_read(doc, modified) VALUES (?, ?)", arrayOf<Any>(docId, modified))
             s.setTransactionSuccessful()
@@ -259,14 +265,15 @@ class Marks(private val db: LibraryDb) {
         out
     }
 
-    fun all(): List<MarkRow> = rows("SELECT doc, page, kind, color, quote, note FROM marks ORDER BY doc, page", emptyArray())
+    /** Every highlight, underline and note (text boxes kept by earlier versions are left out). */
+    fun all(): List<MarkRow> = rows("SELECT doc, page, kind, color, quote, note, author FROM marks WHERE kind != 'TEXT' ORDER BY doc, page", emptyArray())
 
     /** Marks whose words or note have every one of [words] in them. */
     fun matching(words: List<String>): List<MarkRow> {
         if (words.isEmpty()) return emptyList()
         val where = words.joinToString(" AND ") { "(quote || ' ' || note) LIKE ? ESCAPE '\\'" }
         val args = words.map { "%" + it.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" }.toTypedArray<Any>()
-        return rows("SELECT doc, page, kind, color, quote, note FROM marks WHERE $where ORDER BY doc, page LIMIT 500", args)
+        return rows("SELECT doc, page, kind, color, quote, note, author FROM marks WHERE kind != 'TEXT' AND $where ORDER BY doc, page LIMIT 500", args)
     }
 
     fun clear(docId: Long) {
@@ -276,7 +283,7 @@ class Marks(private val db: LibraryDb) {
 
     private fun rows(q: String, args: Array<Any>): List<MarkRow> = sql.query(SimpleSQLiteQuery(q, args)).use { c ->
         val out = ArrayList<MarkRow>()
-        while (c.moveToNext()) out += MarkRow(c.getLong(0), c.getInt(1), c.getString(2) ?: "", c.getInt(3), c.getString(4) ?: "", c.getString(5) ?: "")
+        while (c.moveToNext()) out += MarkRow(c.getLong(0), c.getInt(1), c.getString(2) ?: "", c.getInt(3), c.getString(4) ?: "", c.getString(5) ?: "", c.getString(6) ?: "")
         out
     }
 }

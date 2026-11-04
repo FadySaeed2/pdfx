@@ -64,6 +64,8 @@ data class Mark(
     val path: List<List<Pair<Float, Float>>> = emptyList(),
     /** How a text box looks; null for other marks. */
     val style: BoxStyle? = null,
+    /** Who made it, as the file says; empty when it does not say. */
+    val author: String = "",
 ) {
     /** How far a point is from the mark itself (0 when it is on it), in PDF points. */
     fun distanceTo(x: Float, y: Float): Float = when {
@@ -512,7 +514,7 @@ class PdfSession private constructor(
 
     /** A picture placed on the page in [box]: it can be moved and resized like any mark, and flattened into the page. */
     suspend fun addPicture(index: Int, box: Box, imagePath: String) = edit("Picture", index) {
-        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_STAMP)
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_STAMP).signed()
         a.rect = Rect(box.x0, box.y0, box.x1, box.y1)
         val img = com.artifex.mupdf.fitz.Image(imagePath)
         try {
@@ -525,7 +527,7 @@ class PdfSession private constructor(
 
     /** A picture (a photographed signature) placed on the page in [box]. */
     suspend fun addImageStamp(index: Int, box: Box, imagePath: String) = edit("Signature", index) {
-        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_STAMP)
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_STAMP).signed()
         a.rect = Rect(box.x0, box.y0, box.x1, box.y1)
         val img = com.artifex.mupdf.fitz.Image(imagePath)
         try {
@@ -716,6 +718,9 @@ class PdfSession private constructor(
 
     private fun pdfPage(index: Int): PDFPage = page(index) as PDFPage
 
+    /** A new mark carries the user's name (see [author]), as other apps do, so it can be told from others' marks. */
+    private fun PDFAnnotation.signed(): PDFAnnotation = also { a -> runCatching { a.author = PdfSession.author } }
+
     private fun kindOf(t: Int, a: PDFAnnotation): MarkKind = when (t) {
         PDFAnnotation.TYPE_HIGHLIGHT -> MarkKind.HIGHLIGHT
         PDFAnnotation.TYPE_UNDERLINE -> MarkKind.UNDERLINE
@@ -762,7 +767,8 @@ class PdfSession private constructor(
             val width = if (kind in setOf(MarkKind.INK, MarkKind.SQUARE, MarkKind.CIRCLE, MarkKind.LINE, MarkKind.ARROW)) runCatching { a.borderWidth }.getOrDefault(1f) else 0f
             val contents = runCatching { a.contents ?: "" }.getOrDefault("")
             val style = if (kind == MarkKind.TEXT) runCatching { styleOf(a, contents, da?.size ?: 12f, color) }.getOrNull() else null
-            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), style?.color ?: color, contents, quoted, style?.size ?: da?.size ?: 0f, opacity, width, parts, path, style)
+            val by = runCatching { if (a.hasAuthor()) a.author.orEmpty() else "" }.getOrDefault("")
+            out += Mark(index, i, kind, Box(r.x0, r.y0, r.x1, r.y1), style?.color ?: color, contents, quoted, style?.size ?: da?.size ?: 0f, opacity, width, parts, path, style, by)
         }
         return out
     }
@@ -775,7 +781,8 @@ class PdfSession private constructor(
      */
     suspend fun marksToKeep(): List<Mark> = onDoc {
         val d = pdf ?: return@onDoc emptyList()
-        val keep = setOf(MarkKind.HIGHLIGHT, MarkKind.UNDERLINE, MarkKind.STRIKE, MarkKind.SQUIGGLY, MarkKind.NOTE, MarkKind.TEXT)
+        // Text boxes are left out: files often carry them as part of their look (a journal's name, a form's words).
+        val keep = setOf(MarkKind.HIGHLIGHT, MarkKind.UNDERLINE, MarkKind.STRIKE, MarkKind.SQUIGGLY, MarkKind.NOTE)
         (0 until pageCount).filter { i -> runCatching { d.findPage(i).get("Annots").let { !it.isNull && it.size() > 0 } }.getOrDefault(false) }
             .flatMap { i -> runCatching { marksNow(i) }.getOrDefault(emptyList()) }
             .filter { it.kind in keep && (it.quoted.isNotBlank() || it.note.isNotBlank()) }
@@ -792,7 +799,7 @@ class PdfSession private constructor(
             MarkKind.SQUIGGLY -> PDFAnnotation.TYPE_SQUIGGLY
             else -> PDFAnnotation.TYPE_HIGHLIGHT
         }
-        val a = pdfPage(index).createAnnotation(t)
+        val a = pdfPage(index).createAnnotation(t).signed()
         a.setQuadPoints(boxes.map { Quad(Rect(it.x0, it.y0, it.x1, it.y1)) }.toTypedArray())
         a.color = rgb(color)
         if (opacity < 1f) a.opacity = opacity.coerceIn(0.1f, 1f)
@@ -916,7 +923,7 @@ class PdfSession private constructor(
 
     /** Freehand ink. [opacity] below 1 makes a marker. */
     suspend fun addInk(index: Int, strokes: List<Stroke>, color: Int, width: Float, opacity: Float = 1f) = edit("Draw", index) {
-        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_INK)
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_INK).signed()
         a.setInkList(strokes.filter { it.size >= 2 }.map { s -> s.map { Point(it.first, it.second) }.toTypedArray() }.toTypedArray())
         a.color = rgb(color)
         a.borderWidth = width
@@ -928,7 +935,7 @@ class PdfSession private constructor(
         val p = pdfPage(index)
         when (kind) {
             MarkKind.LINE, MarkKind.ARROW -> {
-                val a = p.createAnnotation(PDFAnnotation.TYPE_LINE)
+                val a = p.createAnnotation(PDFAnnotation.TYPE_LINE).signed()
                 a.setLine(Point(x0, y0), Point(x1, y1))
                 if (kind == MarkKind.ARROW) a.setLineEndingStyles(PDFAnnotation.LINE_ENDING_NONE, PDFAnnotation.LINE_ENDING_OPEN_ARROW)
                 a.color = rgb(color)
@@ -936,7 +943,7 @@ class PdfSession private constructor(
                 a.update()
             }
             else -> {
-                val a = p.createAnnotation(if (kind == MarkKind.CIRCLE) PDFAnnotation.TYPE_CIRCLE else PDFAnnotation.TYPE_SQUARE)
+                val a = p.createAnnotation(if (kind == MarkKind.CIRCLE) PDFAnnotation.TYPE_CIRCLE else PDFAnnotation.TYPE_SQUARE).signed()
                 a.rect = Rect(minOf(x0, x1), minOf(y0, y1), maxOf(x0, x1), maxOf(y0, y1))
                 a.color = rgb(color)
                 a.borderWidth = width
@@ -957,7 +964,7 @@ class PdfSession private constructor(
         val w = (lines.maxOf { it.length } * size * (if (style.font == BoxFont.MONO) 0.62f else 0.55f) + size * 1.4f).coerceIn(size * 3, pageW * 0.9f)
         val rtl = style.rtl(lines.firstOrNull { it.isNotBlank() } ?: "")
         val x0 = (if (rtl) x - w else x).coerceIn(0f, (pageW - w).coerceAtLeast(0f))
-        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_FREE_TEXT)
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_FREE_TEXT).signed()
         a.rect = Rect(x0, y, x0 + w, y + textHeight(text, w, style))
         applyText(a, text, style)
         a.update()
@@ -1003,7 +1010,7 @@ class PdfSession private constructor(
 
     /** A sticky note: an icon on the page that opens to show its words. */
     suspend fun addNote(index: Int, x: Float, y: Float, text: String, color: Int) = edit("Note", index) {
-        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_TEXT)
+        val a = pdfPage(index).createAnnotation(PDFAnnotation.TYPE_TEXT).signed()
         a.rect = Rect(x, y, x + 20f, y + 20f)
         a.contents = text
         a.icon = "Comment"
@@ -1397,6 +1404,9 @@ class PdfSession private constructor(
     }
 
     companion object {
+        /** The name new marks carry: the user's, once given, else "PDFx". */
+        @Volatile var author: String = "PDFx"
+
         private fun newThread(): ExecutorCoroutineDispatcher =
             Executors.newSingleThreadExecutor { r -> Thread(r, "pdfx-doc").apply { isDaemon = true } }
                 .asCoroutineDispatcher()

@@ -296,7 +296,13 @@ class LibraryRulesOnDeviceTest {
             val note = p.createAnnotation(com.artifex.mupdf.fitz.PDFAnnotation.TYPE_TEXT)
             note.rect = com.artifex.mupdf.fitz.Rect(300f, 20f, 320f, 40f)
             note.contents = "Ask the GP about ramipril"
+            note.author = "Dr Someone Else"
             note.update()
+            // A text box, as journals and forms carry for their own look: not a highlight or a note.
+            val box = p.createAnnotation(com.artifex.mupdf.fitz.PDFAnnotation.TYPE_FREE_TEXT)
+            box.rect = com.artifex.mupdf.fitz.Rect(40f, 260f, 300f, 290f)
+            box.contents = "Journal of Affective Disorders"
+            box.update()
             p.destroy()
             d.save(f.absolutePath, "")
         } finally {
@@ -308,7 +314,22 @@ class LibraryRulesOnDeviceTest {
         val marks = lib.marks.all()
         assertEquals(marks.toString(), 2, marks.size)
         assertTrue(marks.any { it.kind == "HIGHLIGHT" && it.quote.contains("Lithium levels") })
-        assertTrue(marks.any { it.kind == "NOTE" && it.note == "Ask the GP about ramipril" })
+        assertTrue(marks.any { it.kind == "NOTE" && it.note == "Ask the GP about ramipril" && it.author == "Dr Someone Else" })
+        assertTrue("text boxes are left out", marks.none { it.note.contains("Journal") })
+        // Whose marks are whose.
+        val names = com.fadysaeed.pdfx.data.MyNames(ctx) { listOf("Fady Saeed") }
+        names.set(emptyList())
+        ctx.getSharedPreferences("marks", 0).edit().clear().commit()
+        assertTrue(names.mine("fady saeed"))
+        assertTrue("unsigned marks count as the user's", names.mine(""))
+        assertTrue(names.mine("PDFx"))
+        assertFalse(names.mine("Dr Someone Else"))
+        names.set(listOf("Fady", "fsaeed"))
+        assertTrue(names.mine("FSAEED"))
+        assertFalse("the certificate's name no longer stands in once names are given", names.mine("Fady Saeed"))
+        assertEquals("Fady", com.fadysaeed.pdfx.engine.PdfSession.author)
+        ctx.getSharedPreferences("marks", 0).edit().clear().commit()
+        names.apply()
         assertEquals(db.dao().byId(doc.id)!!.modified, lib.marks.readAt()[doc.id])
     }
 

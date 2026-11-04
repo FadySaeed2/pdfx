@@ -55,7 +55,7 @@ class TextIndexer(private val context: Context, private val library: Library) {
     private suspend fun keepMarks(d: Doc, s: PdfSession) {
         val marks = runCatching { s.marksToKeep() }.getOrDefault(emptyList())
         withContext(Dispatchers.IO) {
-            library.marks.replace(d.id, d.modified, marks.map { m -> MarkRow(d.id, m.page, m.kind.name, m.color, m.quoted.take(2000), m.note.take(4000)) })
+            library.marks.replace(d.id, d.modified, marks.map { m -> MarkRow(d.id, m.page, m.kind.name, m.color, m.quoted.take(2000), m.note.take(4000), m.author.take(200)) })
         }
     }
 

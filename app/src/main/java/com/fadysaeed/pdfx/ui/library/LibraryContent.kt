@@ -108,6 +108,10 @@ class LibraryActions(
     val grid: (Boolean) -> Unit = {},
     /** Narrows the search results. */
     val filter: (SearchFilter) -> Unit = {},
+    /** Highlights: only the user's own, or everyone's. */
+    val marksMine: (Boolean) -> Unit = {},
+    /** Asks for the user's names on marks. */
+    val names: () -> Unit = {},
 )
 
 @Composable
@@ -314,7 +318,26 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                 item { Box(Modifier.padding(20.dp)) { GhostButton("New tag", actions.newTag) } }
             }
             p.section == Section.HIGHLIGHTS -> {
-                if (ui.marks.isEmpty()) item { EmptyNote(emptyText(p)) }
+                item(key = "marks-whose") {
+                    Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Chip("Mine", { actions.marksMine(true) }, selected = ui.marksMine)
+                            Chip("Everyone's", { actions.marksMine(false) }, selected = !ui.marksMine)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        val who = ui.myNames.firstOrNull()
+                        Text(
+                            (if (ui.marksMine) "Marks made in PDFx, marks signed " + (if (ui.myNames.isEmpty()) "with your name" else ui.myNames.joinToString(" or ") { "“$it”" }) + ", and marks no one signed." +
+                                (if (ui.othersMarks > 0) " ${ui.othersMarks} from others are left out." else "")
+                            else "Every highlight and note in your files, whoever made them.") +
+                                " New marks carry " + (who?.let { "your name, “$it”." } ?: "“PDFx”: add your name so other apps show it."),
+                            style = Type.small,
+                        )
+                        Text(if (who == null) "Add your name" else "Change your names", style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 14.sp), modifier = Modifier.clickable(onClick = actions.names).padding(vertical = 8.dp))
+                    }
+                    Hairline(Modifier.padding(horizontal = 20.dp), color = Ink.Rule)
+                }
+                if (ui.marks.isEmpty()) item { EmptyNote(if (ui.marksMine && ui.othersMarks > 0) "None of your own yet. The ${ui.othersMarks} marks in your files came from others: Everyone's shows them." else emptyText(p)) }
                 for (g in ui.marks) {
                     item(key = "mh:${g.doc.id}") {
                         Row(Modifier.fillMaxWidth().clickable { actions.open(g.doc, null) }.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
