@@ -2,6 +2,11 @@ package com.fadysaeed.pdfx.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -74,7 +79,11 @@ fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
     }
 }
 
-enum class Glyph { BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK, BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN, PEN, UNDO, REDO, REFLOW, GRID, TURN_LEFT, TURN_RIGHT, EXTRACT }
+enum class Glyph {
+    BACK, CLOSE, PLUS, PAGE, LOCK, STAR, STAR_FILLED, MORE, SEARCH, FOLDER, TAG, TRASH, RESTORE, RENAME, MOVE, COPY, SHARE, OPEN, SORT, CHECK,
+    BOOKMARK, BOOKMARK_FILLED, LIST, MOON, UP, DOWN, PEN, UNDO, REDO, REFLOW, GRID, TURN_LEFT, TURN_RIGHT, EXTRACT,
+    TOOLS, POINTER, HIGHLIGHTER, SIGNATURE, EDIT_TEXT, SELECT_MANY,
+}
 
 /** Line glyphs drawn in code, so every icon shares one stroke weight and the app ships no icon font. */
 @Composable
@@ -242,6 +251,49 @@ fun GlyphIcon(glyph: Glyph, color: Color, size: Dp = 22.dp) {
                 drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
                 line(0.44f, 0.5f, 0.84f, 0.14f); line(0.84f, 0.14f, 0.64f, 0.14f); line(0.84f, 0.14f, 0.84f, 0.32f)
             }
+            Glyph.TOOLS -> {
+                // A spanner: a ring with its jaw open at the top right, and its handle.
+                drawArc(color, 60f, 290f, false, Offset(s * 0.5f, s * 0.14f), Size(s * 0.34f, s * 0.34f), style = Stroke(width = w, cap = StrokeCap.Round))
+                line(0.56f, 0.44f, 0.2f, 0.8f)
+                line(0.26f, 0.86f, 0.14f, 0.74f)
+            }
+            Glyph.POINTER -> {
+                // An arrow pointer: picking a mark to move it.
+                val p = Path().apply {
+                    moveTo(s * 0.26f, s * 0.14f); lineTo(s * 0.26f, s * 0.78f); lineTo(s * 0.42f, s * 0.62f)
+                    lineTo(s * 0.54f, s * 0.86f); lineTo(s * 0.64f, s * 0.81f); lineTo(s * 0.52f, s * 0.58f); lineTo(s * 0.74f, s * 0.58f); close()
+                }
+                drawPath(p, color, style = Stroke(width = w, join = StrokeJoin.Round))
+            }
+            Glyph.HIGHLIGHTER -> {
+                // A line of words with a broad stroke over it.
+                drawRect(color.copy(alpha = 0.45f), Offset(s * 0.14f, s * 0.36f), Size(s * 0.72f, s * 0.24f))
+                line(0.2f, 0.48f, 0.8f, 0.48f)
+                line(0.2f, 0.76f, 0.62f, 0.76f)
+            }
+            Glyph.SIGNATURE -> {
+                // A signed loop over the line it is signed on.
+                val p = Path().apply {
+                    moveTo(s * 0.14f, s * 0.62f)
+                    cubicTo(s * 0.26f, s * 0.2f, s * 0.38f, s * 0.2f, s * 0.36f, s * 0.5f)
+                    cubicTo(s * 0.34f, s * 0.74f, s * 0.5f, s * 0.36f, s * 0.6f, s * 0.46f)
+                    cubicTo(s * 0.68f, s * 0.54f, s * 0.74f, s * 0.5f, s * 0.86f, s * 0.38f)
+                }
+                drawPath(p, color, style = Stroke(width = w, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                line(0.14f, 0.8f, 0.86f, 0.8f)
+            }
+            Glyph.EDIT_TEXT -> {
+                // A T with a typing cursor beside it.
+                line(0.16f, 0.22f, 0.56f, 0.22f); line(0.36f, 0.22f, 0.36f, 0.8f)
+                line(0.72f, 0.3f, 0.72f, 0.82f); line(0.64f, 0.3f, 0.8f, 0.3f); line(0.64f, 0.82f, 0.8f, 0.82f)
+            }
+            Glyph.SELECT_MANY -> {
+                // Two ticked boxes: picking several.
+                drawRoundRect(color, Offset(s * 0.14f, s * 0.14f), Size(s * 0.32f, s * 0.32f), androidx.compose.ui.geometry.CornerRadius(s * 0.05f), style = Stroke(width = w))
+                drawRoundRect(color, Offset(s * 0.54f, s * 0.54f), Size(s * 0.32f, s * 0.32f), androidx.compose.ui.geometry.CornerRadius(s * 0.05f), style = Stroke(width = w))
+                line(0.2f, 0.3f, 0.28f, 0.38f); line(0.28f, 0.38f, 0.4f, 0.22f)
+                line(0.6f, 0.7f, 0.68f, 0.78f); line(0.68f, 0.78f, 0.8f, 0.62f)
+            }
             Glyph.UP -> { line(0.24f, 0.62f, 0.5f, 0.36f); line(0.5f, 0.36f, 0.76f, 0.62f) }
             Glyph.DOWN -> { line(0.24f, 0.38f, 0.5f, 0.64f); line(0.5f, 0.64f, 0.76f, 0.38f) }
         }
@@ -249,16 +301,35 @@ fun GlyphIcon(glyph: Glyph, color: Color, size: Dp = 22.dp) {
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 fun IconButton(glyph: Glyph, description: String, onClick: () -> Unit, modifier: Modifier = Modifier, color: Color = Ink.Bone, size: Dp = 48.dp) {
+    // A long press says what the button does, as Android's own buttons do.
+    var tip by remember { mutableStateOf(false) }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    androidx.compose.runtime.LaunchedEffect(tip) { if (tip) { kotlinx.coroutines.delay(1600); tip = false } }
     Box(
         modifier
             .size(size)
             .clip(Corner)
             .semantics { contentDescription = description }
-            .clickable(role = Role.Button, onClick = onClick),
+            .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                tip = true
+            }),
         contentAlignment = Alignment.Center,
     ) {
         GlyphIcon(glyph, color)
+        if (tip) androidx.compose.ui.window.Popup(
+            alignment = Alignment.BottomCenter,
+            offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 44.dp.roundToPx() }),
+            onDismissRequest = { tip = false },
+        ) {
+            Text(
+                description.substringBefore(':'),
+                style = Type.small.copy(color = Ink.Black),
+                modifier = Modifier.background(Ink.Bone, Corner).padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
     }
 }
 
@@ -318,7 +389,8 @@ fun InkField(
 fun Chip(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false) {
     Box(
         modifier
-            .heightIn(min = 38.dp)
+            // Easy to hit with a thumb: Android's 48 dp.
+            .heightIn(min = 48.dp)
             .clip(Corner)
             .background(if (selected) Ink.Bone else Color.Transparent)
             .border(1.dp, if (selected) Ink.Bone else Ink.Rule, Corner)

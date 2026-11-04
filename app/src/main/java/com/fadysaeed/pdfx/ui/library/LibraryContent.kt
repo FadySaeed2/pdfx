@@ -94,6 +94,8 @@ class LibraryActions(
     /** Picks a file to act on with others (or unpicks it). */
     val pickDoc: (Doc) -> Unit = {},
     val pickAll: () -> Unit = {},
+    /** Starts picking files: each tap picks one until Cancel. */
+    val select: () -> Unit = {},
     val clearPicks: () -> Unit = {},
     /** What to do with the picked files: "move", "copy", "tag", "share", "trash", "more". */
     val many: (String) -> Unit = {},
@@ -156,10 +158,10 @@ fun LibraryContent(
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 20.dp, vertical = 12.dp),
         ) {
-            if (ui.picked.isNotEmpty()) PickBar(ui.picked.size, ui.items.size, actions)
+            if (ui.selecting) PickBar(ui.picked.size, ui.items.size, actions)
             else Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 AmberButton("Scan", actions.scan, Modifier.weight(1f))
-                GhostButton("Open a file", actions.pick, Modifier.weight(1f), minHeight = 52.dp)
+                GhostButton("Open or convert", actions.pick, Modifier.weight(1f), minHeight = 52.dp)
             }
         }
     }
@@ -202,8 +204,7 @@ private fun SearchField(value: String, onChange: (String) -> Unit, modifier: Mod
 @Composable
 private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (Doc) -> ImageBitmap?, now: Long, label: (String?) -> String) {
     val p = ui.place
-    val nested = p.inFolder || p.tagId != null || p.shelf != null
-    val picking = ui.picked.isNotEmpty()
+    val nested = p.inFolder || p.tagId != null || p.shelf != null || p.section == Section.TRASH
     LazyColumn(Modifier.fillMaxSize()) {
         item(key = "head") {
             Column(Modifier.padding(horizontal = 20.dp)) {
@@ -228,7 +229,24 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Section.entries.forEach { s -> Chip(s.label, { actions.section(s) }, selected = p.section == s) }
+                // Folders and the trash live inside All files: a view of it, and a row at its end.
+                LIBRARY_CHIPS.forEach { s ->
+                    Chip(s.label, { actions.section(s) }, selected = p.section == s || (s == Section.ALL && p.section in setOf(Section.FOLDERS, Section.TRASH)))
+                }
+            }
+        }
+        if (p.section in setOf(Section.ALL, Section.FOLDERS) && !p.inFolder) {
+            item(key = "all-view") {
+                Row(
+                    Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Show", style = Type.note)
+                    Spacer(Modifier.width(4.dp))
+                    Chip("Every file", { actions.section(Section.ALL) }, selected = p.section == Section.ALL)
+                    Chip("By folder", { actions.section(Section.FOLDERS) }, selected = p.section == Section.FOLDERS)
+                }
             }
         }
         if (!ui.hasAccess && p.section in setOf(Section.ALL, Section.FOLDERS, Section.RECENT)) {
@@ -271,6 +289,7 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                 item(key = "new-folder") {
                     Text("New folder", style = Type.bodyStrong.copy(color = Ink.Amber), modifier = Modifier.clickable { actions.newFolder(null) }.padding(horizontal = 20.dp, vertical = 16.dp))
                 }
+                trashRow(ui, actions)
             }
             p.section == Section.FOLDERS && p.inFolder -> {
                 if (ui.crumbs.size > 1) item(key = "crumbs") {
@@ -355,9 +374,35 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
             else -> {
                 if (ui.loaded && ui.items.isEmpty()) item { EmptyNote(emptyText(p)) }
                 docs(ui, actions, thumb, now, label, showFolder = p.section != Section.FOLDERS)
+                if (p.section == Section.ALL) trashRow(ui, actions)
             }
         }
         item { Spacer(Modifier.height(80.dp)) }
+    }
+}
+
+/** The sections across the top; Folders and Trash are reached from All files. */
+private val LIBRARY_CHIPS = listOf(Section.RECENT, Section.SHELVES, Section.ALL, Section.STARRED, Section.HIGHLIGHTS, Section.TAGS)
+
+/** The trash, as a row at the end of All files. */
+private fun androidx.compose.foundation.lazy.LazyListScope.trashRow(ui: LibraryUi, actions: LibraryActions) {
+    if (ui.trashCount == 0 || ui.selecting) return
+    item(key = "trash-row") {
+        Column {
+            Hairline(Modifier.padding(horizontal = 20.dp), color = Ink.Rule)
+            Row(
+                Modifier.fillMaxWidth().clickable { actions.section(Section.TRASH) }.padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GlyphIcon(Glyph.TRASH, Ink.Dust, size = 20.dp)
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Trash", style = Type.bodyStrong)
+                    Text((if (ui.trashCount == 1) "1 file" else "${ui.trashCount} files") + ", kept for 30 days", style = Type.small)
+                }
+                Text("›", style = Type.bodyStrong.copy(color = Ink.Dust))
+            }
+        }
     }
 }
 
@@ -385,6 +430,7 @@ private fun SubLine(ui: LibraryUi, actions: LibraryActions) {
                 Spacer(Modifier.width(6.dp))
                 Text(ui.sort.by.label + if (ui.sort.descending) "  ↓" else "  ↑", style = Type.note.copy(color = Ink.Sand))
             }
+            if (!ui.selecting) IconButton(Glyph.SELECT_MANY, "Select: pick several files to move, tag or share", actions.select, color = Ink.Dust, size = 40.dp)
             IconButton(if (ui.grid) Glyph.LIST else Glyph.GRID, if (ui.grid) "Show as a list" else "Show as a grid", { actions.grid(!ui.grid) }, color = Ink.Dust, size = 40.dp)
         }
     }
@@ -550,7 +596,7 @@ private fun TagLine(t: TagCount, onClick: () -> Unit, onMore: () -> Unit) {
 
 /** The files of the open place, as lines or as a grid of first pages, three a row. */
 private fun androidx.compose.foundation.lazy.LazyListScope.docs(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (Doc) -> ImageBitmap?, now: Long, label: (String?) -> String, showFolder: Boolean) {
-    val picking = ui.picked.isNotEmpty()
+    val picking = ui.selecting
     if (ui.grid) {
         items(ui.items.chunked(3), key = { row -> "g:" + row.first().doc.id }) { row ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -753,14 +799,14 @@ private fun meta(d: Doc, now: Long, showFolder: Boolean, label: (String?) -> Str
 private fun PickBar(count: Int, total: Int, actions: LibraryActions) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (count == 1) "1 file picked" else "$count files picked", style = Type.bodyStrong, modifier = Modifier.weight(1f))
+            Text(if (count == 0) "Tap files to pick them" else if (count == 1) "1 file picked" else "$count files picked", style = Type.bodyStrong, modifier = Modifier.weight(1f))
             if (count < total) Text("Pick all", style = Type.bodyStrong.copy(color = Ink.Amber), modifier = Modifier.clickable(onClick = actions.pickAll).padding(8.dp))
             Text("Cancel", style = Type.bodyStrong.copy(color = Ink.Dust), modifier = Modifier.clickable(onClick = actions.clearPicks).padding(8.dp))
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((label, key) in listOf("Move" to "move", "Tag" to "tag", "Trash" to "trash", "More" to "more")) {
-                GhostButton(label, { actions.many(key) }, Modifier.weight(1f), minHeight = 46.dp)
+                GhostButton(label, { if (count > 0) actions.many(key) }, Modifier.weight(1f), color = if (count > 0) Ink.Bone else Ink.Ash, minHeight = 46.dp)
             }
         }
     }

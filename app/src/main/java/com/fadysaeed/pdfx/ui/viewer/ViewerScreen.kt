@@ -202,6 +202,8 @@ fun ViewerScreen(
     var saveError by remember(request) { mutableStateOf<String?>(null) }
     /** A message to show once the file is open again after saving. */
     var notice by remember(request) { mutableStateOf<String?>(null) }
+    /** Set after a tool changed this file in place: the message, with Undo putting the file back as it was. */
+    var undoKept by remember(request) { mutableStateOf<Pair<String, String?>?>(null) }
     /** Carried across a save and reopen: the pages on screen, and the place being read (page, pixels into it). */
     val carry = remember(request) { arrayOfNulls<PageImages>(1) }
     var spot by remember(request) { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -460,8 +462,14 @@ fun ViewerScreen(
                         after()
                         r.fold({ saved ->
                             tool = null
+                            val before = password
                             password = passwordAfter
-                            reopen(saved, message, "This file belongs to another app, so the new one is in Documents/PDFx.", keepPlace = true)
+                            if (saved is Saver.Saved.InPlace) {
+                                undoKept = message to before
+                                reopen(saved, null, "", keepPlace = true)
+                            } else {
+                                reopen(saved, message, "This file belongs to another app, so the new one is in Documents/PDFx.", keepPlace = true)
+                            }
                         }) { toolNote = it.message ?: "The file could not be saved." }
                     }
                 }
@@ -679,7 +687,12 @@ fun ViewerScreen(
                         organizing = false
                         r.fold({ saved ->
                             closePages()
-                            reopen(saved, "Pages saved.", "This file belongs to another app, so the new arrangement is in Documents/PDFx.", keepPlace = false)
+                            if (saved is Saver.Saved.InPlace) {
+                                undoKept = "Pages saved." to password
+                                reopen(saved, null, "", keepPlace = false)
+                            } else {
+                                reopen(saved, "Pages saved.", "This file belongs to another app, so the new arrangement is in Documents/PDFx.", keepPlace = false)
+                            }
                         }) { o.note = it.message ?: "The pages could not be saved." }
                     }
                 }
@@ -714,6 +727,21 @@ fun ViewerScreen(
                 if (listState.firstVisibleItemIndex != i || listState.firstVisibleItemScrollOffset != o) listState.scrollToItem(i, o)
             }
             LaunchedEffect(reader) { notice?.let { reader.problem = it; notice = null } }
+            LaunchedEffect(reader) {
+                val (kept, passwordBefore) = undoKept ?: return@LaunchedEffect
+                undoKept = null
+                reader.undoAction = {
+                    val d = doc
+                    val last = d?.let { app.library.versions.list(it.id).firstOrNull() }
+                    if (d != null && last != null) scope.launch {
+                        app.saver.restore(d, last).fold(
+                            { back -> password = passwordBefore; reopen(Saver.Saved.InPlace(back), "Put back as it was.", "", keepPlace = true) },
+                            { reader.problem = it.message ?: "The file could not be put back." },
+                        )
+                    }
+                }
+                reader.undoNotice = kept
+            }
             LaunchedEffect(reader) { reader.countRedactions() }
             LaunchedEffect(reader) { if (wantPages) { wantPages = false; openPages() } }
             LaunchedEffect(reader) { wantTool?.let { wantTool = null; openTool(it) } }
@@ -985,7 +1013,14 @@ fun ViewerContent(
 
     LaunchedEffect(reader.backTo) { if (reader.backTo != null) { delay(6000); reader.backTo = null } }
     LaunchedEffect(flash) { val f = flash; if (f != null) { delay(1600L + (f.length - 20).coerceAtLeast(0) * 45L); flash = null } }
-    LaunchedEffect(reader.undoNotice) { if (reader.undoNotice != null) { delay(4500); reader.undoNotice = null } }
+    LaunchedEffect(reader.undoNotice) {
+        val n = reader.undoNotice
+        if (n != null) {
+            delay(if (reader.undoAction != null) 8000L + (n.length - 20).coerceAtLeast(0) * 45L else 4500L)
+            reader.undoNotice = null
+            reader.undoAction = null
+        }
+    }
     LaunchedEffect(reader.problem) { reader.problem?.let { flash = it; reader.problem = null } }
 
     Box(Modifier.fillMaxSize().background(Ink.Black)) {
@@ -1040,11 +1075,12 @@ fun ViewerContent(
                             Text(name, style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(if (pageCount == 1) "1 page" else "$pageCount pages", style = Type.small)
                         }
-                        IconButton(Glyph.SEARCH, "Find in document", { reader.searchOpen = true }, color = Ink.Sand, size = 42.dp)
-                        IconButton(Glyph.REFLOW, if (reader.reflow) "Show the pages" else "Reflow text for reading", ::toggleReflow, color = if (reader.reflow) Ink.Amber else Ink.Sand, size = 42.dp)
-                        if (reader.canMark && !reader.reflow) IconButton(Glyph.PEN, "Mark up", reader::startMarking, color = Ink.Sand, size = 42.dp)
-                        // The rest live under one button, so the file's name has room.
-                        IconButton(Glyph.MORE, "More: bookmark, contents, pages, page colours", { sheet = ViewerSheet.MORE }, color = Ink.Sand, size = 42.dp)
+                        // Find, mark up, the file's tools, and reading settings: in that order, each with its name on a long press.
+                        IconButton(Glyph.SEARCH, "Find: words in this file", { reader.searchOpen = true }, color = Ink.Sand, size = 44.dp)
+                        if (reader.canMark && !reader.reflow) IconButton(Glyph.PEN, "Mark up: highlight, draw, add, sign, edit", reader::startMarking, color = Ink.Sand, size = 44.dp)
+                        if (reader.reflow) IconButton(Glyph.REFLOW, "Pages: back to the pages as they are", ::toggleReflow, color = Ink.Amber, size = 44.dp)
+                        else if (reader.canMark) IconButton(Glyph.TOOLS, "Tools: convert, protect, pages, size", { sheet = ViewerSheet.TOOLS }, color = Ink.Sand, size = 44.dp)
+                        IconButton(Glyph.MORE, "More: bookmarks, contents, reading view", { sheet = ViewerSheet.MORE }, color = Ink.Sand, size = 44.dp)
                     }
                 }
                 Hairline(color = Ink.Rule)
@@ -1113,9 +1149,14 @@ fun ViewerContent(
                     Modifier.background(Ink.Field, Corner).border(1.dp, Ink.Edge, Corner).padding(start = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(undo, style = Type.note.copy(color = Ink.Bone))
+                    Text(undo, style = Type.note.copy(color = Ink.Bone), modifier = Modifier.weight(1f, fill = false))
                     Spacer(Modifier.width(6.dp))
-                    BarAction("Undo") { reader.undoNotice = null; reader.undo() }
+                    BarAction("Undo") {
+                        val whole = reader.undoAction
+                        reader.undoNotice = null
+                        reader.undoAction = null
+                        if (whole != null) whole() else reader.undo()
+                    }
                 }
                 Spacer(Modifier.height(10.dp))
             }
@@ -1236,23 +1277,30 @@ fun ViewerContent(
                             color = if (marked) Ink.Amber else Ink.Bone,
                         )
                         SheetRow(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS })
-                        if (reader.canMark && !reader.reflow) SheetRow(Glyph.GRID, "Pages", { then { reader.openPages?.invoke() } }, note = "Put them in order, turn, add or take out, or save some as a new file")
-                        if (reader.canMark) SheetRow(Glyph.LOCK, "File tools", { sheet = ViewerSheet.TOOLS }, note = "Searchable, smaller, password, watermark, page numbers, split, merge")
-                        SheetRow(Glyph.MOON, "Page colours and reading mode", { sheet = ViewerSheet.DISPLAY })
+                        SheetRow(Glyph.REFLOW, if (reader.reflow) "Show the pages" else "Read as flowing text", { then { toggleReflow() } }, note = if (reader.reflow) "Back to the pages as they are" else "Just the words, sized for the phone")
+                        SheetRow(Glyph.MOON, "Page colours and text size", { sheet = ViewerSheet.DISPLAY }, note = "Paper, night or sepia; reflowed text settings")
+                        if (reader.canMark) SheetRow(Glyph.TOOLS, "File tools", { sheet = ViewerSheet.TOOLS }, note = "Convert, protect, pages, size")
                     }
                     ViewerSheet.TOOLS -> {
-                        if (!reader.reflow) SheetRow(Glyph.SEARCH, "Make searchable", { then { reader.openTool?.invoke("read") } }, note = "Reads the words on scanned pages, on the phone")
+                        // Everything that changes or makes a file, in four kinds.
+                        ToolsHeader("Convert")
                         SheetRow(Glyph.SHARE, "Save as Word, Excel or text", { then { reader.openTool?.invoke("export") } }, note = "Word to edit, the tables in Excel, or plain text")
                         SheetRow(Glyph.PAGE, "Save pages as pictures", { then { reader.openTool?.invoke("pictures") } }, note = "PNG or JPEG, one a page")
-                        SheetRow(Glyph.DOWN, "Make smaller", { then { reader.openTool?.invoke("shrink") } }, note = "Shows the size before and after")
+                        ToolsHeader("Protect")
                         SheetRow(Glyph.LOCK, if (reader.hasPassword) "Password" else "Lock with a password", { then { reader.openTool?.invoke("password") } }, note = if (reader.hasPassword) "Change it or take it off" else "AES-256; it opens only with the password")
-                        SheetRow(Glyph.PEN, "Black out (redact)", { then { reader.openTool?.invoke("redact") } }, note = if (reader.redactions > 0) "${reader.redactions} marked; black them out for good" else "Names, numbers or areas, taken out of the file for good")
+                        if (!reader.reflow) SheetRow(Glyph.EDIT_TEXT, "Black out (redact)", { then { reader.startMarking(); reader.pickTool(Tool.REDACT) } }, note = if (reader.redactions > 0) "${reader.redactions} marked; black them out for good" else "Mark names, numbers or areas, then take them out for good")
                         SheetRow(Glyph.TRASH, "Remove hidden details", { then { reader.openTool?.invoke("details") } }, note = "Author, programs, dates and editing history")
                         SheetRow(Glyph.RENAME, "Watermark", { then { reader.openTool?.invoke("watermark") } }, note = "CONFIDENTIAL, DRAFT or your own words across the pages")
+                        SheetRow(Glyph.CHECK, "Flatten marks", { then { askFlatten = true } }, note = "Highlights, drawings and notes become part of the page")
+                        ToolsHeader("Pages")
+                        if (!reader.reflow) SheetRow(Glyph.GRID, "Arrange pages", { then { reader.openPages?.invoke() } }, note = "Put them in order, turn, add or take out, save some as a new file")
                         SheetRow(Glyph.LIST, "Page numbers", { then { reader.openTool?.invoke("numbers") } }, note = "Where you want them, from the page you want")
                         if (!reader.reflow) SheetRow(Glyph.PAGE, "Trim white margins", { then { reader.openTool?.invoke("trim") } }, note = "Bigger words on a phone; whole pages can come back")
-                        SheetRow(Glyph.GRID, "Split into files…", { then { reader.openTool?.invoke("split") } })
-                        SheetRow(Glyph.PLUS, "Merge with other files…", { then { reader.openTool?.invoke("merge") } })
+                        SheetRow(Glyph.EXTRACT, "Split into files", { then { reader.openTool?.invoke("split") } }, note = "Every few pages, by pages, or by size")
+                        SheetRow(Glyph.PLUS, "Merge with other files", { then { reader.openTool?.invoke("merge") } }, note = "Into a new file beside this one")
+                        ToolsHeader("Improve")
+                        if (!reader.reflow) SheetRow(Glyph.SEARCH, "Make searchable", { then { reader.openTool?.invoke("read") } }, note = "Reads the words on scanned pages, on the phone")
+                        SheetRow(Glyph.DOWN, "Make smaller", { then { reader.openTool?.invoke("shrink") } }, note = "Shows the size before and after")
                     }
                 }
             }
@@ -1504,18 +1552,7 @@ internal fun DisplaySheet(reader: Reader, onFlatten: () -> Unit = {}, onReflow: 
         ReflowChoice("Page marks", listOf("Hide", "Show"), if (reader.reflowPageMarks) 1 else 0) { reader.changeReflowPageMarks(it == 1) }
         Text("Arabic paragraphs use IBM Plex Sans Arabic and read right to left.", style = Type.small, modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
     }
-    if (reader.canMark) {
-        Hairline(color = Ink.Rule)
-        Row(
-            Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(onClick = onFlatten).padding(horizontal = 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Flatten marks", style = Type.body)
-                Text("Make every highlight, drawing and note part of the page, so no app can change it.", style = Type.small)
-            }
-        }
-    }
+    // Flattening marks lives with the file tools (Protect), where changes to the file are.
 }
 
 @Composable
@@ -1732,11 +1769,31 @@ private fun MarkupBar(reader: Reader) {
             .padding(top = 8.dp),
     ) {
         Hairline(color = Ink.Rule)
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 10.dp),
+        // The families, all in view: an icon and a name each.
+        val group = ToolGroup.of(reader.tool)
+        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp)) {
+            ToolGroup.entries.forEach { g ->
+                val on = g == group
+                Column(
+                    Modifier.weight(1f).heightIn(min = 56.dp).clip(Corner).background(if (on) Ink.Field else Ink.Black)
+                        .clickable(role = androidx.compose.ui.semantics.Role.Tab) { reader.pickGroup(g) }
+                        .semantics { contentDescription = g.label + ": " + g.note }
+                        .padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    GlyphIcon(g.glyph, if (on) Ink.Amber else Ink.Sand, size = 22.dp)
+                    Spacer(Modifier.height(3.dp))
+                    Text(g.label, style = Type.small.copy(color = if (on) Ink.Amber else Ink.Sand), maxLines = 1)
+                }
+            }
+        }
+        // The family's own tools, when it has more than one.
+        if (group.tools.size > 1) Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp).padding(bottom = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Tool.entries.forEach { t -> Chip(t.label, { reader.pickTool(t) }, selected = reader.tool == t) }
+            group.tools.forEach { t -> Chip(t.label, { reader.pickTool(t) }, selected = reader.tool == t) }
         }
         val t = reader.tool
         Row(
@@ -1768,10 +1825,9 @@ private fun MarkupBar(reader: Reader) {
                 Tool.REDACT -> {
                     Chip("Words", { reader.redactArea = false }, selected = !reader.redactArea)
                     Chip("Area", { reader.redactArea = true }, selected = reader.redactArea)
-                    if (reader.redactions > 0) {
-                        Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
-                        Chip("Black out ${reader.redactions} now", { reader.openTool?.invoke("redact") })
-                    }
+                    Box(Modifier.width(1.dp).height(28.dp).background(Ink.Rule))
+                    // Finding a name everywhere, and blacking out what is marked, are the same place.
+                    Chip(if (reader.redactions > 0) "Black out ${reader.redactions} now" else "Find words to black out", { reader.openTool?.invoke("redact") })
                 }
                 Tool.EDIT -> Text("Changes go into the page itself; undo takes them back.", style = Type.small)
                 Tool.PICTURE -> {
@@ -2698,4 +2754,10 @@ internal fun EditWordsDialog(run: com.fadysaeed.pdfx.engine.TextRun, onDismiss: 
         confirmButton = { AmberButton("Change", { onSave(text.text) }) },
         dismissButton = { GhostButton("Cancel", onDismiss, minHeight = 52.dp) },
     )
+}
+
+/** A heading over a kind of tools in the tools sheet. */
+@Composable
+private fun ToolsHeader(text: String) {
+    Text(text.uppercase(), style = Type.eyebrow, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 2.dp))
 }

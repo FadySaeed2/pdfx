@@ -148,7 +148,7 @@ class ScreensTest {
 
     @Test fun recent() = shot(base.copy(unindexed = 37), "01_recent.png")
 
-    @Test fun picking() = shot(base.copy(picked = setOf(docs[0].doc.id, docs[2].doc.id), tidy = TidyCounts(duplicates = 2, codeNames = 14, loose = 31)), "48_picking.png")
+    @Test fun picking() = shot(base.copy(picked = setOf(docs[0].doc.id, docs[2].doc.id), selecting = true, tidy = TidyCounts(duplicates = 2, codeNames = 14, loose = 31)), "48_picking.png")
 
     @Test fun folderInside() = shot(
         base.copy(
@@ -195,7 +195,14 @@ class ScreensTest {
         "02_all_no_access.png",
     )
 
-    @Test fun folders() = shot(base.copy(place = Place(Section.FOLDERS), title = "Folders", items = emptyList()), "03_folders.png")
+    @Test fun folders() = shot(base.copy(place = Place(Section.FOLDERS), title = "All files", items = emptyList(), trashCount = 1), "03_folders.png")
+
+    @Test fun allFiles() = shot(
+        base.copy(place = Place(Section.ALL), title = "All files", items = docs.sortedBy { it.doc.name }, sort = Sort(SortBy.NAME, false), trashCount = 3),
+        "57_all_files.png",
+    )
+
+    @Test fun selecting() = shot(base.copy(place = Place(Section.ALL), title = "All files", items = docs, selecting = true), "58_selecting.png")
 
     @Test fun inFolder() = shot(
         base.copy(place = Place(Section.FOLDERS, "$root/Download", inFolder = true), title = "Download", items = docs.filter { it.doc.folder == "$root/Download" }, sort = Sort(SortBy.MODIFIED, true)),

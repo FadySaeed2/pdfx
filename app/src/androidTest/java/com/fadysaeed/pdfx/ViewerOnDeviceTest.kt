@@ -101,9 +101,11 @@ class ViewerOnDeviceTest {
         compose.waitUntil(15_000) { reader?.pages?.aspects?.size == 6 }
         compose.waitForIdle()
         val first = reader!!
-        compose.onNode(SemanticsMatcher("opens more") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull()?.startsWith("More:") == true }).performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("Pages").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Pages").performClick()
+        compose.onNode(SemanticsMatcher("opens tools") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull()?.startsWith("Tools:") == true }).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Arrange pages").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "tools_sheet.png")
+        compose.onNodeWithText("Arrange pages").performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithText("hold and drag to move", substring = true).fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(10_000) { compose.onAllNodes(SemanticsMatcher("page 2 drawn") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull() == "Small picture of page 2" }).fetchSemanticsNodes().isNotEmpty() }
         compose.onNode(SemanticsMatcher("page 2") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull() == "Small picture of page 2" }).performClick()
@@ -123,6 +125,13 @@ class ViewerOnDeviceTest {
         } finally {
             d.destroy()
         }
+        // Undo puts the file back as it was before the pages were saved.
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Undo").fetchSemanticsNodes().isNotEmpty() }
+        val saved = reader
+        compose.onNodeWithText("Undo").performClick()
+        compose.waitUntil(20_000) { reader !== saved && reader?.pages?.aspects?.size == 6 }
+        val back = com.artifex.mupdf.fitz.Document.openDocument(f.absolutePath)
+        try { assertEquals(6, back.countPages()) } finally { back.destroy() }
     }
 
     @Test
@@ -136,9 +145,7 @@ class ViewerOnDeviceTest {
         compose.waitUntil(15_000) { reader?.pages?.aspects?.size == 6 }
         compose.waitForIdle()
         val first = reader!!
-        compose.onNode(SemanticsMatcher("opens more") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull()?.startsWith("More:") == true }).performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("File tools").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("File tools").performClick()
+        compose.onNode(SemanticsMatcher("opens tools") { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.firstOrNull()?.startsWith("Tools:") == true }).performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Lock with a password").fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
         save(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(), "file_tools.png")

@@ -52,6 +52,24 @@ enum class Tool(val label: String) {
     REDACT("Black out"), ERASER("Eraser"),
 }
 
+/**
+ * The tools in families, as the marking bar shows them: a family is one button with its icon; its
+ * tools are the row under it. Each family remembers the tool last used in it.
+ */
+enum class ToolGroup(val label: String, val glyph: com.fadysaeed.pdfx.ui.components.Glyph, val tools: List<Tool>, val note: String) {
+    SELECT("Select", com.fadysaeed.pdfx.ui.components.Glyph.POINTER, listOf(Tool.SELECT), "Pick marks to move, resize or change"),
+    MARK("Mark", com.fadysaeed.pdfx.ui.components.Glyph.HIGHLIGHTER, listOf(Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKE), "Highlight, underline or strike words"),
+    DRAW("Draw", com.fadysaeed.pdfx.ui.components.Glyph.PEN, listOf(Tool.PEN, Tool.MARKER, Tool.SHAPE, Tool.ERASER), "Pen, marker, shapes and the eraser"),
+    ADD("Add", com.fadysaeed.pdfx.ui.components.Glyph.PLUS, listOf(Tool.TEXT, Tool.NOTE, Tool.PICTURE, Tool.STAMP, Tool.DATE, Tool.TICK, Tool.CROSS, Tool.DOT), "Text, notes, pictures, stamps, dates and ticks"),
+    SIGN("Sign", com.fadysaeed.pdfx.ui.components.Glyph.SIGNATURE, listOf(Tool.SIGN), "Your signature, drawn or digital"),
+    EDIT("Edit", com.fadysaeed.pdfx.ui.components.Glyph.EDIT_TEXT, listOf(Tool.EDIT, Tool.REDACT), "Change the page's own words, or black them out for good"),
+    ;
+
+    companion object {
+        fun of(t: Tool): ToolGroup = entries.first { t in it.tools }
+    }
+}
+
 /** Tools that drop one thing where you tap: a tap next to a mark must not pick that mark. */
 /** The outline of a place marked to be blacked out, as MuPDF draws it. */
 val RedactRed = 0xFFE0303A.toInt()
@@ -708,6 +726,8 @@ class Reader(
     var colorPick by mutableStateOf<ColorPick?>(null)
     /** A change that can be taken back from a short notice, such as marking selected words. */
     var undoNotice by mutableStateOf<String?>(null)
+    /** What Undo on [undoNotice] does instead of taking back the last mark: putting a whole file back after a tool changed it. */
+    var undoAction: (() -> Unit)? = null
     /** Once a stylus has touched the page, fingers scroll and zoom while the pen draws. */
     var stylusSeen by mutableStateOf(false)
     val marks = mutableStateMapOf<Int, List<Mark>>()
@@ -750,9 +770,15 @@ class Reader(
 
     fun startMarking() { if (canMark) { marking = true; clearSelection(); selectedMark = null } }
     fun stopMarking() { marking = false; draft = null; selectedMark = null }
+    /** Opens a family of tools at the one last used in it. */
+    fun pickGroup(g: ToolGroup) {
+        val last = prefs?.getString("tool_${g.name}", null)?.let { n -> runCatching { Tool.valueOf(n) }.getOrNull() }?.takeIf { it in g.tools }
+        pickTool(last ?: g.tools.first())
+    }
+
     fun pickTool(t: Tool) {
         tool = t
-        prefs?.edit()?.putString("tool", t.name)?.apply()
+        prefs?.edit()?.putString("tool", t.name)?.putString("tool_${ToolGroup.of(t).name}", t.name)?.apply()
         if (t == Tool.PICTURE && picture == null) pickPicture?.invoke()
     }
 
@@ -1123,6 +1149,7 @@ class Reader(
         val opacity = if (kind == MarkKind.HIGHLIGHT) HighlightStrengths[strength] else 1f
         clearSelection()
         draft = Draft.Words(sel.page, sel.boxes, color)
+        undoAction = null
         undoNotice = when (kind) { MarkKind.UNDERLINE -> "Underlined"; MarkKind.STRIKE -> "Struck through"; else -> "Highlighted" }
         change(sel.page) { session?.addTextMark(sel.page, kind, sel.boxes, color, opacity) ?: false }
     }

@@ -131,6 +131,10 @@ data class LibraryUi(
     val myNames: List<String> = emptyList(),
     /** Marks left out for being others'. */
     val othersMarks: Int = 0,
+    /** Picking files to act on together, even before the first is picked. */
+    val selecting: Boolean = false,
+    /** Files in the trash, for the row at the end of All files. */
+    val trashCount: Int = 0,
 )
 
 data class Notice(val text: String, val undo: (() -> Unit)? = null, val id: Long = System.nanoTime())
@@ -147,6 +151,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     private val sorts = MutableStateFlow(loadSorts())
     private val query = MutableStateFlow("")
     private val picks = MutableStateFlow<Set<Long>>(emptySet())
+    private val selecting = MutableStateFlow(false)
     private val pins = MutableStateFlow(prefs.getStringSet("pinned_folders", emptySet()).orEmpty().toSet())
     private val access = MutableStateFlow(library.hasAllFilesAccess())
     val notice = MutableStateFlow<Notice?>(null)
@@ -176,15 +181,15 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-    private data class Extras(val res: SearchOut?, val access: Boolean, val picks: Set<Long>)
+    private data class Extras(val res: SearchOut?, val access: Boolean, val picks: Set<Long>, val selecting: Boolean)
     private data class View(val filter: SearchFilter, val grid: Boolean, val marks: Pair<List<MarkGroup>, Int>, val mine: Boolean, val names: List<String>)
 
-    private val extras = combine(results, access, picks, pins, bump) { r, a, pk, _, _ -> Extras(r, a, pk) }
+    private val extras = combine(results, access, combine(picks, selecting, ::Pair), pins, bump) { r, a, pk, _, _ -> Extras(r, a, pk.first, pk.second) }
     private val view = combine(filter, grid, marksFlow, marksMine, names) { f, g, m, mine, n -> View(f, g, m, mine, n) }
 
     val ui: StateFlow<LibraryUi> = combine(combine(raw, place, sorts) { r, p, s -> Triple(r, p, s) }, query, extras, view) { (r, p, s), q, x, v ->
         build(r, p, s[p.section] ?: defaultSort(p.section), q, x.res, x.access, v)
-            .copy(picked = x.picks)
+            .copy(picked = x.picks, selecting = x.selecting || x.picks.isNotEmpty())
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LibraryUi())
 
     private fun groupMarks(rows: List<com.fadysaeed.pdfx.data.MarkRow>, docs: List<Doc>): List<MarkGroup> {
@@ -210,7 +215,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         pdfx.refresh(force = access.value && !had)
     }
 
-    fun go(section: Section) { place.value = Place(section); picks.value = emptySet() }
+    fun go(section: Section) { place.value = Place(section); clearPicks() }
     fun openFolder(path: String?) { place.value = Place(Section.FOLDERS, folder = path, inFolder = true) }
     fun openTag(id: Long) { place.value = Place(Section.TAGS, tagId = id) }
     fun openShelf(s: Shelf) { place.value = Place(Section.SHELVES, shelf = s.name) }
@@ -218,7 +223,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     fun back(): Boolean {
         val p = place.value
         return when {
-            picks.value.isNotEmpty() -> { picks.value = emptySet(); true }
+            picks.value.isNotEmpty() || selecting.value -> { clearPicks(); true }
             query.value.isNotEmpty() -> { query.value = ""; true }
             p.inFolder -> {
                 // Up one folder; out of the folders from the top.
@@ -228,6 +233,8 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             }
             p.tagId != null -> { place.value = Place(Section.TAGS); true }
             p.shelf != null -> { place.value = Place(Section.SHELVES); true }
+            // Folders and the trash are views inside All files.
+            p.section == Section.FOLDERS || p.section == Section.TRASH -> { place.value = Place(Section.ALL); true }
             p.section != Section.RECENT -> { place.value = Place(); true }
             else -> false
         }
@@ -245,15 +252,17 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
 
     // --------------------------------------------------------- picking many
 
-    fun pick(d: Doc) { picks.value = if (d.id in picks.value) picks.value - d.id else picks.value + d.id }
+    fun pick(d: Doc) { selecting.value = true; picks.value = if (d.id in picks.value) picks.value - d.id else picks.value + d.id }
     fun pickAll() { picks.value = ui.value.items.map { it.doc.id }.toSet() }
-    fun clearPicks() { picks.value = emptySet() }
+    /** Starts picking files (the Select button): taps pick until Cancel. */
+    fun startSelecting() { selecting.value = true }
+    fun clearPicks() { picks.value = emptySet(); selecting.value = false }
     private fun pickedDocs(): List<Doc> { val ids = picks.value; return ui.value.items.map { it.doc }.filter { it.id in ids } }
 
     /** Does [op] to each picked file, then says how it went: "Moved 12 files", or how many could not be. */
     private fun many(done: String, op: suspend (Doc) -> Result<*>) = launch {
         val docs = pickedDocs()
-        picks.value = emptySet()
+        clearPicks()
         var ok = 0
         var first: Throwable? = null
         for (d in docs) op(d).onSuccess { ok++ }.onFailure { if (first == null) first = it }
@@ -270,7 +279,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         runCatching { library.dao.byId(d.id)?.let { library.dao.update(it.copy(reading = state)) } }
     }
     /** The picked files, for sharing or merging; picking ends. */
-    fun takePicked(): List<Doc> = pickedDocs().also { picks.value = emptySet() }
+    fun takePicked(): List<Doc> = pickedDocs().also { clearPicks() }
 
     // --------------------------------------------------------- the big tidy
 
@@ -572,6 +581,8 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             p.inFolder -> library.folderLabel(p.folder).substringAfterLast('/')
             p.tagId != null -> tagsById[p.tagId]?.name ?: "Tag"
             p.shelf != null -> Shelf.entries.firstOrNull { it.name == p.shelf }?.label ?: "Shelf"
+            // Folders are a way of showing All files, so the page keeps that name.
+            p.section == Section.FOLDERS -> Section.ALL.label
             else -> p.section.label
         }
         return LibraryUi(
@@ -599,6 +610,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             hasAccess = access,
             unindexed = r.unindexed,
             loaded = true,
+            trashCount = r.docs.count { it.inTrash },
             duplicates = duplicatesOf(live),
             shelves = if (p.section == Section.SHELVES && p.shelf == null) Shelf.entries.map { sh -> ShelfRow(sh, live.count { onShelf(it, sh) }) }.filter { it.count > 0 || it.shelf.ordinal < 3 } else emptyList(),
         )

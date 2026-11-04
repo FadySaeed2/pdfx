@@ -132,7 +132,7 @@ class NumbersUi {
     var style by mutableStateOf(Stamp.Style.PLAIN)
     var skipFirst by mutableStateOf(false)
     var startAt by mutableIntStateOf(1)
-    var asNew by mutableStateOf(false)
+    var asNew by mutableStateOf(true)
     val from get() = if (skipFirst) 1 else 0
     fun numbers() = Stamp.Numbers(place, style, from, startAt)
 }

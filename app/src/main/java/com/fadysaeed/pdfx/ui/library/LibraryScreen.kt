@@ -151,7 +151,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     var tidyStep by remember { mutableStateOf<TidyStep?>(null) }
     var mergingMany by remember { mutableStateOf<List<Doc>?>(null) }
 
-    BackHandler(enabled = ui.place != Place() || ui.query.isNotEmpty() || ui.picked.isNotEmpty()) { vm.back() }
+    BackHandler(enabled = ui.place != Place() || ui.query.isNotEmpty() || ui.selecting) { vm.back() }
     LaunchedEffect(notice?.id) {
         if (notice != null) { delay(if (notice?.undo != null) 6000 else 3500); vm.dismissNotice() }
     }
@@ -190,6 +190,7 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             tidy = { tidyOpen = true },
             pickDoc = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); vm.pick(it) },
             pickAll = vm::pickAll,
+            select = vm::startSelecting,
             clearPicks = vm::clearPicks,
             many = { what ->
                 when (what) {
