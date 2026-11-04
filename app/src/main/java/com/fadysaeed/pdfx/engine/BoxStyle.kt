@@ -178,15 +178,15 @@ data class BoxStyle(
             for (m in token.findAll(body)) {
                 val textPart = m.groupValues[4]
                 if (textPart.isNotEmpty()) {
-                    if (paras.isEmpty()) paras += ArrayList()
-                    for (c in unescape(textPart)) paras.last() += c to cur
+                    if (paras.isEmpty()) paras.add(ArrayList())
+                    for (c in unescape(textPart)) paras.last().add(c to cur)
                     continue
                 }
                 val closing = m.groupValues[1] == "/"
                 val tag = m.groupValues[2].lowercase()
                 val rest = m.groupValues[3]
                 when (tag) {
-                    "p" -> if (!closing) paras += ArrayList()
+                    "p" -> if (!closing) paras.add(ArrayList())
                     "span", "u", "b", "i", "strong", "em" -> if (!closing) {
                         stack += cur
                         val css = Regex("style=\"([^\"]*)\"").find(rest)?.groupValues?.get(1).orEmpty().lowercase()
