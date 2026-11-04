@@ -120,14 +120,53 @@ class TextIndex(private val db: LibraryDb) {
         return out
     }
 
+    /** Whether any page has a word starting with [word] (as search would find it, stems and all). */
+    fun hasAny(word: String): Boolean {
+        val w = word.lowercase().filter { it.isLetterOrDigit() }
+        if (w.isEmpty()) return false
+        return runCatching {
+            sql.query(SimpleSQLiteQuery("SELECT docid FROM page_words WHERE page_words MATCH ? LIMIT 1", arrayOf<Any>("$w*"))).use { it.moveToFirst() }
+        }.getOrDefault(false)
+    }
+
     fun pagesIndexed(docId: Long): Int =
         sql.query(SimpleSQLiteQuery("SELECT COUNT(*) FROM page_words WHERE docid BETWEEN ? AND ?", arrayOf<Any>(docId * SPAN, docId * SPAN + SPAN - 1))).use { c ->
             if (c.moveToFirst()) c.getInt(0) else 0
         }
 
+    /**
+     * Words in the index that are spelt nearly like [word]: one letter off for short words, two for
+     * longer ones, letters swapped counting as one. Closest first, then the most used.
+     */
+    fun nearWords(word: String, limit: Int = 3): List<String> {
+        val w = word.lowercase()
+        if (w.length < 4 || w.any { !it.isLetter() }) return emptyList()
+        val most = if (w.length >= 7) 2 else 1
+        val found = ArrayList<Triple<String, Int, Int>>()
+        // Words starting with the same letter: typing gets the first letter right nearly always.
+        val from = w.substring(0, 1)
+        val to = (w[0] + 1).toString()
+        runCatching {
+            sql.query(SimpleSQLiteQuery("SELECT term, documents FROM page_vocab WHERE col = '*' AND term >= ? AND term < ?", arrayOf<Any>(from, to))).use { c ->
+                while (c.moveToNext()) {
+                    val t = c.getString(0) ?: continue
+                    if (kotlin.math.abs(t.length - w.length) > most || t == w) continue
+                    val d = TextMath.distance(w, t, most)
+                    if (d <= most) found += Triple(t, d, c.getInt(1))
+                }
+            }
+        }
+        return found.sortedWith(compareBy<Triple<String, Int, Int>> { it.second }.thenByDescending { it.third }).take(limit).map { it.first }
+    }
+
     object Setup : RoomDatabase.Callback() {
         override fun onOpen(db: SupportSQLiteDatabase) {
             db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS page_words USING fts4(body, tokenize=porter)")
+            // The index's own list of words, for spelling near misses.
+            db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS page_vocab USING fts4aux(page_words)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS marks(doc INTEGER NOT NULL, page INTEGER NOT NULL, kind TEXT NOT NULL, color INTEGER NOT NULL, quote TEXT NOT NULL, note TEXT NOT NULL)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS marks_doc ON marks(doc)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS marks_read(doc INTEGER PRIMARY KEY, modified INTEGER NOT NULL)")
             db.execSQL("CREATE TABLE IF NOT EXISTS text_upgrade(last INTEGER NOT NULL)")
             db.execSQL("CREATE TABLE IF NOT EXISTS bookmarks(doc INTEGER NOT NULL, page INTEGER NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(doc, page))")
         }
@@ -158,4 +197,86 @@ class Bookmarks(private val db: LibraryDb) {
     }
 
     fun clear(docId: Long) = sql.execSQL("DELETE FROM bookmarks WHERE doc = ?", arrayOf<Any>(docId))
+}
+
+/** Spelling arithmetic for search. */
+object TextMath {
+    /** Edits from [a] to [b] (a swap of two letters is one), stopping early once past [most]. */
+    fun distance(a: String, b: String, most: Int = 2): Int {
+        val n = a.length
+        val m = b.length
+        if (kotlin.math.abs(n - m) > most) return most + 1
+        var prev2 = IntArray(m + 1)
+        var prev = IntArray(m + 1) { it }
+        var cur = IntArray(m + 1)
+        for (i in 1..n) {
+            cur[0] = i
+            var best = cur[0]
+            for (j in 1..m) {
+                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                var v = minOf(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+                if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) v = minOf(v, prev2[j - 2] + 1)
+                cur[j] = v
+                if (v < best) best = v
+            }
+            if (best > most) return most + 1
+            val t = prev2; prev2 = prev; prev = cur; cur = t
+        }
+        return prev[m]
+    }
+}
+
+/** A highlight, underline, note or text box in a file, as the library keeps it for finding again. */
+data class MarkRow(val doc: Long, val page: Int, val kind: String, val color: Int, val quote: String, val note: String)
+
+/**
+ * Every highlight and note across the library, read from the files themselves (where PDFx and
+ * other apps keep them) whenever a file changes, so they can be listed and searched together.
+ */
+class Marks(private val db: LibraryDb) {
+    private val sql: SupportSQLiteDatabase get() = db.openHelper.writableDatabase
+
+    fun replace(docId: Long, modified: Long, marks: List<MarkRow>) {
+        val s = sql
+        s.beginTransaction()
+        try {
+            s.execSQL("DELETE FROM marks WHERE doc = ?", arrayOf<Any>(docId))
+            for (m in marks) s.execSQL(
+                "INSERT INTO marks(doc, page, kind, color, quote, note) VALUES (?, ?, ?, ?, ?, ?)",
+                arrayOf<Any>(docId, m.page, m.kind, m.color, m.quote, m.note),
+            )
+            s.execSQL("INSERT OR REPLACE INTO marks_read(doc, modified) VALUES (?, ?)", arrayOf<Any>(docId, modified))
+            s.setTransactionSuccessful()
+        } finally {
+            s.endTransaction()
+        }
+    }
+
+    /** When each file's marks were last read: the file's modified time then. */
+    fun readAt(): Map<Long, Long> = sql.query("SELECT doc, modified FROM marks_read").use { c ->
+        val out = HashMap<Long, Long>()
+        while (c.moveToNext()) out[c.getLong(0)] = c.getLong(1)
+        out
+    }
+
+    fun all(): List<MarkRow> = rows("SELECT doc, page, kind, color, quote, note FROM marks ORDER BY doc, page", emptyArray())
+
+    /** Marks whose words or note have every one of [words] in them. */
+    fun matching(words: List<String>): List<MarkRow> {
+        if (words.isEmpty()) return emptyList()
+        val where = words.joinToString(" AND ") { "(quote || ' ' || note) LIKE ? ESCAPE '\\'" }
+        val args = words.map { "%" + it.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" }.toTypedArray<Any>()
+        return rows("SELECT doc, page, kind, color, quote, note FROM marks WHERE $where ORDER BY doc, page LIMIT 500", args)
+    }
+
+    fun clear(docId: Long) {
+        sql.execSQL("DELETE FROM marks WHERE doc = ?", arrayOf<Any>(docId))
+        sql.execSQL("DELETE FROM marks_read WHERE doc = ?", arrayOf<Any>(docId))
+    }
+
+    private fun rows(q: String, args: Array<Any>): List<MarkRow> = sql.query(SimpleSQLiteQuery(q, args)).use { c ->
+        val out = ArrayList<MarkRow>()
+        while (c.moveToNext()) out += MarkRow(c.getLong(0), c.getInt(1), c.getString(2) ?: "", c.getInt(3), c.getString(4) ?: "", c.getString(5) ?: "")
+        out
+    }
 }

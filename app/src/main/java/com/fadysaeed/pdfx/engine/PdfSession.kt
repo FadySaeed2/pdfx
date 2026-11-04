@@ -742,6 +742,18 @@ class PdfSession private constructor(
 
     suspend fun marks(index: Int): List<Mark> = onDoc { marksNow(index) }
 
+    /**
+     * The highlights, notes and text boxes in the file, for the library's page of them: only pages
+     * that have marks at all are opened, so a long book without any costs next to nothing.
+     */
+    suspend fun marksToKeep(): List<Mark> = onDoc {
+        val d = pdf ?: return@onDoc emptyList()
+        val keep = setOf(MarkKind.HIGHLIGHT, MarkKind.UNDERLINE, MarkKind.STRIKE, MarkKind.SQUIGGLY, MarkKind.NOTE, MarkKind.TEXT)
+        (0 until pageCount).filter { i -> runCatching { d.findPage(i).get("Annots").let { !it.isNull && it.size() > 0 } }.getOrDefault(false) }
+            .flatMap { i -> runCatching { marksNow(i) }.getOrDefault(emptyList()) }
+            .filter { it.kind in keep && (it.quoted.isNotBlank() || it.note.isNotBlank()) }
+    }
+
     /** Every mark in the file, page by page, for the list of marks. */
     suspend fun allMarks(): List<Mark> = onDoc { (0 until pageCount).flatMap { runCatching { marksNow(it) }.getOrDefault(emptyList()) } }
 

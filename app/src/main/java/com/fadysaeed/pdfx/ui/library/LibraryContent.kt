@@ -9,6 +9,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -99,6 +100,12 @@ class LibraryActions(
     val newFolder: (String?) -> Unit = {},
     /** Opens a folder from the path shown above it. */
     val crumb: (String) -> Unit = {},
+    /** A quick look at a file's first pages (a long press). */
+    val peek: (Doc) -> Unit = {},
+    /** Files as a grid of first pages, or as a list. */
+    val grid: (Boolean) -> Unit = {},
+    /** Narrows the search results. */
+    val filter: (SearchFilter) -> Unit = {},
 )
 
 @Composable
@@ -122,7 +129,7 @@ fun LibraryContent(
         Box(Modifier.weight(1f)) {
             val results = ui.results
             if (results != null) {
-                SearchResults(ui.query, results, actions, thumb, now, label)
+                SearchResults(ui.query, ui.searchNote, ui.facets, results, actions, thumb, now, label)
             } else {
                 Browse(ui, actions, thumb, now, label)
             }
@@ -266,14 +273,7 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                 }
                 items(ui.folders, key = { "f:" + (it.path ?: "-") }) { f -> FolderLine(f, { actions.folder(f.path) }, { actions.folderMore(f) }) }
                 if (ui.loaded && ui.items.isEmpty() && ui.folders.isEmpty()) item { EmptyNote(emptyText(p)) }
-                items(ui.items, key = { "d:${it.doc.id}" }) { item ->
-                    DocLine(
-                        item, now, thumb(item.doc), showFolder = false, label = label,
-                        onOpen = { if (picking) actions.pickDoc(item.doc) else actions.open(item.doc, null) },
-                        onMore = { actions.more(item.doc) }, onPick = { actions.pickDoc(item.doc) },
-                        picking = picking, picked = item.doc.id in ui.picked,
-                    )
-                }
+                docs(ui, actions, thumb, now, label, showFolder = false)
                 if (p.folder != null) item(key = "new-folder") {
                     Text("New folder here", style = Type.bodyStrong.copy(color = Ink.Amber), modifier = Modifier.clickable { actions.newFolder(p.folder) }.padding(horizontal = 20.dp, vertical = 16.dp))
                 }
@@ -306,16 +306,24 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                 items(ui.tags, key = { "t:${it.id}" }) { t -> TagLine(t, { actions.tag(t.id) }, { actions.tagMore(t) }) }
                 item { Box(Modifier.padding(20.dp)) { GhostButton("New tag", actions.newTag) } }
             }
+            p.section == Section.HIGHLIGHTS -> {
+                if (ui.marks.isEmpty()) item { EmptyNote(emptyText(p)) }
+                for (g in ui.marks) {
+                    item(key = "mh:${g.doc.id}") {
+                        Row(Modifier.fillMaxWidth().clickable { actions.open(g.doc, null) }.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(LibraryModel.titleOf(g.doc), style = Type.bodyStrong, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(if (g.marks.size == 1) "1 mark" else "${g.marks.size} marks", style = Type.small)
+                            }
+                        }
+                    }
+                    items(g.marks, key = { m -> "m:${g.doc.id}:${m.page}:${m.quote.hashCode()}:${m.note.hashCode()}" }) { m -> MarkLine(m) { actions.open(g.doc, m.page) } }
+                    item(key = "mr:${g.doc.id}") { Hairline(Modifier.padding(start = 20.dp, top = 8.dp), color = Ink.Rule) }
+                }
+            }
             else -> {
                 if (ui.loaded && ui.items.isEmpty()) item { EmptyNote(emptyText(p)) }
-                items(ui.items, key = { "d:${it.doc.id}" }) { item ->
-                    DocLine(
-                        item, now, thumb(item.doc), showFolder = p.section != Section.FOLDERS, label = label,
-                        onOpen = { if (picking) actions.pickDoc(item.doc) else actions.open(item.doc, null) },
-                        onMore = { actions.more(item.doc) }, onPick = { actions.pickDoc(item.doc) },
-                        picking = picking, picked = item.doc.id in ui.picked,
-                    )
-                }
+                docs(ui, actions, thumb, now, label, showFolder = p.section != Section.FOLDERS)
             }
         }
         item { Spacer(Modifier.height(80.dp)) }
@@ -331,6 +339,7 @@ private fun SubLine(ui: LibraryUi, actions: LibraryActions) {
             p.section == Section.FOLDERS && !p.inFolder -> ui.folders.size.let { if (it == 1) "1 folder" else "$it folders" }
             p.section == Section.TAGS && p.tagId == null -> ui.tags.size.let { if (it == 1) "1 tag" else "$it tags" }
             p.section == Section.SHELVES && p.shelf == null -> "Your files by kind, and what you are reading"
+            p.section == Section.HIGHLIGHTS -> ui.marks.sumOf { it.marks.size }.let { n -> if (n == 1) "1 highlight or note" else "$n highlights and notes" } + ui.marks.size.let { if (it == 0) "" else if (it == 1) " in 1 file" else " in $it files" }
             else -> ui.items.size.let { if (it == 1) "1 document" else "$it documents" }
         }
         Text(count, style = Type.note)
@@ -338,13 +347,14 @@ private fun SubLine(ui: LibraryUi, actions: LibraryActions) {
             Text("  ·  kept for 30 days", style = Type.note)
             Spacer(Modifier.weight(1f))
             if (ui.items.isNotEmpty()) Text("Empty trash", style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 14.sp), modifier = Modifier.clickable(onClick = actions.emptyTrash).padding(vertical = 8.dp))
-        } else if (listing && ui.items.size > 1) {
+        } else if (listing && ui.items.size > 1 && p.section != Section.HIGHLIGHTS) {
             Spacer(Modifier.weight(1f))
             Row(Modifier.clickable(onClick = actions.sort).padding(vertical = 8.dp, horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlyphIcon(Glyph.SORT, Ink.Dust, size = 18.dp)
                 Spacer(Modifier.width(6.dp))
                 Text(ui.sort.by.label + if (ui.sort.descending) "  ↓" else "  ↑", style = Type.note.copy(color = Ink.Sand))
             }
+            IconButton(if (ui.grid) Glyph.LIST else Glyph.GRID, if (ui.grid) "Show as a list" else "Show as a grid", { actions.grid(!ui.grid) }, color = Ink.Dust, size = 40.dp)
         }
     }
 }
@@ -377,6 +387,7 @@ private fun emptyText(p: Place) = when (p.section) {
     Section.FOLDERS -> "This folder has no PDFs."
     Section.TAGS -> "Nothing has this tag yet."
     Section.SHELVES -> "Nothing on this shelf yet."
+    Section.HIGHLIGHTS -> "Highlights and notes from every file come together here, once PDFx has read them. Mark a passage in any file and it shows up."
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -389,13 +400,15 @@ fun DocLine(
     label: (String?) -> String,
     onOpen: () -> Unit,
     onMore: () -> Unit,
-    /** A long press: picks the file to act on with others. */
+    /** Picks the file to act on with others. */
     onPick: (() -> Unit)? = null,
     picking: Boolean = false,
     picked: Boolean = false,
+    /** A long press: a quick look at its first pages. */
+    onPeek: (() -> Unit)? = null,
 ) {
     val d = item.doc
-    Column(Modifier.fillMaxWidth().background(if (picked) Ink.Field else Ink.Black).combinedClickable(onClick = onOpen, onLongClick = onPick ?: onMore)) {
+    Column(Modifier.fillMaxWidth().background(if (picked) Ink.Field else Ink.Black).combinedClickable(onClick = onOpen, onLongClick = onPeek ?: onPick ?: onMore)) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box {
                 Thumb(d, image)
@@ -504,8 +517,85 @@ private fun TagLine(t: TagCount, onClick: () -> Unit, onMore: () -> Unit) {
     }
 }
 
+/** The files of the open place, as lines or as a grid of first pages, three a row. */
+private fun androidx.compose.foundation.lazy.LazyListScope.docs(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (Doc) -> ImageBitmap?, now: Long, label: (String?) -> String, showFolder: Boolean) {
+    val picking = ui.picked.isNotEmpty()
+    if (ui.grid) {
+        items(ui.items.chunked(3), key = { row -> "g:" + row.first().doc.id }) { row ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                row.forEach { item ->
+                    GridCell(
+                        item, thumb(item.doc), Modifier.weight(1f),
+                        onOpen = { if (picking) actions.pickDoc(item.doc) else actions.open(item.doc, null) },
+                        onPeek = { actions.peek(item.doc) },
+                        picking = picking, picked = item.doc.id in ui.picked,
+                    )
+                }
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    } else {
+        items(ui.items, key = { "d:${it.doc.id}" }) { item ->
+            DocLine(
+                item, now, thumb(item.doc), showFolder = showFolder, label = label,
+                onOpen = { if (picking) actions.pickDoc(item.doc) else actions.open(item.doc, null) },
+                onMore = { actions.more(item.doc) }, onPick = { actions.pickDoc(item.doc) },
+                picking = picking, picked = item.doc.id in ui.picked, onPeek = { actions.peek(item.doc) },
+            )
+        }
+    }
+}
+
+/** A file in the grid: its first page, how far it is read, its title. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SearchResults(query: String, results: List<DocResult>, actions: LibraryActions, thumb: @Composable (Doc) -> ImageBitmap?, now: Long, label: (String?) -> String) {
+fun GridCell(item: Item, image: ImageBitmap?, modifier: Modifier, onOpen: () -> Unit, onPeek: () -> Unit, picking: Boolean = false, picked: Boolean = false) {
+    val d = item.doc
+    Column(modifier.combinedClickable(onClick = onOpen, onLongClick = onPeek).semantics { contentDescription = LibraryModel.titleOf(d) }) {
+        Box(Modifier.fillMaxWidth().aspectRatio(0.72f).background(if (image != null) Ink.Paper else Ink.Field).border(if (picked) 2.dp else 1.dp, if (picked) Ink.Amber else Ink.Rule)) {
+            when {
+                image != null -> Image(image, null, contentScale = ContentScale.Crop, alignment = Alignment.TopCenter, modifier = Modifier.fillMaxSize())
+                d.locked -> GlyphIcon(Glyph.LOCK, Ink.Ash, size = 24.dp)
+                else -> Box(Modifier.align(Alignment.Center)) { GlyphIcon(Glyph.PAGE, Ink.Slate, size = 28.dp) }
+            }
+            if (d.starred) Box(Modifier.align(Alignment.TopStart).padding(4.dp).background(Ink.Black.copy(alpha = 0.7f), RoundedCornerShape(50)).padding(3.dp)) { GlyphIcon(Glyph.STAR_FILLED, Ink.Amber, size = 14.dp) }
+            if (picking) Box(
+                Modifier.align(Alignment.TopEnd).padding(4.dp).size(22.dp)
+                    .background(if (picked) Ink.Amber else Ink.Black.copy(alpha = 0.7f), RoundedCornerShape(50))
+                    .border(1.5.dp, if (picked) Ink.Amber else Ink.Bone, RoundedCornerShape(50)),
+                contentAlignment = Alignment.Center,
+            ) { if (picked) GlyphIcon(Glyph.CHECK, Ink.Black, size = 14.dp) }
+            val progress = LibraryModel.progressOf(d)
+            if (d.lastPage > 0 && progress > 0.01f && !d.inTrash) Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Ink.Black.copy(alpha = 0.5f))) {
+                Box(Modifier.fillMaxWidth(progress.coerceAtMost(1f)).height(3.dp).background(if (d.reading == 2 || progress > 0.95f) Ink.Teal else Ink.Amber))
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(LibraryModel.titleOf(d), style = Type.small.copy(color = Ink.Bone), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(6.dp))
+    }
+}
+
+/** A highlight or note: its colour, the words it marks and the note on it, and its page. */
+@Composable
+fun MarkLine(m: com.fadysaeed.pdfx.data.MarkRow, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 8.dp)) {
+        Box(Modifier.width(3.dp).heightIn(min = 22.dp).background(androidx.compose.ui.graphics.Color(m.color or (0xFF shl 24))))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            if (m.quote.isNotBlank()) Text("“" + m.quote + "”", style = Type.body.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic), maxLines = 6, overflow = TextOverflow.Ellipsis)
+            if (m.note.isNotBlank()) {
+                if (m.quote.isNotBlank()) Spacer(Modifier.height(4.dp))
+                Text(m.note, style = Type.body.copy(color = Ink.Sand), maxLines = 6, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Text("p. ${m.page + 1}", style = Type.figure)
+    }
+}
+
+@Composable
+private fun SearchResults(query: String, note: String?, facets: List<Facet>, results: List<DocResult>, actions: LibraryActions, thumb: @Composable (Doc) -> ImageBitmap?, now: Long, label: (String?) -> String) {
     LazyColumn(Modifier.fillMaxSize()) {
         item {
             Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
@@ -513,19 +603,31 @@ private fun SearchResults(query: String, results: List<DocResult>, actions: Libr
                 Spacer(Modifier.height(4.dp))
                 val files = results.size
                 val pages = results.sumOf { it.totalHits }
+                val shown = note ?: query
                 Text(
                     when {
-                        files == 0 -> "Nothing matches “$query”."
-                        pages == 0 -> "$files ${if (files == 1) "file" else "files"} named like “$query”"
-                        else -> "$files ${if (files == 1) "file" else "files"}, $pages ${if (pages == 1) "page" else "pages"} with “$query”"
+                        files == 0 -> "Nothing matches “$shown”."
+                        pages == 0 -> "$files ${if (files == 1) "file" else "files"} for “$shown”, best first"
+                        else -> "$files ${if (files == 1) "file" else "files"}, $pages ${if (pages == 1) "page" else "pages"} with “$shown”, best first"
                     },
                     style = Type.note,
                 )
+                if (note != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Nothing was spelt “$query”, so this is “$note”.", style = Type.small.copy(color = Ink.Sand))
+                }
+            }
+            if (facets.isNotEmpty()) Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                facets.forEach { f -> Chip("${f.label}  ${f.count}", { actions.filter(f.filter) }, selected = f.on) }
             }
             Hairline(Modifier.padding(horizontal = 20.dp), color = Ink.Rule)
         }
         items(results, key = { "r:${it.doc.id}" }) { r ->
-            DocLine(Item(r.doc, emptyList()), now, thumb(r.doc), showFolder = true, label = label, onOpen = { actions.open(r.doc, r.hits.firstOrNull()?.page) }, onMore = { actions.more(r.doc) })
+            DocLine(Item(r.doc, emptyList()), now, thumb(r.doc), showFolder = true, label = label, onOpen = { actions.open(r.doc, r.hits.firstOrNull()?.page ?: r.marks.firstOrNull()?.page) }, onMore = { actions.more(r.doc) }, onPeek = { actions.peek(r.doc) })
+            r.marks.forEach { m -> Box(Modifier.padding(start = 58.dp)) { MarkLine(m) { actions.open(r.doc, m.page) } } }
             r.hits.forEach { h -> HitLine(h) { actions.open(r.doc, h.page) } }
             if (r.totalHits > r.hits.size) {
                 Text("${r.totalHits - r.hits.size} more ${if (r.totalHits - r.hits.size == 1) "page" else "pages"} in this file", style = Type.small, modifier = Modifier.padding(start = 78.dp, top = 2.dp, bottom = 12.dp))

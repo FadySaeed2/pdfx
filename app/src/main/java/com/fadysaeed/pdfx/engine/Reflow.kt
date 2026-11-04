@@ -200,8 +200,9 @@ private fun joinLines(lines: List<RawLine>, body: Float): Para {
         if (end <= start) continue
         if (sb.isNotEmpty()) {
             val hyphen = sb.endsWith("-") && sb.length > 1 && sb[sb.length - 2].isLetter() && t[start].isLowerCase()
-            if (hyphen) { sb.setLength(sb.length - 1); bold.removeAt(bold.size - 1); italic.removeAt(italic.size - 1) }
-            else { sb.append(' '); bold += false; italic += false }
+            // "self-" at a line's end is a word with a hyphen of its own ("self-endangering"): it stays.
+            if (hyphen && !keepsHyphen(sb, t, start)) { sb.setLength(sb.length - 1); bold.removeAt(bold.size - 1); italic.removeAt(italic.size - 1) }
+            else if (!hyphen) { sb.append(' '); bold += false; italic += false }
         }
         for (i in start until end) { sb.append(t[i]); bold += l.bold.getOrElse(i) { false }; italic += l.italic.getOrElse(i) { false } }
     }
@@ -240,6 +241,30 @@ private fun joinLines(lines: List<RawLine>, body: Float): Para {
     return Para(text, level, if (level > 0) emptyList() else spans, list, marker = marker)
 }
 
+/** First halves that make words with a hyphen of their own, not a word broken at a line's end. */
+private val HYPHEN_PREFIXES = setOf(
+    "self", "non", "well", "ill", "ex", "all", "half", "cross", "long", "short", "full", "semi", "multi", "co", "high", "low",
+    "first", "second", "third", "one", "two", "three", "four", "five", "six", "evidence", "treatment", "drug", "age", "time",
+    "dose", "risk", "community", "patient", "family", "peer", "trauma", "mental", "health", "evidence", "person", "family",
+)
+
+/**
+ * Whether a hyphen at the end of [sb] belongs to the word (kept when the line joins the next):
+ * after one of [HYPHEN_PREFIXES], after a part that has a hyphen earlier ("follow-up-"), or when
+ * either half is a number or a capital ("COVID-", "5-").
+ */
+internal fun keepsHyphen(sb: CharSequence, next: String, start: Int): Boolean {
+    var i = sb.length - 2
+    while (i >= 0 && (sb[i].isLetterOrDigit() || sb[i] == '-')) i--
+    val head = sb.substring(i + 1, sb.length - 1)
+    val first = head.substringAfterLast('-')
+    if (head.contains('-')) return true
+    if (first.lowercase() in HYPHEN_PREFIXES) return true
+    if (first.any { it.isDigit() } || (first.length > 1 && first.all { it.isUpperCase() })) return true
+    val tail = next.substring(start).takeWhile { it.isLetter() }
+    return tail.length <= 1
+}
+
 /** Whether the last paragraph of one page runs on into the first paragraph of the next. */
 internal fun runsOn(last: Para?, first: Para?): Boolean {
     if (last == null || first == null) return false
@@ -252,7 +277,7 @@ internal fun runsOn(last: Para?, first: Para?): Boolean {
 /** Joins two paragraphs into one, keeping bold and italic in the right places. */
 internal fun joinParas(a: Para, b: Para): Para {
     val hyphen = a.text.endsWith("-") && a.text.length > 1 && a.text[a.text.length - 2].isLetter()
-    val head = if (hyphen) a.text.dropLast(1) else a.text + " "
+    val head = if (hyphen && !keepsHyphen(a.text, b.text, 0)) a.text.dropLast(1) else if (hyphen) a.text else a.text + " "
     val shift = head.length
     return a.copy(text = head + b.text, spans = a.spans.map { if (it.end > head.length) it.copy(end = head.length) else it } + b.spans.map { it.copy(start = it.start + shift, end = it.end + shift) })
 }

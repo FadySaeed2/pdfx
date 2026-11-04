@@ -255,6 +255,64 @@ class LibraryRulesOnDeviceTest {
     }
 
     @Test
+    fun highlightsAndNotesAreKeptAndFoundAndSpellingSlipsAreNear() = runBlocking {
+        pdf("Download/a.pdf"); pdf("Download/b.pdf")
+        lib.scan()
+        val (a, b) = db.dao().all().sortedBy { it.name }
+        lib.marks.replace(a.id, a.modified, listOf(
+            com.fadysaeed.pdfx.data.MarkRow(a.id, 3, "HIGHLIGHT", 0xF2C14E, "Check lithium levels weekly", ""),
+            com.fadysaeed.pdfx.data.MarkRow(a.id, 9, "NOTE", 0xF2C14E, "", "Ask about the 50% discount"),
+        ))
+        lib.marks.replace(b.id, b.modified, listOf(com.fadysaeed.pdfx.data.MarkRow(b.id, 1, "UNDERLINE", 0, "Clozapine and myocarditis", "")))
+        assertEquals(3, lib.marks.all().size)
+        assertEquals(listOf(3), lib.marks.matching(listOf("lithium", "weekly")).map { it.page })
+        assertEquals("a % in a note is a %, not a wildcard", listOf(9), lib.marks.matching(listOf("50%")).map { it.page })
+        assertEquals(a.modified, lib.marks.readAt()[a.id])
+        lib.deleteForever(b).getOrThrow()
+        assertTrue(lib.marks.matching(listOf("clozapine")).isEmpty())
+        // Spelling: a word typed with a slip finds the word in the index.
+        lib.text.replace(a.id, listOf(PageText(0, "lithium toxicity and the kidney"), PageText(1, "schizophrenia")))
+        assertTrue(lib.text.hasAny("lith"))
+        assertFalse(lib.text.hasAny("lithuim"))
+        assertEquals(listOf("lithium"), lib.text.nearWords("lithuim", 1))
+        assertTrue(lib.text.nearWords("schizofrenia", 1).isNotEmpty())
+    }
+
+    @Test
+    fun marksAreReadFromTheFilesThemselves() = runBlocking {
+        // A file with a highlight and a note made in it, as PDFx or another app saves them.
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val f = File(root, "Download/marked.pdf").apply { parentFile?.mkdirs() }
+        val d = com.artifex.mupdf.fitz.PDFDocument()
+        try {
+            val font = d.addSimpleFont(com.artifex.mupdf.fitz.Font("Helvetica"), 0)
+            val res = d.newDictionary().apply { put("Font", d.newDictionary().apply { put("F", font) }) }
+            val page = d.addPage(com.artifex.mupdf.fitz.Rect(0f, 0f, 400f, 300f), 0, res, "BT /F 14 Tf 40 240 Td (Lithium levels weekly) Tj ET")
+            d.insertPage(-1, page)
+            val p = d.loadPage(0) as com.artifex.mupdf.fitz.PDFPage
+            val hl = p.createAnnotation(com.artifex.mupdf.fitz.PDFAnnotation.TYPE_HIGHLIGHT)
+            hl.setQuadPoints(arrayOf(com.artifex.mupdf.fitz.Quad(com.artifex.mupdf.fitz.Rect(40f, 46f, 200f, 64f))))
+            hl.update()
+            val note = p.createAnnotation(com.artifex.mupdf.fitz.PDFAnnotation.TYPE_TEXT)
+            note.rect = com.artifex.mupdf.fitz.Rect(300f, 20f, 320f, 40f)
+            note.contents = "Ask the GP about ramipril"
+            note.update()
+            p.destroy()
+            d.save(f.absolutePath, "")
+        } finally {
+            d.destroy()
+        }
+        lib.scan()
+        val doc = db.dao().all().single { it.name == "marked.pdf" }
+        com.fadysaeed.pdfx.data.TextIndexer(ctx, lib).runAll()
+        val marks = lib.marks.all()
+        assertEquals(marks.toString(), 2, marks.size)
+        assertTrue(marks.any { it.kind == "HIGHLIGHT" && it.quote.contains("Lithium levels") })
+        assertTrue(marks.any { it.kind == "NOTE" && it.note == "Ask the GP about ramipril" })
+        assertEquals(db.dao().byId(doc.id)!!.modified, lib.marks.readAt()[doc.id])
+    }
+
+    @Test
     fun suggestedTagsForABigLibraryComeInSeconds() = runBlocking {
         val dao = db.dao()
         val words = com.fadysaeed.pdfx.data.Concepts.all.flatMap { it.terms } + List(3000) { "word$it" }

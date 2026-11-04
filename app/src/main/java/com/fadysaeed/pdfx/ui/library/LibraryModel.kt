@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 enum class Section(val label: String) {
-    RECENT("Recent"), SHELVES("Shelves"), ALL("All files"), STARRED("Starred"), FOLDERS("Folders"), TAGS("Tags"), TRASH("Trash")
+    RECENT("Recent"), SHELVES("Shelves"), ALL("All files"), STARRED("Starred"), HIGHLIGHTS("Highlights"), FOLDERS("Folders"), TAGS("Tags"), TRASH("Trash")
 }
 
 enum class SortBy(val label: String) { OPENED("Last opened"), NAME("Name"), MODIFIED("Date changed"), SIZE("Size") }
@@ -47,7 +47,26 @@ data class TidyCounts(
 ) {
     val total get() = duplicates + codeNames + loose + broken + bareScans
 }
-data class DocResult(val doc: Doc, val nameMatch: Boolean, val hits: List<TextHit>, val totalHits: Int)
+data class DocResult(
+    val doc: Doc, val nameMatch: Boolean, val hits: List<TextHit>, val totalHits: Int,
+    val score: Double = 0.0,
+    /** The user's own highlights and notes in it that have the words. */
+    val marks: List<com.fadysaeed.pdfx.data.MarkRow> = emptyList(),
+)
+
+/** A search's results, and the spelling it used when the one typed found nothing. */
+data class SearchOut(val results: List<DocResult>, val corrected: String? = null)
+
+/** What search results are narrowed to: a kind of file, how recent, a tag. */
+data class SearchFilter(val kind: String? = null, val years: Int? = null, val tagId: Long? = null) {
+    val any get() = kind != null || years != null || tagId != null
+}
+
+/** A way to narrow the results, with how many it would leave. */
+data class Facet(val label: String, val count: Int, val filter: SearchFilter, val on: Boolean)
+
+/** A file's highlights and notes, for the Highlights page. */
+data class MarkGroup(val doc: Doc, val marks: List<com.fadysaeed.pdfx.data.MarkRow>)
 
 /** Where in the library the user is. */
 data class Place(
@@ -97,6 +116,15 @@ data class LibraryUi(
     val tidy: TidyCounts = TidyCounts(),
     /** The same file more than once (by fingerprint), each group its copies; the one to keep first. */
     val duplicates: List<List<Doc>> = emptyList(),
+    /** The spelling search used instead of the one typed, when that found nothing. */
+    val searchNote: String? = null,
+    val filter: SearchFilter = SearchFilter(),
+    /** Ways to narrow the results (kinds, years, tags), for chips above them. */
+    val facets: List<Facet> = emptyList(),
+    /** Files shown as a grid of first pages rather than a list. */
+    val grid: Boolean = false,
+    /** Every file's highlights and notes, on the Highlights page. */
+    val marks: List<MarkGroup> = emptyList(),
 )
 
 data class Notice(val text: String, val undo: (() -> Unit)? = null, val id: Long = System.nanoTime())
@@ -124,14 +152,36 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         library.dao.observeTagCounts(), library.dao.observeUnindexed(),
     ) { d, l, t, c, u -> Raw(d, l, t, c, u) }
 
+    private val filter = MutableStateFlow(SearchFilter())
+    private val grid = MutableStateFlow(prefs.getBoolean("grid", false))
+
     private val results = combine(query.debounce(180).distinctUntilChanged(), library.dao.observeUnindexed()) { q, _ -> q }
         .mapLatest { q -> if (q.isBlank()) null else search(q) }
 
-    val ui: StateFlow<LibraryUi> = combine(raw, place, sorts, query, combine(results, access, picks, pins, bump) { r, a, pk, pn, _ -> listOf(r, a, pk, pn) }) { r, p, s, q, extra ->
-        @Suppress("UNCHECKED_CAST")
-        build(r, p, s[p.section] ?: defaultSort(p.section), q, extra[0] as List<DocResult>?, extra[1] as Boolean)
-            .copy(picked = extra[2] as Set<Long>)
+    /** The Highlights page's marks, read only while it is open. */
+    private val marksFlow = combine(place, library.dao.observeAll()) { p, docs -> (p.section == Section.HIGHLIGHTS) to docs }
+        .mapLatest { (on, docs) -> if (!on) emptyList() else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { groupMarks(library.marks.all(), docs) } }
+
+    private data class Extras(val res: SearchOut?, val access: Boolean, val picks: Set<Long>)
+    private data class View(val filter: SearchFilter, val grid: Boolean, val marks: List<MarkGroup>)
+
+    private val extras = combine(results, access, picks, pins, bump) { r, a, pk, _, _ -> Extras(r, a, pk) }
+    private val view = combine(filter, grid, marksFlow) { f, g, m -> View(f, g, m) }
+
+    val ui: StateFlow<LibraryUi> = combine(combine(raw, place, sorts) { r, p, s -> Triple(r, p, s) }, query, extras, view) { (r, p, s), q, x, v ->
+        build(r, p, s[p.section] ?: defaultSort(p.section), q, x.res, x.access, v)
+            .copy(picked = x.picks)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LibraryUi())
+
+    private fun groupMarks(rows: List<com.fadysaeed.pdfx.data.MarkRow>, docs: List<Doc>): List<MarkGroup> {
+        val byId = docs.filter { !it.inTrash }.associateBy { it.id }
+        return rows.groupBy { it.doc }.mapNotNull { (id, ms) -> byId[id]?.let { MarkGroup(it, ms.sortedBy { m -> m.page }) } }
+            .sortedWith(compareByDescending<MarkGroup> { it.doc.lastOpened }.thenBy { titleOf(it.doc).lowercase() })
+    }
+
+    fun setFilter(f: SearchFilter) { filter.value = f }
+
+    fun setGrid(on: Boolean) { grid.value = on; prefs.edit().putBoolean("grid", on).apply() }
 
     fun refresh() {
         val had = access.value
@@ -163,7 +213,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setQuery(q: String) { query.value = q }
+    fun setQuery(q: String) { query.value = q; if (q.isBlank()) filter.value = SearchFilter() }
 
     fun setSort(by: SortBy) {
         val sec = place.value.section
@@ -398,32 +448,97 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
 
     // --------------------------------------------------------- shaping the list
 
-    private suspend fun search(q: String): List<DocResult> {
+    /**
+     * Finds files by their details, their words and the user's notes, best first (see [com.fadysaeed.pdfx.data.Ranking]).
+     * A word found nowhere is taken as a slip of the finger and spelt as the nearest word that is there.
+     */
+    private suspend fun search(q: String): SearchOut = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val docs = library.dao.all().filter { !it.inTrash }
-        val byId = docs.associateBy { it.id }
-        val words = q.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
-        // The name, and the real title, author, year and DOI read from the file.
-        val nameHits = docs.filter { d ->
-            val about = listOfNotNull(d.name, d.title, d.author, d.doi, d.year.takeIf { it > 0 }?.toString()).joinToString(" ").lowercase()
-            words.all { about.contains(it) }
-        }.map { it.id }.toSet()
-        val text = library.searchText(q).filter { it.docId in byId }.groupBy { it.docId }
-        val ids = (nameHits + text.keys)
-        return ids.mapNotNull { id ->
-            val d = byId[id] ?: return@mapNotNull null
-            val hits = text[id].orEmpty().sortedBy { it.page }
-            DocResult(d, id in nameHits, hits.take(3), hits.size)
-        }.sortedWith(compareByDescending<DocResult> { it.nameMatch }.thenByDescending { it.totalHits }.thenByDescending { it.doc.lastOpened })
+        val tagNames = ui.value.allTags.associate { it.id to it.name }
+        val tagsOf = ui.value.docTags.mapValues { (_, ids) -> ids.mapNotNull { tagNames[it] } }
+        val fields = docs.associate { it.id to com.fadysaeed.pdfx.data.Ranking.fields(it, tagsOf[it.id].orEmpty()) }
+        val first = rank(q, docs, fields)
+        val words = com.fadysaeed.pdfx.data.Ranking.words(q)
+        // Words found nowhere: in no file's details and on no page.
+        val vocab = HashSet<String>()
+        fields.values.forEach { f -> vocab += f.title; vocab += f.author; vocab += f.name; vocab += f.tags }
+        val absent = words.filter { w -> w.length >= 4 && w.any { it.isLetter() } && vocab.none { it.startsWith(w) } && !library.text.hasAny(w) && library.marks.matching(listOf(w)).isEmpty() }
+        if (absent.isEmpty()) return@withContext SearchOut(first)
+        val fixes = HashMap<String, String>()
+        for (w in absent) {
+            val most = if (w.length >= 7) 2 else 1
+            val near = vocab.asSequence().filter { kotlin.math.abs(it.length - w.length) <= most && it.firstOrNull() == w.first() }
+                .map { it to com.fadysaeed.pdfx.data.TextMath.distance(w, it, most) }.filter { it.second <= most }
+                .minByOrNull { it.second }
+            val inside = library.text.nearWords(w, 1).firstOrNull()?.let { it to com.fadysaeed.pdfx.data.TextMath.distance(w, it, most) }
+            val pick = listOfNotNull(near, inside).minByOrNull { it.second }?.first
+            if (pick != null) fixes[w] = pick
+        }
+        if (fixes.isEmpty()) return@withContext SearchOut(first)
+        val fixed = words.joinToString(" ") { fixes[it] ?: it }
+        val second = rank(fixed, docs, fields)
+        if (second.isEmpty() || (first.isNotEmpty() && second.size <= first.size)) SearchOut(first) else SearchOut(second, fixed)
     }
 
-    private fun build(r: Raw, p: Place, s: Sort, q: String, res: List<DocResult>?, access: Boolean): LibraryUi {
+    private suspend fun rank(q: String, docs: List<Doc>, fields: Map<Long, com.fadysaeed.pdfx.data.Ranking.Fields>): List<DocResult> {
+        val words = com.fadysaeed.pdfx.data.Ranking.words(q)
+        if (words.isEmpty()) return emptyList()
+        val phrase = words.joinToString(" ")
+        val match = com.fadysaeed.pdfx.data.ftsQuery(q)
+        val pages = match?.let { m -> runCatching { library.text.pagesMatching(m, raw = true) }.getOrDefault(emptyMap()) }.orEmpty()
+        val snippets = library.searchText(q).groupBy { it.docId }
+        val marks = runCatching { library.marks.matching(words) }.getOrDefault(emptyList()).groupBy { it.doc }
+        val now = System.currentTimeMillis()
+        return docs.mapNotNull { d ->
+            val f = fields[d.id] ?: return@mapNotNull null
+            val (details, all) = com.fadysaeed.pdfx.data.Ranking.inDetails(words, phrase, d, f)
+            val hit = pages[d.id] ?: 0
+            val mine = marks[d.id].orEmpty()
+            if (!all && hit == 0 && mine.isEmpty()) return@mapNotNull null
+            val recent = if (d.lastOpened > now - 30L * 86_400_000) 1.0 else 0.0
+            val score = (if (all) details else 0.0) + com.fadysaeed.pdfx.data.Ranking.inside(hit, d.pages) + com.fadysaeed.pdfx.data.Ranking.inMarks(mine.size) + recent
+            DocResult(d, all, snippets[d.id].orEmpty().sortedBy { it.page }.take(3), hit, score, mine.take(3))
+        }.sortedWith(compareByDescending<DocResult> { it.score }.thenByDescending { it.doc.lastOpened })
+    }
+
+    /** The results narrowed by [f], and the ways they could be narrowed. */
+    private fun narrow(res: List<DocResult>, f: SearchFilter, docTags: Map<Long, Set<Long>>, tags: List<Tag>): Pair<List<DocResult>, List<Facet>> {
+        val year = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+        fun yearOk(d: Doc, y: Int?) = when {
+            y == null -> true
+            d.year <= 0 -> false
+            y > 0 -> d.year >= year - y
+            else -> d.year < year + y
+        }
+        fun pass(r: DocResult, x: SearchFilter) = (x.kind == null || r.doc.kind == x.kind) && yearOk(r.doc, x.years) && (x.tagId == null || x.tagId in docTags[r.doc.id].orEmpty())
+        val shown = res.filter { pass(it, f) }
+        val facets = ArrayList<Facet>()
+        // Kinds among the results, as narrowed by the rest.
+        val byKind = res.filter { pass(it, f.copy(kind = null)) }.groupingBy { it.doc.kind }.eachCount()
+        Shelf.entries.filter { it.ordinal >= 3 }.forEach { sh -> byKind[sh.name]?.takeIf { it > 0 }?.let { n -> facets += Facet(sh.label, n, f.copy(kind = if (f.kind == sh.name) null else sh.name), f.kind == sh.name) } }
+        for (y in listOf(2, 5, -5)) {
+            val n = res.count { pass(it, f.copy(years = y)) }
+            if (n > 0 && (n < res.size || f.years == y)) facets += Facet(if (y > 0) "Last $y years" else "Older", n, f.copy(years = if (f.years == y) null else y), f.years == y)
+        }
+        val byTag = HashMap<Long, Int>()
+        res.filter { pass(it, f.copy(tagId = null)) }.forEach { r -> docTags[r.doc.id].orEmpty().forEach { byTag.merge(it, 1, Int::plus) } }
+        tags.filter { (byTag[it.id] ?: 0) > 0 }.sortedByDescending { byTag[it.id] }.take(8).forEach { t ->
+            facets += Facet(t.name, byTag.getValue(t.id), f.copy(tagId = if (f.tagId == t.id) null else t.id), f.tagId == t.id)
+        }
+        return shown to facets
+    }
+
+    private fun build(r: Raw, p: Place, s: Sort, q: String, out: SearchOut?, access: Boolean, v: View): LibraryUi {
         val tagsById = r.tags.associateBy { it.id }
         val tagsOf = r.links.groupBy({ it.docId }, { tagsById[it.tagId] }).mapValues { e -> e.value.filterNotNull().sortedBy { it.name.lowercase() } }
         val live = r.docs.filter { !it.inTrash }
+        val docTagIds = r.links.groupBy({ it.docId }, { it.tagId }).mapValues { it.value.toSet() }
+        val narrowed = if (q.isBlank() || out == null) null else narrow(out.results, v.filter, docTagIds, r.tags)
         val docs: List<Doc> = when (p.section) {
             Section.RECENT -> live.filter { it.lastOpened > 0 }
             Section.ALL -> live.filter { it.isFile }
             Section.STARRED -> live.filter { it.starred }
+            Section.HIGHLIGHTS -> emptyList()
             Section.FOLDERS -> if (p.inFolder) live.filter { it.folder == p.folder } else emptyList()
             Section.TAGS -> if (p.tagId != null) live.filter { d -> tagsOf[d.id].orEmpty().any { it.id == p.tagId } } else emptyList()
             Section.TRASH -> r.docs.filter { it.inTrash }
@@ -449,9 +564,14 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             tidy = tidyOf(live),
             tags = r.counts,
             allTags = r.tags,
-            docTags = r.links.groupBy({ it.docId }, { it.tagId }).mapValues { it.value.toSet() },
+            docTags = docTagIds,
             query = q,
-            results = if (q.isBlank()) null else res,
+            results = narrowed?.first,
+            facets = narrowed?.second.orEmpty(),
+            searchNote = out?.corrected?.takeIf { q.isNotBlank() },
+            filter = v.filter,
+            grid = v.grid,
+            marks = v.marks,
             sort = s,
             hasAccess = access,
             unindexed = r.unindexed,

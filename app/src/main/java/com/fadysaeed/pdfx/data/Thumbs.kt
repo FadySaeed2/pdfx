@@ -15,15 +15,18 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
 
-/** First-page thumbnails, drawn once and kept on disk until the file changes. */
+/** First-page pictures for the list and the grid, drawn once and kept on disk until the file changes. */
 class Thumbs(context: Context, private val library: Library) {
     private val appContext = context.applicationContext
     private val dir = File(context.cacheDir, "thumbs").apply { mkdirs() }
-    private val memory = LruCache<String, ImageBitmap>(120)
+    // Held by size: about 300 first pages at grid sharpness.
+    private val memory = object : LruCache<String, ImageBitmap>(48 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
+    }
     private val gate = Semaphore(2)
 
     private fun name(d: Doc): String {
-        val md = MessageDigest.getInstance("SHA-1").digest("${d.key}|${d.modified}|${d.size}".toByteArray())
+        val md = MessageDigest.getInstance("SHA-1").digest("${d.key}|${d.modified}|${d.size}|$WIDTH_PX".toByteArray())
         return md.joinToString("") { "%02x".format(it) }
     }
 
@@ -57,5 +60,6 @@ class Thumbs(context: Context, private val library: Library) {
         }
     }
 
-    private companion object { const val WIDTH_PX = 168 }
+    // Sharp enough for the grid's three a row; the list's small ones are this drawn smaller.
+    private companion object { const val WIDTH_PX = 320 }
 }

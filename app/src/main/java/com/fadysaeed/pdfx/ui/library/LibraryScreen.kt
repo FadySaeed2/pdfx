@@ -69,6 +69,8 @@ import kotlinx.coroutines.launch
 
 private sealed interface Sheet {
     data class Actions(val doc: Doc) : Sheet
+    /** A quick look at a file's first pages. */
+    data class Peek(val doc: Doc) : Sheet
     data class History(val doc: Doc) : Sheet
     data class Destination(val doc: Doc, val copy: Boolean) : Sheet
     data class Tags(val doc: Doc) : Sheet
@@ -187,6 +189,9 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
             folderMore = { sheet = Sheet.FolderMenu(it) },
             newFolder = { ask = Ask.NewFolderIn(it) },
             crumb = vm::openFolder,
+            peek = { sheet = Sheet.Peek(it) },
+            grid = vm::setGrid,
+            filter = vm::setFilter,
         ),
     )
     merging?.let { start ->
@@ -290,6 +295,17 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
         ) {
             Column(Modifier.windowInsetsPadding(WindowInsets.navigationBars).padding(bottom = 8.dp)) {
                 when (current) {
+                    is Sheet.Peek -> {
+                        // The file as it is now (starred or not), not as it was when the look began.
+                        val d = (ui.items.map { it.doc } + ui.results.orEmpty().map { it.doc }).firstOrNull { it.id == current.doc.id } ?: current.doc
+                        PeekBody(
+                            d, vm.library.folderLabel(d.folder),
+                            onOpen = { page -> sheet = null; onOpen(d, page) },
+                            onSelect = { sheet = null; vm.pick(d) },
+                            onStar = { vm.star(d) },
+                            onMore = { sheet = Sheet.Actions(d) },
+                        )
+                    }
                     is Sheet.Actions -> ActionsSheet(
                         d = current.doc,
                         label = vm.library.folderLabel(current.doc.folder),

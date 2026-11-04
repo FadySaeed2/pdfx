@@ -32,7 +32,31 @@ class TextIndexer(private val context: Context, private val library: Library) {
             n++
             if (n % 50 == 0) library.fixSharedTitles()
         }
+        // Highlights and notes of files read before PDFx kept them, and of any that changed since.
+        if (!stopIf()) readMarks(stopIf)
         return n
+    }
+
+    /** Reads the marks of every file whose marks are not read for its present version. */
+    suspend fun readMarks(stopIf: () -> Boolean = { false }) {
+        val read = withContext(Dispatchers.IO) { library.marks.readAt() }
+        for (d in library.dao.all()) {
+            if (stopIf()) return
+            if (d.inTrash || !d.isFile || d.locked || read[d.id] == d.modified) continue
+            val s = runCatching { PdfSession.open(context, Uri.parse(d.uri)) }.getOrNull() ?: continue
+            try {
+                if (!s.needsPassword) keepMarks(d, s)
+            } finally {
+                s.close()
+            }
+        }
+    }
+
+    private suspend fun keepMarks(d: Doc, s: PdfSession) {
+        val marks = runCatching { s.marksToKeep() }.getOrDefault(emptyList())
+        withContext(Dispatchers.IO) {
+            library.marks.replace(d.id, d.modified, marks.map { m -> MarkRow(d.id, m.page, m.kind.name, m.color, m.quoted.take(2000), m.note.take(4000)) })
+        }
     }
 
     suspend fun index(d: Doc) {
@@ -57,6 +81,7 @@ class TextIndexer(private val context: Context, private val library: Library) {
                 }
                 withContext(Dispatchers.IO) { library.text.replace(d.id, rows) }
             }
+            keepMarks(d, session)
             // Its real title, author and year, and its kind.
             val meta = runCatching { session.metadata() }.getOrDefault(emptyMap())
             val first = runCatching { session.infoPages(3) }.getOrDefault(emptyList())

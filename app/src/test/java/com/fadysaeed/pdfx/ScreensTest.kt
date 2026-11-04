@@ -20,6 +20,9 @@ import com.fadysaeed.pdfx.data.TagCount
 import com.fadysaeed.pdfx.data.TextHit
 import com.fadysaeed.pdfx.ui.library.ActionsSheet
 import com.fadysaeed.pdfx.ui.library.DocResult
+import com.fadysaeed.pdfx.ui.library.Facet
+import com.fadysaeed.pdfx.ui.library.MarkGroup
+import com.fadysaeed.pdfx.ui.library.SearchFilter
 import com.fadysaeed.pdfx.ui.library.FolderRow
 import com.fadysaeed.pdfx.ui.library.Shelf
 import com.fadysaeed.pdfx.ui.library.ShelfRow
@@ -200,6 +203,52 @@ class ScreensTest {
     )
 
     @Test fun tags() = shot(base.copy(place = Place(Section.TAGS), title = "Tags", items = emptyList()), "05_tags.png")
+
+    @Test fun grid() = shot(base.copy(place = Place(Section.ALL), title = "All files", grid = true, items = docs + docs.map { Item(it.doc.copy(id = it.doc.id + 20), it.tags) }), "51_grid.png")
+
+    @Test fun highlights() = shot(
+        base.copy(
+            place = Place(Section.HIGHLIGHTS), title = "Highlights", items = emptyList(),
+            marks = listOf(
+                MarkGroup(docs[2].doc, listOf(
+                    com.fadysaeed.pdfx.data.MarkRow(3, 17, "HIGHLIGHT", 0xF2C14E, "Check lithium levels 12 hours after the last dose, weekly until stable.", ""),
+                    com.fadysaeed.pdfx.data.MarkRow(3, 40, "HIGHLIGHT", 0x7FD1B9, "ACE inhibitors raise lithium levels.", "Ask the GP about the ramipril."),
+                    com.fadysaeed.pdfx.data.MarkRow(3, 63, "NOTE", 0xF2C14E, "", "Use this table in the teaching session."),
+                )),
+                MarkGroup(docs[0].doc, listOf(com.fadysaeed.pdfx.data.MarkRow(1, 2, "UNDERLINE", 0xE26D5C, "Budget closes on 30 November.", ""))),
+            ),
+        ),
+        "52_highlights.png",
+    )
+
+    @Test fun searchRanked() = shot(
+        base.copy(
+            query = "lithuim",
+            searchNote = "lithium",
+            facets = listOf(
+                Facet("Guidelines", 1, SearchFilter(kind = "GUIDELINE"), on = false), Facet("Papers", 1, SearchFilter(kind = "PAPER"), on = false),
+                Facet("Last 2 years", 1, SearchFilter(years = 2), on = false), Facet("Clinic", 2, SearchFilter(tagId = 1), on = false),
+            ),
+            results = listOf(
+                DocResult(docs[2].doc, true, listOf(
+                    TextHit(3, 18, "…monitor \u0002lithium\u0003 levels 12 hours after the last dose, weekly until stable…"),
+                ), 9, 20.0, listOf(com.fadysaeed.pdfx.data.MarkRow(3, 40, "HIGHLIGHT", 0x7FD1B9, "ACE inhibitors raise lithium levels.", "Ask the GP about the ramipril."))),
+                DocResult(docs[0].doc, false, listOf(TextHit(1, 3, "…the \u0002lithium\u0003 battery supplier contract renewed in Q3…")), 1, 3.0),
+            ),
+        ),
+        "53_search_ranked.png",
+    )
+
+    @Test fun peek() {
+        compose.setContent {
+            PdfxTheme {
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.background(com.fadysaeed.pdfx.ui.theme.Ink.Field)) {
+                    com.fadysaeed.pdfx.ui.library.PeekBody(docs[2].doc.copy(title = "Clinical practice guideline for mood disorders", author = "Malhi et al.", year = 2021, locked = true), "Documents/Guidelines", {}, {}, {}, {})
+                }
+            }
+        }
+        compose.onRoot().captureRoboImage("screenshots/54_peek.png")
+    }
 
     @Test fun search() = shot(
         base.copy(
