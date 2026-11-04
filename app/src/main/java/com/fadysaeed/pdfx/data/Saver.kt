@@ -43,6 +43,12 @@ class Versions(private val root: File) {
  * (a WhatsApp share) are saved as a copy in Documents/PDFx instead.
  */
 class Saver(private val library: Library) {
+    companion object {
+        const val CHANGED = "This file was changed by something else while this was being done (its scanned pages being read, say), so nothing was replaced. Open it again and try once more."
+
+        /** The size and last change of a file on disk: two writes apart show different stamps. */
+        fun stampOf(f: File): Pair<Long, Long> = f.length() to f.lastModified()
+    }
 
     sealed interface Saved {
         val doc: Doc
@@ -54,20 +60,22 @@ class Saver(private val library: Library) {
         runCatching {
             val f = doc?.path?.let(::File)
             if (doc != null && f != null && f.isFile && f.canWrite() && !doc.inTrash) {
-                val tmp = File(f.parentFile, ".${f.name}.pdfx-saving")
-                tmp.delete()
-                try {
-                    val incremental = session.canSaveIncrementally()
-                    if (incremental) f.copyTo(tmp, overwrite = true)
-                    session.writeTo(tmp.absolutePath, incremental)
-                    check(tmp, session.pageCount)
-                    library.versions.keep(doc.id, f)
-                    if (!tmp.renameTo(f)) {
-                        tmp.copyTo(f, overwrite = true)
-                        tmp.delete()
+                library.holding(f) {
+                    val tmp = tempFor(f)
+                    try {
+                        // Changes are added onto the file only while it is still the one this read;
+                        // written meanwhile (scans read in the background, another app), the whole
+                        // file is written afresh from what is open, and what was there is kept as a version.
+                        val unchanged = session.diskStamp == stampOf(f)
+                        val incremental = unchanged && session.canSaveIncrementally()
+                        if (incremental) f.copyTo(tmp, overwrite = true)
+                        session.writeTo(tmp.absolutePath, incremental)
+                        check(tmp, session.pageCount)
+                        library.versions.keep(doc.id, f)
+                        putInPlace(tmp, f)
+                    } finally {
+                        if (tmp.exists()) tmp.delete()
                     }
-                } finally {
-                    if (tmp.exists()) tmp.delete()
                 }
                 MediaScannerConnection.scanFile(library.context, arrayOf(f.absolutePath), null, null)
                 Saved.InPlace(library.afterSave(doc, f))
@@ -99,18 +107,21 @@ class Saver(private val library: Library) {
      * file to the path it is given and returns how many pages it has. Used when the pages
      * themselves change (order, turns, pages added or taken out), which rewrites the whole file.
      */
-    suspend fun replace(doc: Doc?, uri: Uri, make: (File) -> Int): Result<Saved> = withContext(Dispatchers.IO) {
+    suspend fun replace(doc: Doc?, uri: Uri, base: Pair<Long, Long>? = null, make: (File) -> Int): Result<Saved> = withContext(Dispatchers.IO) {
         runCatching {
             val f = doc?.path?.let(::File)
             if (doc != null && f != null && f.isFile && f.canWrite() && !doc.inTrash) {
-                val tmp = File(f.parentFile, ".${f.name}.pdfx-saving")
-                tmp.delete()
+                // The file the new one is made from, as it was: [base] when what is open was read
+                // earlier, else as it is now. Made without holding the file (reading a scan's words
+                // takes minutes); it takes the file's place only if nothing wrote it meanwhile.
+                val from = base ?: stampOf(f)
+                val tmp = tempFor(f)
                 try {
                     check(tmp, make(tmp))
-                    library.versions.keep(doc.id, f)
-                    if (!tmp.renameTo(f)) {
-                        tmp.copyTo(f, overwrite = true)
-                        tmp.delete()
+                    library.holding(f) {
+                        if (stampOf(f) != from) throw IOException(CHANGED)
+                        library.versions.keep(doc.id, f)
+                        putInPlace(tmp, f)
                     }
                 } finally {
                     if (tmp.exists()) tmp.delete()
@@ -161,17 +172,39 @@ class Saver(private val library: Library) {
         runCatching {
             val f = File(doc.path ?: throw IOException("This file has no place on the phone."))
             check(version.file, -1)
-            val tmp = File(f.parentFile, ".${f.name}.pdfx-restoring")
-            try {
-                version.file.copyTo(tmp, overwrite = true)
-                library.versions.keep(doc.id, f, max = 4)
-                version.file.delete()
-                if (!tmp.renameTo(f)) { tmp.copyTo(f, overwrite = true) }
-            } finally {
-                if (tmp.exists()) tmp.delete()
+            library.holding(f) {
+                val tmp = tempFor(f)
+                try {
+                    version.file.copyTo(tmp, overwrite = true)
+                    library.versions.keep(doc.id, f, max = 4)
+                    putInPlace(tmp, f)
+                    version.file.delete()
+                } finally {
+                    if (tmp.exists()) tmp.delete()
+                }
             }
             library.afterSave(doc, f)
         }
+    }
+
+    /**
+     * A name of its own beside [f] for the file being written, so two writes never share one; and
+     * any left by a write that was cut off (the phone turned off half way) cleared away.
+     */
+    private fun tempFor(f: File): File {
+        val dir = f.parentFile ?: throw IOException("The file has no folder.")
+        val stale = System.currentTimeMillis() - 10 * 60_000L
+        dir.listFiles { x -> x.name.startsWith(".${f.name}.") && x.name.endsWith(".pdfx-saving") && x.lastModified() < stale }?.forEach { it.delete() }
+        return File(dir, ".${f.name}.${System.nanoTime()}.pdfx-saving")
+    }
+
+    /**
+     * Gives the finished [tmp] the name of [f] in one step. Should the phone refuse, the original is
+     * left exactly as it was and the save says so; it is never written over in place, where a cut
+     * half way would leave it broken.
+     */
+    private fun putInPlace(tmp: File, f: File) {
+        if (!tmp.renameTo(f)) throw IOException("The saved file could not take the original's place. The original is untouched; try saving again.")
     }
 
     /** Opens the written file again: it must open, and have every page. */

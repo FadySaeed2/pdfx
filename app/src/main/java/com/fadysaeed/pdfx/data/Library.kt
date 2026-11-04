@@ -91,6 +91,18 @@ class Library(
      */
     private val fileOps = kotlinx.coroutines.sync.Mutex()
 
+    /**
+     * One lock for each file PDFx writes into: a save from the open file, scans read in the
+     * background, a move to the trash. Two of them on one file at once could each write over the
+     * other's work, or the trash could take the file away from under a save.
+     */
+    private val fileLocks = HashMap<String, kotlinx.coroutines.sync.Mutex>()
+
+    suspend fun <T> holding(f: File, block: suspend () -> T): T {
+        val m = synchronized(fileLocks) { fileLocks.getOrPut(f.absolutePath) { kotlinx.coroutines.sync.Mutex() } }
+        return m.withLock { block() }
+    }
+
     suspend fun scan(roots: List<File> = listOf(root)): ScanResult = withContext(Dispatchers.IO) { fileOps.withLock { scanNow(roots) } }
 
     private suspend fun scanNow(roots: List<File>): ScanResult {
@@ -108,6 +120,10 @@ class Library(
         var added = 0
         var removed = 0
         var moved = 0
+        // Files to forget, forgotten once the transaction is over: forgetting clears their words from
+        // search, which takes search's own lock, and the indexer takes that lock first and the
+        // database after. Both inside one another, each could wait for the other for ever.
+        val forget = ArrayList<Doc>()
         db.withTransaction {
             for ((path, f) in fresh) {
                 val fp = prints[path]
@@ -140,10 +156,11 @@ class Library(
             }
             for (d in known) {
                 val p = d.path ?: continue
-                if (d.inTrash && !File(p).exists()) { forgetNow(d); removed++ }
+                if (d.inTrash && !File(p).exists()) { forget += d; removed++ }
             }
-            for (d in gone) { forgetNow(d); removed++ }
+            for (d in gone) { forget += d; removed++ }
         }
+        for (d in forget) forgetNow(d)
         fillFingerprints()
         return ScanResult(files.size, added, removed, moved)
     }
@@ -207,7 +224,10 @@ class Library(
         val name = described.replace('/', '_').let { if (it.endsWith(".pdf", true)) it else "$it.pdf" }
         val old = dao.byKey(uri.toString())
         if (size > 0) {
-            dao.all().firstOrNull { d -> d.path != null && !d.inTrash && d.name == name && d.size == size && File(d.path).isFile }
+            // The same file already on the phone: the same name and size, and every byte the same (two
+            // reports of one name and size can still differ inside).
+            dao.all().filter { d -> d.path != null && !d.inTrash && d.name == name && d.size == size && File(d.path).isFile }
+                .firstOrNull { d -> runCatching { context.contentResolver.openInputStream(uri)?.use { sameBytes(it, File(d.path!!)) } }.getOrNull() == true }
                 ?.let { same -> return@withContext adoptCopy(File(same.path!!), old) }
         }
         val target = copyIn(name) { out -> context.contentResolver.openInputStream(uri)?.use { it.copyTo(out) } != null }
@@ -226,9 +246,15 @@ class Library(
         for (d in all) {
             if (d.isFile || d.inTrash) continue
             runCatching {
-                val same = all.firstOrNull { f -> f.path != null && !f.inTrash && f.name == d.name && f.size == d.size && d.size > 0 && File(f.path).isFile }
-                if (same != null) { adoptCopy(File(same.path!!), d); return@runCatching }
                 val kept = keptCopy(d)
+                val same = all.filter { f -> f.path != null && !f.inTrash && f.name == d.name && f.size == d.size && d.size > 0 && File(f.path).isFile }
+                    .firstOrNull { f ->
+                        runCatching {
+                            if (kept.isFile) kept.inputStream().use { sameBytes(it, File(f.path!!)) }
+                            else context.contentResolver.openInputStream(Uri.parse(d.uri))?.use { sameBytes(it, File(f.path!!)) }
+                        }.getOrNull() == true
+                    }
+                if (same != null) { adoptCopy(File(same.path!!), d); return@runCatching }
                 val name = d.name.replace('/', '_').let { if (it.endsWith(".pdf", true)) it else "$it.pdf" }
                 val target = if (kept.isFile && kept.length() > 0) copyIn(name) { out -> kept.inputStream().use { it.copyTo(out) }; true }
                 else copyIn(name) { out -> context.contentResolver.openInputStream(Uri.parse(d.uri))?.use { it.copyTo(out) } != null }
@@ -304,6 +330,10 @@ class Library(
         for (o0 in others) {
             val o = dao.byId(o0.id) ?: continue
             if (o.id == k.id || o.inTrash) continue
+            // The fingerprint reads only parts of a big file: every byte is compared before one goes.
+            val kf = File(k.path ?: continue)
+            val of = File(o.path ?: continue)
+            if (!withContext(Dispatchers.IO) { sameBytes(kf, of) }) continue
             withContext(Dispatchers.IO) {
                 db.withTransaction {
                     dao.tagIdsOf(o.id).forEach { dao.tag(DocTag(k.id, it)) }
@@ -331,7 +361,7 @@ class Library(
         val dst = File(src.parentFile, "$clean.pdf")
         if (dst.absolutePath == src.absolutePath) return@locked d
         if (dst.exists()) throw IOException("There is already a file called ${dst.name} in this folder.")
-        if (!src.renameTo(dst)) throw IOException("The file could not be renamed.")
+        if (!holding(src) { src.renameTo(dst) }) throw IOException("The file could not be renamed.")
         val m = moved(d, src, dst)
         if (!byUser) return@locked m
         // The name the user gave is what the lists show from now on, in place of the title read from
@@ -359,7 +389,7 @@ class Library(
         if (src.parentFile?.absolutePath == dir.absolutePath) return@locked d
         dir.mkdirs()
         val dst = uniqueTarget(dir, src.name)
-        relocate(src, dst)
+        holding(src) { relocate(src, dst) }
         moved(d, src, dst)
     }
 
@@ -375,6 +405,10 @@ class Library(
     /** Moves a file into PDFx's trash. It comes back with [restore] for 30 days. */
     suspend fun trash(d: Doc): Result<Doc> = locked {
         val src = fileOf(d)
+        holding(src) { trashNow(d, src) }
+    }
+
+    private suspend fun trashNow(d: Doc, src: File): Doc {
         trashDir.mkdirs()
         File(trashDir, ".nomedia").let { if (!it.exists()) it.createNewFile() }
         val dst = uniqueTarget(trashDir, "${d.id}-${src.name}")
@@ -389,7 +423,7 @@ class Library(
         val t = d.copy(key = dst.absolutePath, path = dst.absolutePath, uri = Uri.fromFile(dst).toString(), folder = dst.parent, trashedAt = System.currentTimeMillis(), trashOrigin = src.absolutePath)
         dao.update(t)
         scanMedia(src)
-        t
+        return t
     }
 
     suspend fun restore(d: Doc): Result<Doc> = locked {
@@ -440,7 +474,9 @@ class Library(
     suspend fun afterSave(d: Doc, f: File): Doc {
         val now = dao.byId(d.id) ?: d
         // Its words may have changed (read off a scan, blacked out), so search reads them again.
-        val updated = now.copy(size = f.length(), modified = f.lastModified())
+        // And what it is changed with it: the old fingerprint would make it look like a copy of the
+        // file it was before (an untouched twin of it, say).
+        val updated = now.copy(size = f.length(), modified = f.lastModified(), fingerprint = Fingerprint.of(f))
         dao.update(updated)
         runCatching { TextIndexer.schedule(context) }
         return updated
@@ -479,6 +515,33 @@ class Library(
         if (!src.delete()) {
             dst.delete()
             throw IOException("The file could not be moved.")
+        }
+    }
+
+    /** Whether two files hold exactly the same bytes, read through to the end. */
+    internal fun sameBytes(a: File, b: File): Boolean {
+        if (!a.isFile || !b.isFile || a.length() != b.length()) return false
+        if (a.absolutePath == b.absolutePath) return true
+        return a.inputStream().use { sameBytes(it, b) }
+    }
+
+    /** Whether [input] holds exactly the bytes of [b], read through to the end. */
+    internal fun sameBytes(input: java.io.InputStream, b: File): Boolean = b.inputStream().use { ib -> sameStreams(input, ib) }
+
+    private fun sameStreams(a: java.io.InputStream, b: java.io.InputStream): Boolean {
+        val x = ByteArray(1 shl 16)
+        val y = ByteArray(1 shl 16)
+        fun fill(i: java.io.InputStream, buf: ByteArray): Int {
+            var got = 0
+            while (got < buf.size) { val k = i.read(buf, got, buf.size - got); if (k < 0) break; got += k }
+            return got
+        }
+        while (true) {
+            val na = fill(a, x)
+            val nb = fill(b, y)
+            if (na != nb) return false
+            if (na == 0) return true
+            for (i in 0 until na) if (x[i] != y[i]) return false
         }
     }
 

@@ -84,10 +84,33 @@ object Office {
         return f.newDocumentBuilder().parse(ByteArrayInputStream(bytes))
     }
 
+    /** The most one part of a Word or Excel file may unpack to; real ones stay far below it. */
+    internal const val PART_MAX = 64L * 1024 * 1024
+
+    /**
+     * One part of the file, unpacked. A part that unpacks past [PART_MAX] (a damaged file, or one
+     * made to swell when opened) stops the reading with a plain message, before it fills the memory.
+     */
     internal fun ZipFile.bytes(name: String): ByteArray? {
         val e = getEntry(name) ?: entries().asSequence().firstOrNull { it.name.equals(name, true) } ?: return null
-        return getInputStream(e).use { it.readBytes() }
+        if (e.size > PART_MAX) throw java.io.IOException(TOO_BIG)
+        return getInputStream(e).use { i ->
+            val out = java.io.ByteArrayOutputStream(if (e.size in 1..PART_MAX) e.size.toInt() else 1 shl 16)
+            val buf = ByteArray(1 shl 16)
+            var total = 0L
+            while (true) {
+                val n = i.read(buf)
+                if (n < 0) break
+                total += n
+                if (total > PART_MAX) throw java.io.IOException(TOO_BIG)
+                out.write(buf, 0, n)
+            }
+            out.toByteArray()
+        }
     }
+
+    private const val TOO_BIG = "Part of this file unpacks to more than 64 MB, so PDFx won't open it. It may be damaged; try saving it again from Word or Excel."
+
 
     internal fun ZipFile.xml(name: String): Element? = bytes(name)?.let { runCatching { parse(it).documentElement }.getOrNull() }
 

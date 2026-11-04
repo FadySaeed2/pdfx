@@ -148,6 +148,14 @@ class PdfSession private constructor(
 ) {
     @Volatile var pageCount: Int = 0
         private set
+
+    /**
+     * The size and last change of the file on disk when this opened it (null for one inside another
+     * app). Saving appends to the file only while it is still that file: once something else wrote
+     * it, the whole file is written afresh instead, so nothing is added onto bytes it never read.
+     */
+    @Volatile var diskStamp: Pair<Long, Long>? = null
+        internal set
     @Volatile var closed = false
         private set
 
@@ -1474,17 +1482,26 @@ class PdfSession private constructor(
             Executors.newSingleThreadExecutor { r -> Thread(r, "pdfx-doc").apply { isDaemon = true } }
                 .asCoroutineDispatcher()
 
+        private fun stampOf(uri: Uri): Pair<Long, Long>? =
+            if (uri.scheme == "file") uri.path?.let { java.io.File(it) }?.takeIf { it.isFile }?.let { it.length() to it.lastModified() } else null
+
         /** Opens a document from any content or file Uri, reading it in place. */
         suspend fun open(context: Context, uri: Uri): PdfSession {
             val d = newThread()
             return try {
                 withContext(d) {
+                    // Before it opens: should the file change in between, the stamp is the older one and
+                    // saving writes the file afresh rather than adding to it.
+                    val stamp = stampOf(uri)
                     val pfd = context.contentResolver.openFileDescriptor(uri, "r")
                         ?: error("The file could not be opened.")
                     val stream = FdStream(pfd)
                     try {
                         val doc = Document.openDocument(stream, "application/pdf")
-                        PdfSession(doc, stream, { context.contentResolver.openInputStream(uri) ?: error("The file could not be read.") }, d).also { it.prepare() }
+                        PdfSession(doc, stream, { context.contentResolver.openInputStream(uri) ?: error("The file could not be read.") }, d).also {
+                            it.diskStamp = stamp
+                            it.prepare()
+                        }
                     } catch (t: Throwable) {
                         stream.close(); throw t
                     }
@@ -1498,7 +1515,10 @@ class PdfSession private constructor(
         suspend fun openFile(path: String): PdfSession {
             val d = newThread()
             return try {
-                withContext(d) { PdfSession(Document.openDocument(path), null, { java.io.FileInputStream(path) }, d).also { it.prepare() } }
+                withContext(d) {
+                    val stamp = java.io.File(path).let { it.length() to it.lastModified() }
+                    PdfSession(Document.openDocument(path), null, { java.io.FileInputStream(path) }, d).also { it.diskStamp = stamp; it.prepare() }
+                }
             } catch (t: Throwable) {
                 d.close(); throw t
             }

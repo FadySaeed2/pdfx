@@ -280,6 +280,9 @@ fun ViewerScreen(
             val prefs = remember { context.getSharedPreferences("reader", Context.MODE_PRIVATE) }
             val reader = remember(session) { Reader(session, session.pageCount, scope, library.bookmarks, doc?.id, prefs, seed = carry[0]).also { carry[0] = null } }
             val pages = reader.pages!!
+            // When a newer copy of the file takes over (after a save) or the file closes, this one's
+            // drawing stops and its spare pictures go; it no longer waits on for the whole visit.
+            androidx.compose.runtime.DisposableEffect(reader) { onDispose { reader.pages?.close() } }
             LaunchedEffect(reader) {
                 val saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.signatures.list() }.getOrDefault(emptyList()) }
                 reader.signs.clear(); reader.signs.addAll(saved)
@@ -684,7 +687,7 @@ fun ViewerScreen(
                             reader.problem = "Saved the new arrangement as ${made.name.removeSuffix(".pdf")}. The signed original is unchanged."
                         }) { o.note = it.message ?: "The pages could not be saved." }
                     } else {
-                        val r = app.saver.replace(doc, request.uri, make)
+                        val r = app.saver.replace(doc, request.uri, make = make)
                         organizing = false
                         r.fold({ saved ->
                             closePages()

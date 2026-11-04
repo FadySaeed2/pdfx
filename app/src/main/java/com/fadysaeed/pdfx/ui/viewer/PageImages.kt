@@ -9,6 +9,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.fadysaeed.pdfx.engine.PdfSession
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -85,18 +87,22 @@ data class Tile(val req: TileReq, val image: ImageBitmap)
  * are drawn first; when the reader jumps ahead, unfinished work for old pages is dropped.
  * Memory is held to a fixed pixel budget so a 2,000-page file costs the same as a 10-page one.
  */
-class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: PageImages? = null) {
+class PageImages(private val session: PdfSession, parent: CoroutineScope, seed: PageImages? = null) {
     /**
      * When the same file is opened again after saving, [seed] is the copy on screen until then: its
      * page shapes and pictures carry over, so the list of pages never empties for a moment (which
      * threw the reader back to page 1) and nothing blinks while the pages are drawn again.
      */
-    private val carried: PageImages? = seed?.takeIf { it.aspects.size == session.pageCount && it.widths.size == session.pageCount }
-    val images: PageSlots<ImageBitmap> = PageSlots<ImageBitmap>().apply { carried?.images?.toMap()?.let { putAll(it) } }
+    // Only the pictures and shapes come over, never the copy itself: kept, each save would hold on to
+    // the one before, and that to the one before it, pictures and all.
+    private val job = SupervisorJob(parent.coroutineContext[Job])
+    /** Its own work, ended by [close] when a newer copy takes over or the file closes. */
+    private val scope = CoroutineScope(parent.coroutineContext + job)
+    val images: PageSlots<ImageBitmap> = PageSlots<ImageBitmap>().apply { seed.fits()?.images?.toMap()?.let { putAll(it) } }
     /** Width over height for every page; starts as page 1's shape and settles as pages are measured. */
-    val aspects: SnapshotStateList<Float> = mutableStateListOf<Float>().apply { carried?.aspects?.toList()?.let { addAll(it) } }
+    val aspects: SnapshotStateList<Float> = mutableStateListOf<Float>().apply { seed.fits()?.aspects?.toList()?.let { addAll(it) } }
     /** Page widths in PDF points, to place highlights and selections on the page. */
-    val widths: SnapshotStateList<Float> = mutableStateListOf<Float>().apply { carried?.widths?.toList()?.let { addAll(it) } }
+    val widths: SnapshotStateList<Float> = mutableStateListOf<Float>().apply { seed.fits()?.widths?.toList()?.let { addAll(it) } }
     /** At most one sharp patch per page, for whatever is on screen when zoomed in deep. */
     val tiles = PageSlots<Tile>()
     private val wantedTiles = MutableStateFlow<Pair<Int, List<TileReq>>>(0 to emptyList())
@@ -155,6 +161,17 @@ class PageImages(private val session: PdfSession, scope: CoroutineScope, seed: P
     }
 
     fun want(w: Want) { wanted.value = w }
+
+    private fun PageImages?.fits(): PageImages? = this?.takeIf { it.aspects.size == session.pageCount && it.widths.size == session.pageCount }
+
+    /**
+     * Stops drawing for this copy and lets go of the spare pictures it kept to draw into. Pictures on
+     * screen stay as they are: a newer copy may be showing them until it has drawn its own.
+     */
+    fun close() {
+        job.cancel()
+        synchronized(spare) { spare.clear() }
+    }
 
     /** Asks for sharp patches; patches drawn for another zoom level or page are dropped at once. */
     fun wantTiles(reqs: List<TileReq>) {

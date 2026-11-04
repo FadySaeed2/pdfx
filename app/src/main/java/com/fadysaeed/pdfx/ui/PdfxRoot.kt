@@ -175,10 +175,12 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit, shortcut: Stri
 
     // From the icon's shortcuts: the last file opens here; scanning and search are the library's.
     var libraryAsk by remember { mutableStateOf<String?>(null) }
+    // Each request is taken once and then carried out in the screen's own scope: marking it taken
+    // changes the key below, which ends this effect's own work at its first wait, half done.
     LaunchedEffect(shortcut) {
         val s = shortcut ?: return@LaunchedEffect
         onShortcutHandled()
-        when (s) {
+        scope.launch { when (s) {
             "last" -> {
                 val last = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.library.dao.all().filter { !it.inTrash && it.lastOpened > 0 }.maxByOrNull { it.lastOpened } }
                 if (last != null) open = OpenRequest(Uri.parse(last.uri), last.lastPage)
@@ -190,14 +192,13 @@ fun PdfxRoot(incoming: List<Uri>?, onIncomingHandled: () -> Unit, shortcut: Stri
                 if (d != null && !d.inTrash) open = OpenRequest(Uri.parse(d.uri), d.lastPage)
                 else vm.notice.value = Notice("That file is no longer in the library.")
             } else { open = null; libraryAsk = s }
-        }
+        } }
     }
 
     LaunchedEffect(incoming) {
-        if (incoming != null) {
-            onIncomingHandled()
-            handle(incoming)
-        }
+        val uris = incoming ?: return@LaunchedEffect
+        onIncomingHandled()
+        scope.launch { handle(uris) }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
