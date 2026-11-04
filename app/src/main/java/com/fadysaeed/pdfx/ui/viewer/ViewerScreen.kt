@@ -1219,7 +1219,9 @@ fun ViewerContent(
                                 .combinedClickable(onClick = { askPage = true }, onLongClick = { checkStart = System.currentTimeMillis() })
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
                         ) {
-                            Text("${currentState.value + 1} / $pageCount", style = Type.figure)
+                            val shownPage = currentState.value
+                            // Two pages side by side show as "5–6".
+                            Text((if (reader.perRow == 2 && shownPage + 1 < pageCount) "${shownPage + 1}–${shownPage + 2}" else "${shownPage + 1}") + " / $pageCount", style = Type.figure)
                         }
                         if (reader.hasForm && !reader.reflow) {
                             Spacer(Modifier.width(8.dp))

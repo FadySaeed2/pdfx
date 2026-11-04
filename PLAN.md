@@ -287,3 +287,13 @@ signatures, and a full pass on every screen for clarity.
 - Daily backup of tags, stars, reading states, places, bookmarks, names on marks and pinned folders to Documents/PDFx/Backup (last seven days); brought back once on a fresh install. Certificates are left out on purpose.
 - Monthly health: FTS integrity check (rebuild when damaged), orphan rows and versions dropped, index optimised, VACUUM, first-page pictures kept under 100 MB.
 - Smooth scrolling: the page number is read only where it is shown (the whole viewer used to recompose at every page turned), the loupe exists only while a handle is held, two pages either side are drawn ahead, a soft picture first for pages with none, and bitmaps go to graphics memory before their first frame (`prepareToDraw`).
+
+## Phase 9 finished (0.3.120)
+
+- Two pages side by side with the phone on its side (Display: "Two pages when turned"); the list scrolls by rows, page i in row i / perRow; turning the phone keeps the page.
+- Selection across pages: dragging a handle past the foot (or head) of a page carries on into the next (or the one before); copy, find and highlight take every part. Pages side by side keep to one page.
+- Very large files, measured on the emulator with a 3,000-page book: opened in under 25 ms, first page drawn in about 1.2 s, a jump to page 2,701 drawn in under 1.4 s, the first search hit in under 0.7 s; the whole book searched in about 85 s, with hits reaching the screen in batches every fifth of a second.
+- The backup also carries reading settings, own stamps, the library's settings and saved signatures (Documents/PDFx/Backup/Signatures).
+- Home-screen widget: the four files opened last (each opens where it was left) and Scan.
+- Text boxes: selected words bold, italic, underlined or coloured on their own, written as spans in the rich text and read back.
+- The scroll check moved to a long press on the page number.
