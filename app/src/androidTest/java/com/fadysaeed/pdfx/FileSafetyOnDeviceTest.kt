@@ -195,7 +195,7 @@ class FileSafetyOnDeviceTest {
         indexer.join(10_000)
         if (scanner.isAlive) fail("the look round and the search index waited on each other")
         failed?.let { throw it }
-        assertTrue(db.dao().all().isEmpty())
+        assertTrue(runBlocking { db.dao().all() }.isEmpty())
     }
 
     @Test
