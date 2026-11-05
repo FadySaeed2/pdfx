@@ -158,6 +158,11 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     private val place = MutableStateFlow(Place())
     private val sorts = MutableStateFlow(loadSorts())
     private val query = MutableStateFlow("")
+    /**
+     * What is in the search box, at once. The library itself is worked out away from the screen and
+     * lags a little behind each key; a box drawn from that would throw typed letters away.
+     */
+    val typed: kotlinx.coroutines.flow.StateFlow<String> get() = query
     private val picks = MutableStateFlow<Set<Long>>(emptySet())
     private val selecting = MutableStateFlow(false)
     private val pins = MutableStateFlow(prefs.getStringSet("pinned_folders", emptySet()).orEmpty().toSet())

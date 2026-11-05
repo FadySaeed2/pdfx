@@ -129,6 +129,8 @@ fun LibraryContent(
     /** Puts the cursor in the search box (the Search shortcut on the app's icon). */
     focusSearch: Boolean = false,
     onSearchFocused: () -> Unit = {},
+    /** What is in the search box right now (ahead of [ui], which is worked out a moment later). */
+    typed: String? = null,
 ) {
     Column(Modifier.fillMaxSize().background(Ink.Black).windowInsetsPadding(WindowInsets.statusBars)) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -138,7 +140,7 @@ fun LibraryContent(
         }
         val focus = androidx.compose.runtime.remember { androidx.compose.ui.focus.FocusRequester() }
         androidx.compose.runtime.LaunchedEffect(focusSearch) { if (focusSearch) { runCatching { focus.requestFocus() }; onSearchFocused() } }
-        SearchField(ui.query, actions.query, Modifier.padding(horizontal = 20.dp).focusRequester(focus))
+        SearchField(typed ?: ui.query, actions.query, Modifier.padding(horizontal = 20.dp).focusRequester(focus))
         Spacer(Modifier.height(4.dp))
 
         Box(Modifier.weight(1f)) {

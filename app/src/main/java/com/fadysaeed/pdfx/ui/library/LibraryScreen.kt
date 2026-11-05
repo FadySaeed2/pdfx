@@ -159,8 +159,10 @@ fun LibraryScreen(vm: LibraryModel, onOpen: (Doc, Int?) -> Unit, onPick: () -> U
     }
 
     Box(Modifier.fillMaxSize()) {
+    val typed by vm.typed.collectAsState()
     LibraryContent(
         ui = ui,
+        typed = typed,
         notice = notice,
         focusSearch = focusSearch,
         onSearchFocused = { focusSearch = false },

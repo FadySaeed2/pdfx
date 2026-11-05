@@ -33,6 +33,14 @@ object Names {
 
     /** The name of a file without ".pdf": true when it tells what the file is. */
     fun isClear(base: String): Boolean {
+        // Asked for every file each time a list is drawn or sorted: worked out once a name.
+        clear[base]?.let { return it }
+        return work(base).also { if (clear.size < 20_000) clear[base] = it }
+    }
+
+    private val clear = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    private fun work(base: String): Boolean {
         val b = base.trim()
         if (b.isEmpty()) return false
         val digits = b.count { it.isDigit() }
