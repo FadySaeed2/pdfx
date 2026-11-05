@@ -76,6 +76,8 @@ class PdfxApp : Application() {
                 if (!prepared) {
                     runCatching { library.migrateRecents() }
                     runCatching { library.purgeTrash() }
+                    // Dead entries for PDFs in the phone's own list of files (what My Files shows), once a start.
+                    runCatching { if (library.hasAllFilesAccess()) library.media.sweepPdfs() }
                     prepared = true
                 }
                 runCatching { library.scan() }

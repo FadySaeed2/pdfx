@@ -34,6 +34,8 @@ class Library(
     val scanWords = ScanWords(db)
     val autoTags = AutoTags(db)
     val versions = Versions(File(context.filesDir, "versions"))
+    /** The phone's own list of files, kept true to what PDFx renames, moves and takes away. */
+    val media = MediaIndex(context, root)
     val trashDir = File(root, ".pdfx-trash")
     /** Where copies saved from other apps go, and the default place for new folders. */
     val homeDir = File(root, "Documents/PDFx")
@@ -393,7 +395,10 @@ class Library(
         val dst = File(src.parentFile, "$clean.pdf")
         if (dst.absolutePath == src.absolutePath) return@locked d
         if (dst.exists()) throw IOException("There is already a file called ${dst.name} in this folder.")
-        if (!holding(src) { src.renameTo(dst) }) throw IOException("The file could not be renamed.")
+        // Through the phone's own list of files, so My Files and the rest show the one file under its
+        // new name, not a dead entry under the old one beside it.
+        val done = holding(src) { media.move(src, dst) || src.renameTo(dst).also { if (it) media.forget(src.absolutePath) } }
+        if (!done) throw IOException("The file could not be renamed.")
         val m = moved(d, src, dst)
         if (!byUser) return@locked m
         // The name the user gave is what the lists show from now on, in place of the title read from
@@ -452,6 +457,7 @@ class Library(
             dst.delete()
             throw IOException("The file could not be moved to the trash.")
         }
+        media.forget(src.absolutePath)
         val t = d.copy(key = dst.absolutePath, path = dst.absolutePath, uri = Uri.fromFile(dst).toString(), folder = dst.parent, trashedAt = System.currentTimeMillis(), trashOrigin = src.absolutePath)
         dao.update(t)
         scanMedia(src)
@@ -475,6 +481,7 @@ class Library(
     suspend fun deleteForever(d: Doc): Result<Unit> = io {
         val f = d.path?.let(::File)
         if (f != null && f.exists() && !f.delete()) throw IOException("The file could not be deleted.")
+        f?.let { media.forget(it.absolutePath) }
         forgetNow(d)
     }
 
@@ -542,12 +549,17 @@ class Library(
     }
 
     private fun relocate(src: File, dst: File) {
-        if (src.renameTo(dst)) return
-        copyVerified(src, dst)
-        if (!src.delete()) {
-            dst.delete()
-            throw IOException("The file could not be moved.")
+        // Through the phone's own list of files where it knows the file; else moved here, and the
+        // old entry taken off that list so no app shows it where it was.
+        if (media.move(src, dst)) return
+        if (!src.renameTo(dst)) {
+            copyVerified(src, dst)
+            if (!src.delete()) {
+                dst.delete()
+                throw IOException("The file could not be moved.")
+            }
         }
+        media.forget(src.absolutePath)
     }
 
     /** Whether two files hold exactly the same bytes, read through to the end. */
@@ -615,6 +627,7 @@ class Library(
         dstParent.mkdirs()
         if (!src.renameTo(dst)) throw IOException("The folder could not be moved.")
         val from = src.absolutePath
+        media.forgetUnder(from)
         db.withTransaction {
             for (d in dao.all()) {
                 val path = d.path ?: continue

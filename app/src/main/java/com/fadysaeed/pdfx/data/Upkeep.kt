@@ -208,6 +208,8 @@ class Upkeep(
         runCatching { restoreIfNew() }
         runCatching { library.purgeTrash() }
         r = r.copy(cleaned = runCatching { clearLeftovers() }.getOrDefault(0))
+        // Dead entries for PDFs in the phone's own list of files (what My Files shows), taken away.
+        if (library.hasAllFilesAccess()) r = r.copy(cleaned = r.cleaned + runCatching { library.media.sweepPdfs() }.getOrDefault(0))
         if (stopIf()) return@withLock finish(r, more = true)
 
         r = r.copy(read = runCatching { indexer.runAll(stopIf) }.getOrDefault(0))
@@ -253,7 +255,7 @@ class Upkeep(
     internal suspend fun clearLeftovers(): Int = withContext(Dispatchers.IO) {
         var n = 0
         val hourAgo = System.currentTimeMillis() - HOUR
-        val half = Regex("^\\..+\\.(pdfx-saving|pdfx-restoring|part)$")
+        val half = Regex("^\\..+\\.(pdfx-saving|pdfx-restoring|part|receiving)$")
         val dirs = library.dao.all().mapNotNull { it.folder }.toMutableSet()
         dirs += library.homeDir.absolutePath
         dirs += library.trashDir.absolutePath
