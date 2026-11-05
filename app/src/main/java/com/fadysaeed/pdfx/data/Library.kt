@@ -66,7 +66,7 @@ class Library(
 
     suspend fun updatePage(id: Long, page: Int) {
         val d = dao.byId(id) ?: return
-        if (d.lastPage != page) dao.update(d.copy(lastPage = page))
+        if (d.lastPage != page) dao.setPage(id, page)
         // The widget shows the page each file was left at; a few seconds behind is close enough.
         val now = System.currentTimeMillis()
         if (now - widgetAt > 15_000) { widgetAt = now; runCatching { com.fadysaeed.pdfx.widget.RecentWidget.refresh(context) } }
@@ -112,8 +112,9 @@ class Library(
         val rootPaths = roots.map { it.absolutePath }
         val known = dao.all()
         val byKey = known.associateBy { it.key }
-        // Gone from where they were: maybe moved, maybe deleted.
-        val gone = known.filter { d -> val p = d.path; p != null && !d.inTrash && rootPaths.any { p.startsWith(it) } && p !in files }.toMutableList()
+        // Gone from where they were: maybe moved, maybe deleted. Not a file added while the look round
+        // went on (one just shared in from WhatsApp, a save): it is there, only after the look passed.
+        val gone = known.filter { d -> val p = d.path; p != null && !d.inTrash && rootPaths.any { p.startsWith(it) } && p !in files && !File(p).exists() }.toMutableList()
         val fresh = files.filterKeys { it !in byKey }
         // Fingerprints of the new arrivals, read before the transaction (they read files).
         val prints = if (fresh.isEmpty()) emptyMap() else fresh.mapValues { (_, f) -> Fingerprint.of(f) }
@@ -126,6 +127,8 @@ class Library(
         val forget = ArrayList<Doc>()
         db.withTransaction {
             for ((path, f) in fresh) {
+                // Added by something else since the library was read (a file shared in, a save).
+                if (dao.byKey(path) != null) continue
                 val fp = prints[path]
                 val was = gone.firstOrNull { fp != null && it.fingerprint == fp }
                     ?: gone.firstOrNull { it.fingerprint == null && it.name == f.name && it.size == f.length() }
@@ -136,7 +139,9 @@ class Library(
                     gone.remove(was)
                     // Renamed where it lies (by someone, in a file manager): that name is what it is called now.
                     val renamed = was.name != f.name && was.folder == f.parent
-                    dao.update(was.copy(
+                    // As it is now, not as it was when the look round began.
+                    val wasNow = dao.byId(was.id) ?: was
+                    dao.update(wasNow.copy(
                         key = f.absolutePath, path = f.absolutePath, uri = Uri.fromFile(f).toString(), name = f.name,
                         folder = f.parent, size = f.length(), modified = f.lastModified(), fingerprint = fp ?: was.fingerprint,
                         title = if (renamed) null else was.title,
@@ -148,7 +153,8 @@ class Library(
                 }
             }
             for ((path, f) in files) {
-                val d = byKey[path] ?: continue
+                if (path !in byKey) continue
+                val d = dao.byKey(path) ?: continue
                 if (d.size != f.length() || d.modified != f.lastModified() || d.name != f.name) {
                     // Changed inside: its fingerprint is read again later.
                     dao.update(d.copy(size = f.length(), modified = f.lastModified(), name = f.name, folder = f.parent, fingerprint = if (d.size != f.length() || d.modified != f.lastModified()) null else d.fingerprint))
@@ -160,7 +166,13 @@ class Library(
             }
             for (d in gone) { forget += d; removed++ }
         }
-        for (d in forget) forgetNow(d)
+        // Still gone, and still the same row there: a file put back meanwhile, or a row that moved on, stays.
+        for (d in forget) {
+            val p = d.path ?: continue
+            if (File(p).exists()) continue
+            if (dao.byId(d.id)?.path != p) continue
+            forgetNow(d)
+        }
         fillFingerprints()
         return ScanResult(files.size, added, removed, moved)
     }
@@ -198,7 +210,12 @@ class Library(
             folder = f.parent, size = f.length(), modified = f.lastModified(), fingerprint = fingerprint,
             addedAt = System.currentTimeMillis(),
         )
-        return d.copy(id = dao.insert(d))
+        // Another look round or a share may have added the same file a moment before.
+        return try {
+            d.copy(id = dao.insert(d))
+        } catch (e: android.database.sqlite.SQLiteConstraintException) {
+            dao.byKey(f.absolutePath) ?: throw e
+        }
     }
 
     /**
@@ -269,7 +286,9 @@ class Library(
      */
     private fun copyIn(name: String, write: (java.io.OutputStream) -> Boolean): File? {
         val dir = receivedDir.also { it.mkdirs() }
-        val tmp = File(dir, ".$name.receiving")
+        // A name of its own for each copy being made: two files of one name shared in at once (or a
+        // share while older ones are made real) never write into one another.
+        val tmp = File(dir, ".$name.${System.nanoTime()}.receiving")
         val digest = java.security.MessageDigest.getInstance("SHA-256")
         val ok = runCatching { java.security.DigestOutputStream(tmp.outputStream(), digest).use { write(it) } }.getOrDefault(false)
         if (!ok || tmp.length() == 0L) { tmp.delete(); return null }
@@ -279,13 +298,19 @@ class Library(
             f.inputStream().use { i -> val b = ByteArray(1 shl 16); while (true) { val n = i.read(b); if (n < 0) break; md.update(b, 0, n) } }
             return md.digest()
         }
-        val here = File(dir, name)
-        if (here.isFile && here.length() == tmp.length() && sha(here).contentEquals(hash)) { tmp.delete(); return here }
-        val target = uniqueTarget(dir, name)
-        if (!tmp.renameTo(target)) { tmp.copyTo(target, overwrite = true); tmp.delete() }
+        // Picking the name and taking it, one copy at a time.
+        val target = synchronized(receiving) {
+            val here = File(dir, name)
+            if (here.isFile && here.length() == tmp.length() && sha(here).contentEquals(hash)) { tmp.delete(); return here }
+            val t = uniqueTarget(dir, name)
+            if (!tmp.renameTo(t)) { tmp.delete(); return null }
+            t
+        }
         scanMedia(target)
         return target
     }
+
+    private val receiving = Any()
 
     /**
      * The app's own copy of a file shared from another app (Gmail, WhatsApp). Those apps let PDFx
@@ -318,36 +343,43 @@ class Library(
 
     // ---------------------------------------------------------------- changes on disk
 
-    suspend fun setStar(d: Doc, on: Boolean) = dao.update(d.copy(starred = on))
+    suspend fun setStar(d: Doc, on: Boolean) = dao.setStarred(d.id, on)
 
     /**
      * Copies of one file: [keep] stays and takes the others' tags, star, bookmarks and the furthest
      * reading place; the others go to the trash (for 30 days). Returns how many went.
      */
     suspend fun mergeDuplicates(keep: Doc, others: List<Doc>): Result<Int> = runCatching {
-        var k = dao.byId(keep.id) ?: error("That file is gone.")
         var n = 0
         for (o0 in others) {
-            val o = dao.byId(o0.id) ?: continue
-            if (o.id == k.id || o.inTrash) continue
-            // The fingerprint reads only parts of a big file: every byte is compared before one goes.
-            val kf = File(k.path ?: continue)
-            val of = File(o.path ?: continue)
-            if (!withContext(Dispatchers.IO) { sameBytes(kf, of) }) continue
-            withContext(Dispatchers.IO) {
-                db.withTransaction {
-                    dao.tagIdsOf(o.id).forEach { dao.tag(DocTag(k.id, it)) }
+            // Compared and moved in one go, both files held (in one fixed order, so two merges never
+            // wait on each other): a file changed between the two can't go to the trash as a copy.
+            val went = withContext(Dispatchers.IO) {
+                fileOps.withLock {
+                    val k = dao.byId(keep.id) ?: error("That file is gone.")
+                    val o = dao.byId(o0.id) ?: return@withLock false
+                    if (o.id == k.id || o.inTrash) return@withLock false
+                    val kf = File(k.path ?: return@withLock false)
+                    val of = File(o.path ?: return@withLock false)
+                    val (first, second) = listOf(kf, of).sortedBy { it.absolutePath }
+                    holding(first) {
+                        holding(second) {
+                            // The fingerprint reads only parts of a big file: every byte is compared.
+                            if (!sameBytes(kf, of)) return@holding false
+                            db.withTransaction { dao.tagIdsOf(o.id).forEach { dao.tag(DocTag(k.id, it)) } }
+                            bookmarks.pages(o.id).forEach { bookmarks.set(k.id, it, true) }
+                            dao.update(k.copy(
+                                starred = k.starred || o.starred,
+                                lastOpened = maxOf(k.lastOpened, o.lastOpened),
+                                lastPage = if (o.lastOpened > k.lastOpened) o.lastPage else k.lastPage,
+                            ))
+                            trashNow(o, of)
+                            true
+                        }
+                    }
                 }
-                bookmarks.pages(o.id).forEach { bookmarks.set(k.id, it, true) }
             }
-            k = k.copy(
-                starred = k.starred || o.starred,
-                lastOpened = maxOf(k.lastOpened, o.lastOpened),
-                lastPage = if (o.lastOpened > k.lastOpened) o.lastPage else k.lastPage,
-            )
-            dao.update(k)
-            trash(o).getOrThrow()
-            n++
+            if (went) n++
         }
         n
     }

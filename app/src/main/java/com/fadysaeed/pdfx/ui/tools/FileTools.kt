@@ -414,6 +414,8 @@ class ShrinkUi {
     var before by mutableStateOf(0L)
     /** The smaller file, made but not yet kept, and its size. */
     var made by mutableStateOf<File?>(null)
+    /** The file as it was when [made] was made from it: keeping it over a file changed since is refused. */
+    var madeFrom: Pair<Long, Long>? = null
     var after by mutableStateOf(0L)
     var asNew by mutableStateOf(true)
 }

@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.fadysaeed.pdfx.engine.PdfSession
 import kotlinx.coroutines.CoroutineScope
@@ -119,6 +120,9 @@ class PageImages(private val session: PdfSession, parent: CoroutineScope, seed: 
     private val wanted = MutableStateFlow<Want?>(null)
 
     init {
+        // The pictures that came over count against the memory budget from the start, like the
+        // ones drawn here; uncounted, each save could let the pictures held grow past it.
+        for ((i, img) in images.toMap()) bytes[i] = runCatching { img.asAndroidBitmap().allocationByteCount.toLong() }.getOrDefault(0L)
         scope.launch {
             // These lists may have been made while the screen was being composed; wait for that
             // to land before writing to them, or the writes can be lost.

@@ -106,7 +106,8 @@ class LibraryRulesOnDeviceTest {
         pdf("Download/b.pdf")
         lib.scan()
         val b = db.dao().all().first { it.name == "b.pdf" }
-        db.dao().update(b.copy(starred = true, lastPage = 4))
+        db.dao().update(b.copy(starred = true))
+        db.dao().setPage(b.id, 4)
         a.delete()
         val r = lib.scan()
         assertEquals(1, r.removed)

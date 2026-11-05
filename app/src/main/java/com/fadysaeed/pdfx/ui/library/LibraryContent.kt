@@ -237,10 +237,10 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                 }
             }
         }
-        if (p.section in setOf(Section.ALL, Section.FOLDERS) && !p.inFolder) {
+        if (p.section in setOf(Section.ALL, Section.FOLDERS, Section.TRASH) && !p.inFolder) {
             item(key = "all-view") {
                 Row(
-                    Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -248,6 +248,8 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                     Spacer(Modifier.width(4.dp))
                     Chip("Every file", { actions.section(Section.ALL) }, selected = p.section == Section.ALL)
                     Chip("By folder", { actions.section(Section.FOLDERS) }, selected = p.section == Section.FOLDERS)
+                    // Always here, empty or not, so the trash is never hunted for at the end of a long list.
+                    Chip(if (ui.trashCount > 0) "Trash · ${ui.trashCount}" else "Trash", { actions.section(Section.TRASH) }, selected = p.section == Section.TRASH)
                 }
             }
         }

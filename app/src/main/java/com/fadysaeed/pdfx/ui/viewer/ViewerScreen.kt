@@ -315,7 +315,7 @@ fun ViewerScreen(
             fun leave() {
                 if (!session.dirty) { onClose(null); return }
                 save { saved ->
-                    onClose(if (saved is Saver.Saved.AsCopy) "${saved.doc.name.removeSuffix(".pdf")} belongs to another app, so your changes are saved as a copy in Documents/PDFx." else null)
+                    onClose(if (saved is Saver.Saved.AsCopy) saved.why ?: "${saved.doc.name.removeSuffix(".pdf")} belongs to another app, so your changes are saved as a copy in Documents/PDFx." else null)
                 }
             }
             /** Saves, then carries on from the saved file; [message] shows once it is open again. */
@@ -328,6 +328,8 @@ fun ViewerScreen(
                     if (fresh.needsPassword) password?.let { fresh.unlock(it) }
                     if (fresh.needsPassword) { fresh.close(); return@launch }
                     notice = when {
+                        // Saved beside the file because something else changed it: always said.
+                        saved is Saver.Saved.AsCopy && saved.why != null -> saved.why
                         message == null -> null
                         saved is Saver.Saved.AsCopy -> "$message $copyNote"
                         else -> message
@@ -467,7 +469,7 @@ fun ViewerScreen(
              */
             fun keepMade(
                 asNew: Boolean, suffix: String, message: String, passwordAfter: String?,
-                after: () -> Unit, make: (base: String, out: java.io.File) -> Int,
+                after: () -> Unit, from: Pair<Long, Long>? = null, make: (base: String, out: java.io.File) -> Int,
             ) {
                 scope.launch {
                     val base = runCatching { basePath() }.getOrElse { after(); toolNote = it.message ?: "The file could not be read."; return@launch }
@@ -481,7 +483,7 @@ fun ViewerScreen(
                             else reader.problem = "$message Saved as ${made.name.removeSuffix(".pdf")}."
                         }) { toolNote = it.message ?: "The file could not be saved." }
                     } else {
-                        val r = app.saver.replace(doc, request.uri) { out -> make(base, out) }
+                        val r = app.saver.replace(doc, request.uri, base = from) { out -> make(base, out) }
                         after()
                         r.fold({ saved ->
                             tool = null
@@ -505,7 +507,10 @@ fun ViewerScreen(
                 val level = ui.level
                 scope.launch {
                     val r = runCatching {
+                        // How the file is now: should it change before the smaller one is kept, keeping is refused.
+                        val from = doc?.path?.let { java.io.File(it) }?.takeIf { it.isFile }?.let { Saver.stampOf(it) }
                         val base = basePath()
+                        ui.madeFrom = from
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             val dir = java.io.File(context.cacheDir, "shrink").also { it.deleteRecursively(); it.mkdirs() }
                             val out = java.io.File(dir, "try-${System.nanoTime()}.pdf")
@@ -525,7 +530,7 @@ fun ViewerScreen(
                 val pages = session.pageCount
                 keepMade(
                     ui.asNew, "smaller", "Made smaller: ${com.fadysaeed.pdfx.ui.tools.sizeText(ui.before)} → ${com.fadysaeed.pdfx.ui.tools.sizeText(ui.after)}.",
-                    password, after = { ui.busy = false },
+                    password, after = { ui.busy = false }, from = ui.madeFrom,
                 ) { _, out -> f.copyTo(out, overwrite = true); pages }
             }
             fun lockWith(newPassword: String, asNew: Boolean) {

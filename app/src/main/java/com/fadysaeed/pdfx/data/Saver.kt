@@ -44,6 +44,9 @@ class Versions(private val root: File) {
  */
 class Saver(private val library: Library) {
     companion object {
+        /** Saving found the file written by something else since it opened; %s is the new file's name. */
+        const val CHANGED_ON_SAVE = "This file was changed by something else while it was open (its scanned pages being read, or another app). So neither is lost, your changes are in a new file beside it, %s; the file itself stays as that change left it."
+
         const val CHANGED = "This file was changed by something else while this was being done (its scanned pages being read, say), so nothing was replaced. Open it again and try once more."
 
         /** The size and last change of a file on disk: two writes apart show different stamps. */
@@ -53,21 +56,25 @@ class Saver(private val library: Library) {
     sealed interface Saved {
         val doc: Doc
         data class InPlace(override val doc: Doc) : Saved
-        data class AsCopy(override val doc: Doc) : Saved
+        /** Saved as a new file; [why] says why, when it is not the usual reason (a file inside another app). */
+        data class AsCopy(override val doc: Doc, val why: String? = null) : Saved
     }
 
     suspend fun save(session: PdfSession, doc: Doc?, uri: Uri): Result<Saved> = withContext(Dispatchers.IO) {
         runCatching {
             val f = doc?.path?.let(::File)
             if (doc != null && f != null && f.isFile && f.canWrite() && !doc.inTrash) {
-                library.holding(f) {
+                val beside: File? = library.holding(f) {
+                    // Written by something else since it opened (its scanned pages read in the
+                    // background, another app's save): neither is lost. The file stays as that left
+                    // it, and what is open, changes and all, becomes a new file beside it.
+                    val opened = session.diskStamp
+                    if (opened != null && opened != stampOf(f)) return@holding null
                     val tmp = tempFor(f)
                     try {
-                        // Changes are added onto the file only while it is still the one this read;
-                        // written meanwhile (scans read in the background, another app), the whole
-                        // file is written afresh from what is open, and what was there is kept as a version.
-                        val unchanged = session.diskStamp == stampOf(f)
-                        val incremental = unchanged && session.canSaveIncrementally()
+                        // Changes are added onto the file it read; with nothing to tell (opened through
+                        // another app's link), the whole file is written afresh.
+                        val incremental = opened != null && session.canSaveIncrementally()
                         if (incremental) f.copyTo(tmp, overwrite = true)
                         session.writeTo(tmp.absolutePath, incremental)
                         check(tmp, session.pageCount)
@@ -76,15 +83,24 @@ class Saver(private val library: Library) {
                     } finally {
                         if (tmp.exists()) tmp.delete()
                     }
+                    f
+                }
+                if (beside == null) {
+                    val dir = f.parentFile?.takeIf { it.canWrite() } ?: library.homeDir.also { it.mkdirs() }
+                    val out = newFile(dir, "${f.name.removeSuffix(".pdf").removeSuffix(".PDF")} (my changes).pdf") { tmp ->
+                        session.writeTo(tmp.absolutePath, incremental = false)
+                        check(tmp, session.pageCount)
+                    }
+                    MediaScannerConnection.scanFile(library.context, arrayOf(out.absolutePath), null, null)
+                    val made = library.adoptCopy(out, doc)
+                    return@runCatching Saved.AsCopy(made, CHANGED_ON_SAVE.format(made.name.removeSuffix(".pdf")))
                 }
                 MediaScannerConnection.scanFile(library.context, arrayOf(f.absolutePath), null, null)
                 Saved.InPlace(library.afterSave(doc, f))
             } else {
                 library.homeDir.mkdirs()
                 val base = (doc?.name ?: library.describe(uri).first).let { if (it.endsWith(".pdf", true)) it else "$it.pdf" }
-                val out = Library.uniqueTarget(library.homeDir, base)
-                val tmp = File(library.homeDir, ".${out.name}.pdfx-saving")
-                try {
+                val out = newFile(library.homeDir, base) { tmp ->
                     // Start from the original's own bytes and append the changes when possible, so a
                     // signed file keeps its signatures valid; otherwise write the whole file afresh.
                     val appended = session.canSaveIncrementally() && runCatching {
@@ -92,9 +108,6 @@ class Saver(private val library: Library) {
                     }.getOrDefault(false)
                     session.writeTo(tmp.absolutePath, incremental = appended)
                     check(tmp, session.pageCount)
-                    if (!tmp.renameTo(out)) throw IOException("The copy could not be finished.")
-                } finally {
-                    if (tmp.exists()) tmp.delete()
                 }
                 MediaScannerConnection.scanFile(library.context, arrayOf(out.absolutePath), null, null)
                 Saved.AsCopy(library.adoptCopy(out, doc))
@@ -131,14 +144,7 @@ class Saver(private val library: Library) {
             } else {
                 library.homeDir.mkdirs()
                 val base = (doc?.name ?: library.describe(uri).first).let { if (it.endsWith(".pdf", true)) it else "$it.pdf" }
-                val out = Library.uniqueTarget(library.homeDir, base)
-                val tmp = File(library.homeDir, ".${out.name}.pdfx-saving")
-                try {
-                    check(tmp, make(tmp))
-                    if (!tmp.renameTo(out)) throw IOException("The copy could not be finished.")
-                } finally {
-                    if (tmp.exists()) tmp.delete()
-                }
+                val out = newFile(library.homeDir, base) { tmp -> check(tmp, make(tmp)) }
                 MediaScannerConnection.scanFile(library.context, arrayOf(out.absolutePath), null, null)
                 Saved.AsCopy(library.adoptCopy(out, doc))
             }
@@ -154,14 +160,7 @@ class Saver(private val library: Library) {
             val here = into?.also { it.mkdirs() }?.takeIf { it.isDirectory && it.canWrite() }
                 ?: doc?.path?.let(::File)?.parentFile?.takeIf { it.isDirectory && it.canWrite() && doc.inTrash.not() }
             val dir = here ?: library.homeDir.also { it.mkdirs() }
-            val out = Library.uniqueTarget(dir, if (name.endsWith(".pdf", true)) name else "$name.pdf")
-            val tmp = File(dir, ".${out.name}.pdfx-saving")
-            try {
-                check(tmp, make(tmp))
-                if (!tmp.renameTo(out)) throw IOException("The new file could not be finished.")
-            } finally {
-                if (tmp.exists()) tmp.delete()
-            }
+            val out = newFile(dir, if (name.endsWith(".pdf", true)) name else "$name.pdf") { tmp -> check(tmp, make(tmp)) }
             MediaScannerConnection.scanFile(library.context, arrayOf(out.absolutePath), null, null)
             library.adoptCopy(out, null)
         }
@@ -197,6 +196,27 @@ class Saver(private val library: Library) {
         dir.listFiles { x -> x.name.startsWith(".${f.name}.") && x.name.endsWith(".pdfx-saving") && x.lastModified() < stale }?.forEach { it.delete() }
         return File(dir, ".${f.name}.${System.nanoTime()}.pdfx-saving")
     }
+
+    /**
+     * A new file in [dir] called [name] (or "name (2)" and on): [write] fills it under a temporary
+     * name of its own, and the free name is picked and taken in one step, so two new files made at
+     * once never end up with one name, one over the other.
+     */
+    private suspend fun newFile(dir: File, name: String, write: suspend (File) -> Unit): File {
+        val tmp = File(dir, ".$name.${System.nanoTime()}.pdfx-saving")
+        try {
+            write(tmp)
+            synchronized(naming) {
+                val out = Library.uniqueTarget(dir, name)
+                if (!tmp.renameTo(out)) throw IOException("The new file could not be finished.")
+                return out
+            }
+        } finally {
+            if (tmp.exists()) tmp.delete()
+        }
+    }
+
+    private val naming = Any()
 
     /**
      * Gives the finished [tmp] the name of [f] in one step. Should the phone refuse, the original is

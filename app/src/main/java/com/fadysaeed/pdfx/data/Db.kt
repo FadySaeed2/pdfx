@@ -13,6 +13,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.Transaction
 import androidx.room.Update
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -85,77 +86,96 @@ data class TextHit(val docId: Long, val page: Int, val snippet: String)
 data class TagCount(val id: Long, val name: String, val color: Int, val count: Int)
 
 @Dao
-interface LibraryDao {
+abstract class LibraryDao {
     @Query("SELECT * FROM docs")
-    fun observeAll(): Flow<List<Doc>>
+    abstract fun observeAll(): Flow<List<Doc>>
 
     @Query("SELECT * FROM docs")
-    suspend fun all(): List<Doc>
+    abstract suspend fun all(): List<Doc>
 
     @Query("SELECT * FROM docs WHERE id = :id")
-    suspend fun byId(id: Long): Doc?
+    abstract suspend fun byId(id: Long): Doc?
 
     @Query("SELECT * FROM docs WHERE `key` = :key")
-    suspend fun byKey(key: String): Doc?
+    abstract suspend fun byKey(key: String): Doc?
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
-    suspend fun insert(doc: Doc): Long
+    abstract suspend fun insert(doc: Doc): Long
 
+    /** Writes a whole row as given. Use [update], which keeps what the user did meanwhile. */
     @Update
-    suspend fun update(doc: Doc)
+    abstract suspend fun updateRow(doc: Doc)
+
+    /**
+     * Writes [doc], made from a copy read a moment (or a whole look round the phone) ago. Where the
+     * user opened the file or read on in it since that copy was read, that stays: a write about
+     * something else (a title read, a size changed) never takes the file out of Recent or back to
+     * an old page. Only a write that says it was opened later than now moves those on.
+     */
+    @Transaction
+    open suspend fun update(doc: Doc) {
+        val now = byId(doc.id)
+        updateRow(if (now == null || doc.lastOpened > now.lastOpened) doc else doc.copy(lastOpened = now.lastOpened, lastPage = now.lastPage))
+    }
+
+    @Query("UPDATE docs SET lastPage = :page WHERE id = :id")
+    abstract suspend fun setPage(id: Long, page: Int)
+
+    @Query("UPDATE docs SET starred = :on WHERE id = :id")
+    abstract suspend fun setStarred(id: Long, on: Boolean)
 
     @Delete
-    suspend fun delete(doc: Doc)
+    abstract suspend fun delete(doc: Doc)
 
     @Query("SELECT * FROM docs WHERE fingerprint = :fp")
-    suspend fun byFingerprint(fp: String): List<Doc>
+    abstract suspend fun byFingerprint(fp: String): List<Doc>
 
     @Query("SELECT * FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND fingerprint IS NULL LIMIT :n")
-    suspend fun withoutFingerprint(n: Int): List<Doc>
+    abstract suspend fun withoutFingerprint(n: Int): List<Doc>
 
     @Query("SELECT * FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified OR infoAt != modified OR kind IS NULL) ORDER BY lastOpened DESC, size ASC LIMIT 1")
-    suspend fun nextToIndex(): Doc?
+    abstract suspend fun nextToIndex(): Doc?
 
     @Query("SELECT COUNT(*) FROM docs WHERE trashedAt = 0 AND path IS NOT NULL AND (indexedAt != modified OR infoAt != modified OR kind IS NULL)")
-    fun observeUnindexed(): Flow<Int>
+    abstract fun observeUnindexed(): Flow<Int>
 
     // Tags
     @Query("SELECT * FROM tags ORDER BY name COLLATE NOCASE")
-    fun observeTags(): Flow<List<Tag>>
+    abstract fun observeTags(): Flow<List<Tag>>
 
     @Query(
         "SELECT t.id AS id, t.name AS name, t.color AS color, " +
             "(SELECT COUNT(*) FROM doc_tags dt JOIN docs d ON d.id = dt.docId WHERE dt.tagId = t.id AND d.trashedAt = 0) AS count " +
             "FROM tags t ORDER BY t.name COLLATE NOCASE",
     )
-    fun observeTagCounts(): Flow<List<TagCount>>
+    abstract fun observeTagCounts(): Flow<List<TagCount>>
 
     @Query("SELECT * FROM doc_tags")
-    fun observeDocTags(): Flow<List<DocTag>>
+    abstract fun observeDocTags(): Flow<List<DocTag>>
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
-    suspend fun insertTag(tag: Tag): Long
+    abstract suspend fun insertTag(tag: Tag): Long
 
     @Query("DELETE FROM tags WHERE id = :id")
-    suspend fun deleteTag(id: Long)
+    abstract suspend fun deleteTag(id: Long)
 
     @Query("DELETE FROM doc_tags WHERE tagId = :id")
-    suspend fun untagAll(id: Long)
+    abstract suspend fun untagAll(id: Long)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun tag(link: DocTag)
+    abstract suspend fun tag(link: DocTag)
 
     @Query("DELETE FROM doc_tags WHERE docId = :docId AND tagId = :tagId")
-    suspend fun untag(docId: Long, tagId: Long)
+    abstract suspend fun untag(docId: Long, tagId: Long)
 
     @Query("DELETE FROM doc_tags WHERE docId = :docId")
-    suspend fun untagDoc(docId: Long)
+    abstract suspend fun untagDoc(docId: Long)
 
     @Query("SELECT * FROM tags")
-    suspend fun allTags(): List<Tag>
+    abstract suspend fun allTags(): List<Tag>
 
     @Query("SELECT tagId FROM doc_tags WHERE docId = :docId")
-    suspend fun tagIdsOf(docId: Long): List<Long>
+    abstract suspend fun tagIdsOf(docId: Long): List<Long>
 }
 
 @Database(entities = [Doc::class, Tag::class, DocTag::class], version = 3, exportSchema = true)

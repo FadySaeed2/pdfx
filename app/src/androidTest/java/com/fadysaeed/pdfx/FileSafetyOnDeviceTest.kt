@@ -148,7 +148,7 @@ class FileSafetyOnDeviceTest {
     }
 
     @Test
-    fun savingOntoAFileChangedMeanwhileWritesItAfresh(): Unit = runBlocking {
+    fun savingOntoAFileChangedMeanwhileKeepsBoth(): Unit = runBlocking {
         val f = asset("coch.pdf", File(root, "Papers/a.pdf"))
         lib.scan()
         val d = db.dao().all().single()
@@ -159,12 +159,74 @@ class FileSafetyOnDeviceTest {
             // Something else writes the file while it is open.
             val gpm = asset("gpm.pdf", File(ctx.cacheDir, "safety-gpm.pdf"))
             assertTrue(saver.replace(d, Uri.fromFile(f)) { out -> gpm.copyTo(out, true); pagesOf(out) }.isSuccess)
-            val r = saver.save(session, db.dao().byId(d.id), Uri.fromFile(f))
-            assertTrue("saved: ${r.exceptionOrNull()}", r.isSuccess)
-            assertEquals("what was open, whole, not added onto the other file", pages, pagesOf(f))
+            val r = saver.save(session, db.dao().byId(d.id), Uri.fromFile(f)).getOrThrow()
+            assertTrue("saved beside, not over: $r", r is Saver.Saved.AsCopy)
+            assertTrue("and says why", (r as Saver.Saved.AsCopy).why!!.contains("a (my changes)"))
+            assertTrue("the newer file is as the other change left it", f.readBytes().contentEquals(gpm.readBytes()))
+            val beside = File(r.doc.path!!)
+            assertEquals(File(root, "Papers/a (my changes).pdf").absolutePath, beside.absolutePath)
+            assertEquals("what was open, whole, in the new file", pages, pagesOf(beside))
         } finally {
             session.close()
         }
+    }
+
+    @Test
+    fun aFileSharedInWhileTheLibraryLooksRoundStaysInRecent(): Unit = runBlocking {
+        // A phone with many files: the look round takes a while, and a share lands in the middle of it.
+        repeat(1500) { bytes(File(root, "Bulk/${it / 100}/f$it.pdf"), it, 512) }
+        lib.scan()
+        val opened = ArrayList<Long>()
+        repeat(8) { k ->
+            val looking = async(Dispatchers.IO) { lib.scan() }
+            delay(30L * k)
+            val outside = bytes(File(ctx.cacheDir, "race-${System.nanoTime()}/Clinic letter $k.pdf"), 900 + k)
+            val got = lib.receive(FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", outside))!!
+            lib.recordOpen(got.id, 1, locked = false)
+            opened += got.id
+            looking.await()
+            outside.parentFile?.deleteRecursively()
+        }
+        lib.scan()
+        for (id in opened) {
+            val d = db.dao().byId(id)
+            assertTrue("file $id is still known, under its first entry", d != null)
+            assertTrue("and still in Recent", d!!.lastOpened > 0)
+        }
+        val received = db.dao().all().filter { it.folder == lib.receivedDir.absolutePath }
+        assertEquals("one entry each", received.size, received.map { it.path }.distinct().size)
+        assertEquals(8, received.size)
+    }
+
+    @Test
+    fun aWriteFromAnOldCopyLeavesWhereTheUserRead(): Unit = runBlocking {
+        bytes(File(root, "Papers/a.pdf"), 1)
+        lib.scan()
+        val old = db.dao().all().single()
+        lib.recordOpen(old.id, 10, locked = false)
+        lib.updatePage(old.id, 7)
+        // Something that read the row before (the indexer, a look round) writes it back with a title.
+        db.dao().update(old.copy(title = "A title read from inside"))
+        val now = db.dao().byId(old.id)!!
+        assertEquals("A title read from inside", now.title)
+        assertTrue("still in Recent", now.lastOpened > 0)
+        assertEquals("still on its page", 7, now.lastPage)
+    }
+
+    @Test
+    fun twoFilesOfOneNameSharedInAtOnceKeepTheirOwnBytes(): Unit = runBlocking {
+        val a = bytes(File(ctx.cacheDir, "twin-a-${System.nanoTime()}/Letter.pdf"), 1, 200_000)
+        val b = bytes(File(ctx.cacheDir, "twin-b-${System.nanoTime()}/Letter.pdf"), 2, 200_000)
+        val ra = async(Dispatchers.IO) { lib.receive(FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", a)) }
+        val rb = async(Dispatchers.IO) { lib.receive(FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", b)) }
+        val pa = File(ra.await()!!.path!!)
+        val pb = File(rb.await()!!.path!!)
+        assertNotEquals(pa.absolutePath, pb.absolutePath)
+        assertTrue(pa.readBytes().contentEquals(a.readBytes()))
+        assertTrue(pb.readBytes().contentEquals(b.readBytes()))
+        assertTrue("nothing half-made left", lib.receivedDir.listFiles()!!.none { it.name.endsWith(".receiving") })
+        a.parentFile?.deleteRecursively(); b.parentFile?.deleteRecursively()
+        Unit
     }
 
     @Test
