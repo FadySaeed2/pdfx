@@ -1250,7 +1250,7 @@ fun ViewerContent(
             } else if (picked != null) {
                 MarkBar(picked, reader)
             } else if (reader.marking) {
-                MarkupBar(reader)
+                if (reader.barSlim) SlimMarkupBar(reader) else MarkupBar(reader)
             } else if (sel != null) {
                 Unit
             } else {
@@ -1882,6 +1882,40 @@ internal fun highlighted(text: String, query: String?, color: Color): AnnotatedS
 
 private val MarkLabelColor = Ink.Sand
 
+/**
+ * The marking bar folded to one thin row: the tool in hand, its colour and width, and a way back
+ * to the whole bar. A touch anywhere on it opens the bar.
+ */
+@Composable
+private fun SlimMarkupBar(reader: Reader) {
+    val t = reader.tool
+    val group = ToolGroup.of(t)
+    Column(Modifier.fillMaxWidth().background(Ink.Black)) {
+        Hairline(color = Ink.Rule)
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .clickable { reader.slimBar(false) }
+                .semantics { contentDescription = "Tools: ${t.label}. Show all the tools" }
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            GlyphIcon(group.glyph, Ink.Amber, size = 20.dp)
+            Text(t.label, style = Type.bodyStrong.copy(color = Ink.Amber), maxLines = 1)
+            val colored = t !in setOf(Tool.SELECT, Tool.ERASER, Tool.SIGN, Tool.STAMP, Tool.EDIT, Tool.REDACT, Tool.PICTURE)
+            if (colored) Box(Modifier.size(18.dp).background(Color(reader.colorFor(t)), RoundedCornerShape(50)).border(1.dp, Ink.Edge, RoundedCornerShape(50)))
+            if (t == Tool.PEN || t == Tool.SHAPE || t == Tool.MARKER || t == Tool.TICK || t == Tool.CROSS || t == Tool.DOT) {
+                Box(Modifier.size(24.dp).border(1.dp, Ink.Rule, Corner), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(listOf(4, 7, 11)[reader.widthStep.coerceIn(0, 2)].dp).background(Ink.Bone, RoundedCornerShape(50)))
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            Text("Tools", style = Type.small.copy(color = Ink.Sand))
+            GlyphIcon(Glyph.UP, Ink.Sand, size = 18.dp)
+        }
+    }
+}
+
 /** Tools on the first row; colours, widths or shapes for the chosen tool on the second. */
 @Composable
 private fun MarkupBar(reader: Reader) {
@@ -2022,7 +2056,15 @@ private fun MarkupBar(reader: Reader) {
             Tool.REDACT -> if (reader.redactArea) "Drag a box over what must go: a photo, a signature, a stamp, anything." else "Drag across the words that must go, or tap one word. Nothing goes until you black them out."
             Tool.ERASER -> null
         }
-        if (hint != null) Text(hint, style = Type.small, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp))
+        // Told the first few times only; what has to be done first (a signature to make, a picture
+        // to choose) is always said.
+        val needed = (t == Tool.SIGN && (if (reader.digital) reader.certs.isEmpty() else reader.signs.isEmpty())) || (t == Tool.PICTURE && reader.picture == null)
+        if (hint != null && (reader.showHints || needed)) Text(hint, style = Type.small, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp))
+        // Folds the bar away by hand too.
+        Row(
+            Modifier.fillMaxWidth().clickable { reader.slimBar(true) }.semantics { contentDescription = "Fold the tools away" }.padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.Center,
+        ) { GlyphIcon(Glyph.DOWN, Ink.Dust, size = 18.dp) }
     }
 }
 

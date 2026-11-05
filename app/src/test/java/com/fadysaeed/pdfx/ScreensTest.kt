@@ -895,6 +895,16 @@ class ScreensTest {
         r.showSelectionlessDraftForTest()
     }
 
+    /** Drawing under way: the bar folded to one thin row, the page with the room. */
+    @Test fun markupSlim() = viewerShot("16b_markup_slim.png") { r ->
+        r.showMarking(
+            Tool.PEN,
+            Draft.Ink(0, (0..60).map { t -> (70f + t * 6f) to (330f + 18f * kotlin.math.sin(t / 6f)) }, PenColors[1], 2f, 1f),
+        )
+        r.showSelectionlessDraftForTest()
+        r.slimBar(true)
+    }
+
     @Test fun markSelected() = viewerShot("17_mark_selected.png") { r ->
         r.chrome = false
         r.showMarking(

@@ -758,6 +758,7 @@ class Reader(
      */
     fun tapWithTool(page: Int, x: Float, y: Float): Boolean {
         if (!marking) return false
+        if (tool != Tool.SELECT) slimBar(true)
         when (tool) {
             Tool.SIGN -> placeSign(page, x, y)
             Tool.STAMP -> placeStamp(page, x, y)
@@ -846,7 +847,30 @@ class Reader(
     private var selectJob: Job? = null
     private val erased = LinkedHashSet<Int>()
 
-    fun startMarking() { if (canMark) { marking = true; clearSelection(); selectedMark = null } }
+    /**
+     * The marking bar folded to one thin row while the page is being worked on, so the page has the
+     * room; a touch on the row opens it whole. Kept for next time.
+     */
+    var barSlim by mutableStateOf(prefs?.getBoolean("bar_slim", false) ?: false)
+        private set
+
+    fun slimBar(on: Boolean) {
+        if (barSlim == on) return
+        barSlim = on
+        prefs?.edit()?.putBoolean("bar_slim", on)?.apply()
+    }
+
+    /** How the tools are used is told the first few times only. */
+    var showHints by mutableStateOf(true)
+        private set
+
+    fun startMarking() {
+        if (!canMark) return
+        marking = true; clearSelection(); selectedMark = null
+        val seen = (prefs?.getInt("markup_seen", 0) ?: 0) + 1
+        prefs?.edit()?.putInt("markup_seen", seen)?.apply()
+        showHints = seen <= 3
+    }
     fun stopMarking() { marking = false; draft = null; selectedMark = null }
     /** Opens a family of tools at the one last used in it. */
     fun pickGroup(g: ToolGroup) {
@@ -1048,6 +1072,8 @@ class Reader(
         gestureReach = reach
         gestureSlop = slop
         gesturePage = page
+        // Working on the page: the bar folds out of the way.
+        slimBar(true)
         gestureTool = if (eraser) Tool.ERASER else tool
         anchor = x to y
         moved = false
