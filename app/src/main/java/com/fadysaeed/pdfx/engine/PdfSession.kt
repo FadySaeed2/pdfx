@@ -1666,6 +1666,9 @@ class PdfSession private constructor(
             textCache.clear()
             pageCache.values.forEach { runCatching { it.destroy() } }
             pageCache.clear()
+            // Both handles on the file let go here, on its own thread: left to Java's clean-up, the
+            // last one freed the file (and a form's script engine with it) on another thread, which crashed.
+            runCatching { pdf?.destroy() }
             runCatching { doc.destroy() }
             runCatching { source?.close() }
         }
