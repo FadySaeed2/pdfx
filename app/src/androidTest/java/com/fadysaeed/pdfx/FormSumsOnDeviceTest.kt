@@ -7,6 +7,7 @@ import com.fadysaeed.pdfx.engine.PdfSession
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.cancel
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -44,6 +45,36 @@ class FormSumsOnDeviceTest {
                 again.close()
             }
         } finally {
+            s.close()
+        }
+    }
+
+    /** With Edit text in hand, a tap on a form's box opens that box; the boxes are known as soon as the page shows. */
+    @Test
+    fun editTextOpensAFormsBox(): Unit = runBlocking {
+        val f = java.io.File(ctx.cacheDir, "calc-form-edit.pdf")
+        InstrumentationRegistry.getInstrumentation().context.assets.open("calc-form.pdf").use { i -> f.outputStream().use { i.copyTo(it) } }
+        val s = PdfSession.open(ctx, Uri.fromFile(f))
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
+        try {
+            val r = com.fadysaeed.pdfx.ui.viewer.Reader(s, s.pageCount, scope)
+            // The page shows at once, before the reader has found out the file has a form.
+            InstrumentationRegistry.getInstrumentation().runOnMainSync { r.loadMarks(0) }
+            var waited = 0
+            while ((r.fields[0].isNullOrEmpty()) && waited < 5000) { kotlinx.coroutines.delay(100); waited += 100 }
+            assertTrue("the page's boxes are known without typing anything", !r.fields[0].isNullOrEmpty())
+            val qty = r.fields[0]!!.first { it.name == "Quantity" }
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                r.startMarking()
+                r.pickTool(com.fadysaeed.pdfx.ui.viewer.Tool.EDIT)
+                val x = (qty.box.x0 + qty.box.x1) / 2
+                val y = (qty.box.y0 + qty.box.y1) / 2
+                r.begin(0, x, y, eraser = false)
+                r.finish()
+            }
+            assertEquals("the box opens to fill in", "Quantity", r.editingField?.name)
+        } finally {
+            scope.cancel()
             s.close()
         }
     }

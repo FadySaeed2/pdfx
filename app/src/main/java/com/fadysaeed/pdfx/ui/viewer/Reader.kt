@@ -516,7 +516,12 @@ class Reader(
 
     fun checkForm() {
         val s = session ?: return
-        scope.launch { hasForm = runCatching { s.hasForm() }.getOrDefault(false); if (hasForm) fields.keys.toList().forEach { loadFields(it) } }
+        scope.launch {
+            hasForm = runCatching { s.hasForm() }.getOrDefault(false)
+            // The pages already on screen asked for their boxes before it was known there was a form:
+            // they get them now, not only once something is typed.
+            if (hasForm) (fields.keys + marks.keys).toSet().forEach { loadFields(it) }
+        }
     }
 
     fun loadFields(page: Int) {
@@ -1200,7 +1205,8 @@ class Reader(
             Tool.TICK, Tool.CROSS, Tool.DOT -> if (!moved) placeMark(page, a.first, a.second, gestureTool)
             Tool.DATE -> if (!moved) placeDate(page, a.first, a.second)
             Tool.NOTE -> if (!moved) textAsk = TextAsk(page, a.first, a.second, note = true)
-            Tool.EDIT -> if (!moved) editAt(page, a.first, a.second)
+            // A box of a form is filled in, not edited as the page's own words.
+            Tool.EDIT -> if (!moved) fieldAt(page, a.first, a.second)?.let { tapField(it) } ?: editAt(page, a.first, a.second)
             Tool.PICTURE -> if (!moved) placePicture(page, a.first, a.second)
             Tool.ERASER -> {
                 val gone = erased.toList().sortedDescending()
