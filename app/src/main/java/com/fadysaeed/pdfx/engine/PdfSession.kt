@@ -226,12 +226,24 @@ class PdfSession private constructor(
         locked = doc.needsPassword()
         if (!locked) pageCount = doc.countPages()
         runCatching { pdf?.enableJournal() }
+        if (!locked) formsWork()
+    }
+
+    /**
+     * A form's own sums and number styles work (an invoice's totals from quantity and price, "$
+     * 13,750.00"): the engine runs the form's small scripts, as Acrobat does. They reach nothing
+     * outside the file: no internet, no files.
+     */
+    private fun formsWork() {
+        val d = pdf ?: return
+        if (runCatching { d.trailer.get("Root").get("AcroForm").isNull }.getOrDefault(true)) return
+        runCatching { if (!d.isJsSupported) d.enableJs() }
     }
 
     /** Tries a password. True when the document is now readable. */
     suspend fun unlock(password: String): Boolean = onDoc {
         val ok = doc.authenticatePassword(password)
-        if (ok) { locked = false; pageCount = doc.countPages() }
+        if (ok) { locked = false; pageCount = doc.countPages(); formsWork() }
         ok
     }
 
@@ -720,7 +732,8 @@ class PdfSession private constructor(
 
     suspend fun setFieldText(index: Int, fieldIndex: Int, text: String) = edit("Fill", index) {
         val w = widgets(index).getOrNull(fieldIndex) ?: return@edit
-        w.setTextValue(text)
+        // The form's own check can turn a value down (letters in a box for a number): said, not lost silently.
+        if (!w.setTextValue(text)) throw IllegalArgumentException("That box doesn't take “$text”. The form asks for something else there, a number or a date perhaps.")
         w.update()
     }
 

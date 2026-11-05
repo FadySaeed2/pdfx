@@ -766,7 +766,8 @@ class Reader(
             Tool.DATE -> placeDate(page, x, y)
             Tool.TEXT -> boxEdit = BoxEdit(page, x, y)
             Tool.NOTE -> textAsk = TextAsk(page, x, y, note = true)
-            Tool.EDIT -> editAt(page, x, y)
+            // A box of a form is filled in, not edited as the page's own words.
+            Tool.EDIT -> fieldAt(page, x, y)?.let { tapField(it) } ?: editAt(page, x, y)
             Tool.PICTURE -> placePicture(page, x, y)
             else -> return false
         }
