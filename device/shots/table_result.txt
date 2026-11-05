@@ -1,0 +1,3 @@
+PARA Mood stabilisers are monitored as shown in the table below.
+TABLE GRID header=[] Drug ; Dose ; Check | Lithium ; 400 mg ; Level at 12 h | Valproate ; 500 mg ; Liver tests | Lamotrigine ; 25 mg ; Rash
+PARA Check levels again after any change in dose.

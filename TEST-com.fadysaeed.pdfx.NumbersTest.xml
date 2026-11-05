@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fadysaeed.pdfx.NumbersTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-11-05T11:54:39" hostname="runnervmwuk1x" time="0.017">
+  <properties/>
+  <testcase name="numbers" classname="com.fadysaeed.pdfx.NumbersTest" time="0.013"/>
+  <testcase name="datesAndTimes" classname="com.fadysaeed.pdfx.NumbersTest" time="0.004"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

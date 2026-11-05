@@ -1,0 +1,62 @@
+TABLE 1–1. Distinctive characteristics of GPM
+Element	Distinctive features
+Case management	Focus is on the patient’s life outside therapy, not primarily on the patient’s psychology as in psychotherapies.
+Psychoeducation	Patients and families are informed of borderline personality disorder’s genetic disposition, expectable changes, and the relative merits of different approaches.
+Goals	Symptom reduction and self-control are secondary goals required to attain the primary goals of success in work and partnerships.
+Multimodality	Psychopharmacological practices are integrated as adjunctive alongside endorsements for group therapies and family coaching.
+Duration and intensity	No specific length and intensity are prescribed; patients and therapist collaborate in judging whether a therapy is effective.
+Interpersonal hypersensitivity	An explicit and consistent effort is made to connect the patient’s emotions and behaviors to interpersonal stressors.
+
+others, hopefully into a more pragmatic, generalizable, and user-friendly model.
+
+In 2001, the “Practice Guideline for the Treatment of Patients With Borderline Personality Disorder” developed by the American Psychiatric Association (American Psychiatric Association Practice Guidelines 2001) offered a summary that overlaps with this handbook’s content and intent. GPM offers considerably more emphasis on case management and less emphasis on individual psychotherapy than did the American Psychiatric Association guidelines. This handbook updates information included in a previous book by Gunderson and Links (2008) but does not purport to be as comprehensive. It adds empirically validated specificity about interventions within a specific (i.e., interpersonal hypersensitivity) model. Most significantly, this book includes two types of case-based material to facilitate training. The first is a series of case illustrations with discussions about the variety of responses clinicians might deploy in managing BPD. The second is a set of online videotaped interventions. In general, this book serves a function and proposes a treatment approach that overlaps with many precedents but remains unique and original.
+
+TABLE 1–2. GPM’s integration of prior evidence-based psychotherapies
+Modality	Element
+Transference-Focused Psychotherapy	
+Concepts	Splitting and projection as defenses against anger
+Therapeutic stance	Monitoring boundaries and countertransference
+Interventions	Interpretation of anger; challenge avoidance and acting out
+Dialectical Behavior Therapy	
+Concepts	Social and psychological skill deficits
+Therapeutic stance	Coaching
+Interventions	Self-monitoring; homework; intersession availability
+Mentalization-Based Treatment	
+Concepts	Theory of mind; attachment
+Therapeutic stance	Not-knowing
+Interventions	Examining attributions about self and others
+
+GPM’s Empirical Validation
+
+In 2009, McMain et al. published a report of a large multisite randomized controlled trial showing that the clinical efficacy of General Psychiatric Management equaled that of DBT.
+
+The “General” Psychiatric Management used in that trial can be considered the research “brand name” for the “Good” Psychiatric Management described in this book. The efficacy of General Psychiatric Management found in that study justifies the name change used here. GPM combined a psychodynamically informed case management based on the authors’ previous book, Borderline Personality Disorder: A Clinical Guide (Gunderson and Links 2008), with the symptom-targeted medication algorithm suggested in the American Psychiatric Association Practice Guidelines (2001). This was a large single-blind multisite trial in which 180 patients diagnosed with borderline personality disorder who had at least two suicidal or nonsuicidal self-injurious episodes in the past 5 years were randomly assigned to receive 1 year of either DBT or GPM. Therapists in the GPM cell were psychiatrists
+
+FIGURE 5–1. Acute-on-chronic suicide risk.
+In patients with borderline personality disorder (BPD), the acute-on-chronic level of suicide risk (curved arrow) can change more quickly than in the general population and will be modified by several factors that can cause (upward arrow) and several that might reduce (downward arrow) an acute exacerbation of risk.
+Source. Adapted from Gunderson JG, Links P: Borderline Personality Disorder: A Clinical Guide, 2nd Edition. Washington, DC, American Psychiatric Publishing, 2008. Used with per-mission.
+
+diminish their own anxiety. Moreover, many health care systems lack the intensive outpatient or residential levels of care, thereby forcing clinicians to use hospitals to manage self-endangering behaviors.
+
+Invite the Patient to Tell You How You Might Help
+
+See “Basic Therapeutic Approach,” subsections “Be Active, Not Reactive” and “Change is Expected,” in Chapter 2
+
+Asking a patient to tell you how you can help underscores the patient’s need to be active on his or her own behalf (reinforcing the sense of agency and the need to think) and discourages the use of suicidal or self-harm threats as a way to escape, avoid, or externalize responsibility. Do not expect patients to welcome this request; they may refuse or be unable to give meaningful
+
+FIGURE 5–2. Algorithm for selecting the level of care in response to self-endangering behaviors.
+Levels of care:
+1. OPC=outpatient clinic/office practice.
+2. IOP/PH=intensive outpatient (>3 hours/week)/partial hospital (>10 hours/week).
+3. Residential=structured living environments (e.g., halfway house).
+4. Hospital.
+
+answers. No matter. Simply note that your ability to help them is compromised by the absence of their input.
+
+Be Clear About Your Limits
+
+You are not omniscient, clairvoyant, or omnipotent. As noted in Chapter 4 (see section “Intersession Availability”), it is unrealistic for a patient’s safety to depend on your availability. Tell the patient that you cannot be expected to know about his or her suicidality or self-harm unless the patient tells you. Even when you know about it, you may not be able to help the patient prevent it, and when such behaviors have already occurred, you may not be able to repair the damaging effects. “So, what use are you?” may be the response. Simply apologize for your limits.
+
+Involve Colleagues
+
+Involvement of colleagues is very important! Assessing and managing self-endangering behaviors is stressful and difficult. Ease your burden, minimize your liability, and diminish the risk of making harmful responses by discussing these issues with colleagues.

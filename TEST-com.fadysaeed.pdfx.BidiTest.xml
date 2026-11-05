@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fadysaeed.pdfx.BidiTest" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-11-05T11:54:38" hostname="runnervmwuk1x" time="0.017">
+  <properties/>
+  <testcase name="aWholeStretchOfALineReadsAsPrinted" classname="com.fadysaeed.pdfx.BidiTest" time="0.005"/>
+  <testcase name="aLineStoredAsDrawnLeftToRightReadsRightToLeft" classname="com.fadysaeed.pdfx.BidiTest" time="0.0"/>
+  <testcase name="latinWordsWithNumbersStayAsWritten" classname="com.fadysaeed.pdfx.BidiTest" time="0.0"/>
+  <testcase name="aTanweenAfterTheSpaceStaysOnItsWord" classname="com.fadysaeed.pdfx.BidiTest" time="0.001"/>
+  <testcase name="theFarLetterOfAShapeComesAfterTheFirst" classname="com.fadysaeed.pdfx.BidiTest" time="0.0"/>
+  <testcase name="bracketsInALineStoredAsDrawnAreTurned" classname="com.fadysaeed.pdfx.BidiTest" time="0.0"/>
+  <testcase name="aRangeOfYearsReadsFromTheFirst" classname="com.fadysaeed.pdfx.BidiTest" time="0.0"/>
+  <testcase name="shapedLettersBecomeLetters" classname="com.fadysaeed.pdfx.BidiTest" time="0.004"/>
+  <testcase name="shortVowelsStayWithTheirLetters" classname="com.fadysaeed.pdfx.BidiTest" time="0.001"/>
+  <testcase name="aLineStoredInReadingOrderStaysAsItIs" classname="com.fadysaeed.pdfx.BidiTest" time="0.0"/>
+  <testcase name="shaddaWithAVowelStaysOnItsLetter" classname="com.fadysaeed.pdfx.BidiTest" time="0.001"/>
+  <testcase name="aPageThatGivesBracketsAsDrawnHasThemTurned" classname="com.fadysaeed.pdfx.BidiTest" time="0.001"/>
+  <testcase name="aLatinWordInsideStaysTheRightWayRound" classname="com.fadysaeed.pdfx.BidiTest" time="0.001"/>
+  <testcase name="anEnglishLineIsLeftAlone" classname="com.fadysaeed.pdfx.BidiTest" time="0.0"/>
+  <testcase name="aNarrowGapBetweenWordsIsASpace" classname="com.fadysaeed.pdfx.BidiTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

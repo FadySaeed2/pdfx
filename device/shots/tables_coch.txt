@@ -1,0 +1,10 @@
+page 3: 1 figures (1 Box(x0=58.400997, y0=433.82202, x1=538.619, y1=770.023)), 1 expected
+page 4: 1 found (1 CARDS ), 1 expected, 0 ms
+page 5: 1 found (1 CARDS ), 1 expected, 0 ms
+page 6: 1 found (1 CARDS ), 1 expected, 0 ms
+page 7: 1 found (2 GRID ), 1 expected, 0 ms
+page 8: 1 figures (2 Box(x0=127.14729, y0=77.46662, x1=469.5985, y1=331.221)), 1 expected
+page 9: 1 found (3 GRID ), 1 expected, 0 ms
+slowest page: 170 ms
+
+PROBLEMS

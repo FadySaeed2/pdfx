@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fadysaeed.pdfx.TopicMathTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-11-05T11:55:12" hostname="runnervmwuk1x" time="0.029">
+  <properties/>
+  <testcase name="aTitleNamesTopicsByTheirWordsPluralsAndCapitals" classname="com.fadysaeed.pdfx.TopicMathTest" time="0.015"/>
+  <testcase name="topicsAreWhatAPersonWouldCallTopics" classname="com.fadysaeed.pdfx.TopicMathTest" time="0.013"/>
+  <testcase name="familiesAreWordsThatStartAlikeForMostOfTheirLength" classname="com.fadysaeed.pdfx.TopicMathTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

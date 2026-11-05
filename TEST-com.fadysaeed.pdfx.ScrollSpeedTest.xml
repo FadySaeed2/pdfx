@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fadysaeed.pdfx.ScrollSpeedTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-11-05T11:55:08" hostname="runnervmwuk1x" time="0.014">
+  <properties/>
+  <testcase name="aFlingIsFastAndSlowsBackToSharp" classname="com.fadysaeed.pdfx.ScrollSpeedTest" time="0.001"/>
+  <testcase name="betweenTheTwoItHoldsWhatItWas" classname="com.fadysaeed.pdfx.ScrollSpeedTest" time="0.001"/>
+  <testcase name="aSlowScrollIsNeverFastEvenWithUnevenFrames" classname="com.fadysaeed.pdfx.ScrollSpeedTest" time="0.012"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

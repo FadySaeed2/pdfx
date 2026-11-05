@@ -1,0 +1,7 @@
+pages: 3000
+made: 733 ms
+opened: 3 ms
+first page drawn: 656 ms
+jump to page 2701 drawn: 922 ms
+first search hit: 356 ms
+whole book searched: 85664 ms (102000 hits)

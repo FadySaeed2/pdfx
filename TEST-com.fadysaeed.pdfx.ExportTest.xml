@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fadysaeed.pdfx.ExportTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-11-05T11:54:39" hostname="runnervmwuk1x" time="0.069">
+  <properties/>
+  <testcase name="wordFileHoldsStylesRunsAndTables" classname="com.fadysaeed.pdfx.ExportTest" time="0.062"/>
+  <testcase name="cellsLoseTheirMarks" classname="com.fadysaeed.pdfx.ExportTest" time="0.0"/>
+  <testcase name="sheetNamesAreLegalAndUnique" classname="com.fadysaeed.pdfx.ExportTest" time="0.004"/>
+  <testcase name="numbersBecomeNumbersAndCodesStayWords" classname="com.fadysaeed.pdfx.ExportTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
