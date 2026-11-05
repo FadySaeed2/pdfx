@@ -432,10 +432,9 @@ fun DocumentView(
                                     // The start handle sits on the first page of the selection, the end handle on its last.
                                     if (sel == null || (sel.page != i && sel.lastPart.page != i)) return@awaitEachGesture
                                     val k = size.width / pageWidthPt(i)
-                                    val first = sel.boxes.first()
-                                    val last = sel.lastPart.boxes.last()
-                                    val startAt = Offset(first.x0 * k, first.y1 * k)
-                                    val endAt = Offset(last.x1 * k, last.y1 * k)
+                                    // Where the handles are drawn: in Arabic the start is on the right of the first word.
+                                    val startAt = sel.startHandle.let { (x, y) -> Offset(x * k, y * k) }
+                                    val endAt = sel.endHandle.let { (x, y) -> Offset(x * k, y * k) }
                                     val reach = 40.dp.toPx()
                                     val ds = if (sel.page == i) (down.position - startAt).getDistance() else Float.MAX_VALUE
                                     val de = if (sel.lastPart.page == i) (down.position - endAt).getDistance() else Float.MAX_VALUE
@@ -443,6 +442,7 @@ fun DocumentView(
                                     val start = ds < de
                                     down.consume()
                                     reader.holdsPage = true
+                                    reader.beginHandleDrag(start)
                                     val lift = 18.dp.toPx()
                                     val edge = 56.dp.toPx()
                                     val cellW = size.width.toFloat()
@@ -502,6 +502,7 @@ fun DocumentView(
                                     } finally {
                                         drift?.cancel()
                                         reader.holdsPage = false
+                                        reader.endHandleDrag()
                                         lens = Offset.Unspecified
                                     }
                                 }
@@ -692,9 +693,10 @@ private fun PageMarks(reader: Reader, page: Int, pageWidthPt: Float, pageImage: 
             sel.boxes.forEach { b -> mark(b, k, Ink.Teal.copy(alpha = 0.38f), null) }
             val first = sel.boxes.first()
             val last = sel.boxes.last()
-            // Across pages: the start handle on the first page, the end handle on the last.
-            if (whole.page == page) handle(Offset(first.x0 * k, first.y1 * k), first.height * k)
-            if (whole.lastPart.page == page) handle(Offset(last.x1 * k, last.y1 * k), last.height * k)
+            // Across pages: the start handle on the first page, the end handle on the last; each at
+            // its reading edge (the right of an Arabic word's start, the left of its end).
+            if (whole.page == page) whole.startHandle.let { (x, y) -> handle(Offset(x * k, y * k), first.height * k) }
+            if (whole.lastPart.page == page) whole.endHandle.let { (x, y) -> handle(Offset(x * k, y * k), last.height * k) }
         }
     }
 }

@@ -44,11 +44,37 @@ data class OutlineEntry(val title: String, val page: Int, val depth: Int)
  * Selected text on [page], from point a to point b. One that runs on over later pages carries
  * their parts in [rest] (each a selection of its own page), and [text] is then the whole of it.
  */
-data class Selection(val page: Int, val ax: Float, val ay: Float, val bx: Float, val by: Float, val boxes: List<Box>, val text: String, val rest: List<Selection> = emptyList()) {
+data class Selection(
+    val page: Int, val ax: Float, val ay: Float, val bx: Float, val by: Float, val boxes: List<Box>, val text: String,
+    val rest: List<Selection> = emptyList(),
+    /** Whether its first and its last words read right to left (Arabic): its ends then sit the other way round. */
+    val startRtl: Boolean = false, val endRtl: Boolean = false,
+) {
     /** Every page's part, first to last. */
     val parts: List<Selection> get() = if (rest.isEmpty()) listOf(this) else listOf(this) + rest
     /** The part where the selection ends. */
     val lastPart: Selection get() = rest.lastOrNull() ?: this
+
+    /** Where the start handle stands on [page]: the reading start of the first word (its right edge in Arabic), at its foot. */
+    val startHandle: Pair<Float, Float> get() = boxes.first().let { b -> (if (startRtl) b.x1 else b.x0) to b.y1 }
+    /** Where the end handle stands on the last part's page: the reading end of the last word, at its foot. */
+    val endHandle: Pair<Float, Float> get() = lastPart.let { p -> p.boxes.last().let { b -> (if (p.endRtl) b.x0 else b.x1) to b.y1 } }
+
+    /** A point just inside the first word, by its start: one end held still while the other is dragged. */
+    val startInside: Pair<Float, Float> get() = boxes.first().let { b -> val i = minOf(1.5f, b.width * 0.3f); (if (startRtl) b.x1 - i else b.x0 + i) to (b.y0 + b.y1) / 2 }
+    /** A point just inside the last word, by its end. */
+    val endInside: Pair<Float, Float> get() = lastPart.let { p -> p.boxes.last().let { b -> val i = minOf(1.5f, b.width * 0.3f); (if (p.endRtl) b.x0 + i else b.x1 - i) to (b.y0 + b.y1) / 2 } }
+}
+
+/** Whether the first (or, with [last], the last) letter of [s] that has a direction reads right to left. */
+internal fun readsRtl(s: String, last: Boolean = false): Boolean {
+    val seq = if (last) s.reversed() else s
+    for (c in seq) when (Character.getDirectionality(c)) {
+        Character.DIRECTIONALITY_RIGHT_TO_LEFT, Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC -> return true
+        Character.DIRECTIONALITY_LEFT_TO_RIGHT -> return false
+        else -> Unit
+    }
+    return false
 }
 
 /** The kinds of marks PDFx makes and lists. Anything else in a file shows as OTHER. */
@@ -391,9 +417,13 @@ class PdfSession private constructor(
             if (lines.isEmpty()) continue
             val top = lines.minWith(compareBy({ it.bbox.y0 }, { it.bbox.x0 }))
             val end = lines.maxWith(compareBy({ it.bbox.y1 }, { it.bbox.x1 }))
-            val a = if (p == pa) Point(ax, ay) else Point(top.bbox.x0 + 0.5f, (top.bbox.y0 + top.bbox.y1) / 2)
+            // A line's reading start is its right edge in Arabic, its left in English.
+            fun rtl(l: StructuredText.TextLine) = readsRtl(buildString { l.chars?.forEach { appendCodePoint(it.c) } })
+            val topX = if (rtl(top)) top.bbox.x1 - 0.5f else top.bbox.x0 + 0.5f
+            val endX = if (rtl(end)) end.bbox.x0 + 0.5f else end.bbox.x1 - 0.5f
+            val a = if (p == pa) Point(ax, ay) else Point(topX, (top.bbox.y0 + top.bbox.y1) / 2)
             // The user's end point is on page [pb]; a part cut short at 30 pages runs to its page's end.
-            val b = if (p == pb) Point(bx, by) else Point(end.bbox.x1 - 0.5f, (end.bbox.y0 + end.bbox.y1) / 2)
+            val b = if (p == pb) Point(bx, by) else Point(endX, (end.bbox.y0 + end.bbox.y1) / 2)
             // Whole words at the ends the user placed.
             if (p == pa || p == pb) runCatching { st.snapSelection(a, b, StructuredText.SELECT_WORDS) }
             selectionNow(p, st, a.x, a.y, b.x, b.y)?.let { parts += it }
@@ -413,7 +443,14 @@ class PdfSession private constructor(
         val quads = st.highlight(a, b) ?: return null
         if (quads.isEmpty()) return null
         val text = st.copy(a, b) ?: ""
-        return Selection(index, ax, ay, bx, by, quads.map { it.box() }, text)
+        val boxes = quads.map { it.box() }
+        // Which way the words run where each end is: the engine puts an end on the side its word
+        // starts (or stops) in the file's own order, so the end nearer a box's right edge reads
+        // right to left. Too close to tell (a one-letter box): the letters' own direction says.
+        fun side(x: Float, b: Box): Boolean? = (x - b.x0 - (b.x1 - x)).let { d -> if (kotlin.math.abs(d) < 0.5f) null else d > 0 }
+        val startRtl = side(ax, boxes.first()) ?: readsRtl(text)
+        val endRtl = side(bx, boxes.last())?.not() ?: readsRtl(text, last = true)
+        return Selection(index, ax, ay, bx, by, boxes, text, startRtl = startRtl, endRtl = endRtl)
     }
 
     private val rawCache = object : LinkedHashMap<Int, List<Para>>(8, 0.75f, true) {

@@ -405,6 +405,24 @@ class Reader(
         dragSelection(start, if (start) sel.page else sel.lastPart.page, x, y)
     }
 
+    /**
+     * The end not being dragged, held still for the whole drag: a point inside its word, taken once
+     * when the handle is picked up. Taken again from each new selection, it crept (the engine
+     * moves both ends to word edges, and swaps them when one passes the other), so a handle kept
+     * jumping between two words, and the held end jumped to the dragged one, most of all in Arabic.
+     */
+    private var held: Triple<Int, Float, Float>? = null
+
+    /** A handle is picked up: [start] says which; the other end stays where it is until it is let go. */
+    fun beginHandleDrag(start: Boolean) {
+        val sel = selection ?: return
+        held = if (start) sel.lastPart.endInside.let { (x, y) -> Triple(sel.lastPart.page, x, y) }
+        else sel.startInside.let { (x, y) -> Triple(sel.page, x, y) }
+    }
+
+    /** The handle is let go: the next drag takes its held end afresh from the selection as it is then. */
+    fun endHandleDrag() { held = null }
+
     private data class DragTo(val start: Boolean, val page: Int, val x: Float, val y: Float)
     private val dragTo = kotlinx.coroutines.flow.MutableStateFlow<DragTo?>(null)
     private var dragJob: kotlinx.coroutines.Job? = null
@@ -416,16 +434,17 @@ class Reader(
      */
     fun dragSelection(start: Boolean, page: Int, x: Float, y: Float) {
         val s = session ?: return
+        if (held == null) beginHandleDrag(start)
         dragTo.value = DragTo(start, page, x, y)
         if (dragJob?.isActive == true) return
         dragJob = scope.launch {
             dragTo.collect { d ->
                 if (d == null) return@collect
-                val sel = selection ?: return@collect
-                val end = sel.lastPart
-                var a = Triple(sel.page, sel.ax, sel.ay)
-                var b = Triple(end.page, end.bx, end.by)
-                if (d.start) a = Triple(d.page, d.x, d.y) else b = Triple(d.page, d.x, d.y)
+                if (selection == null) return@collect
+                // The held end and the finger, in page order; on one page the engine puts them in
+                // reading order itself, so passing the held end just turns the selection round.
+                var a = held ?: return@collect
+                var b = Triple(d.page, d.x, d.y)
                 if (a.first > b.first) { val t = a; a = b; b = t }
                 val next = if (a.first == b.first) s.selectWords(a.first, a.second, a.third, b.second, b.third)
                     else s.selectAcross(a.first, a.second, a.third, b.first, b.second, b.third)
