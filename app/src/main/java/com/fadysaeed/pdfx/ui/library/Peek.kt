@@ -72,6 +72,8 @@ fun PeekBody(d: Doc, place: String, onOpen: (Int?) -> Unit, onSelect: () -> Unit
     Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
             Text(LibraryModel.titleOf(d), style = Type.title, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            // Called by the title inside it: its own name too, so the file can be found by it.
+            if (LibraryModel.titleOf(d) != LibraryModel.display(d)) Text(d.name, style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(4.dp))
             val about = listOfNotNull(
                 LibraryModel.byline(d).takeIf { it.isNotBlank() },

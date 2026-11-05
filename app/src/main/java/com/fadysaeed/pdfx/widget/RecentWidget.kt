@@ -56,7 +56,7 @@ class RecentWidget : AppWidgetProvider() {
                 val d = docs.getOrNull(k)
                 if (d == null) { v.setViewVisibility(rowIds[k], View.GONE); continue }
                 v.setViewVisibility(rowIds[k], View.VISIBLE)
-                v.setTextViewText(titleIds[k], d.title?.takeIf { it.isNotBlank() } ?: d.name.removeSuffix(".pdf"))
+                v.setTextViewText(titleIds[k], com.fadysaeed.pdfx.data.Names.shown(d))
                 v.setTextViewText(noteIds[k], if (d.pages > 0) "Page ${d.lastPage + 1} of ${d.pages}" else "Page ${d.lastPage + 1}")
                 val open = Intent(context, MainActivity::class.java)
                     .setAction("com.fadysaeed.pdfx.action.OPEN")

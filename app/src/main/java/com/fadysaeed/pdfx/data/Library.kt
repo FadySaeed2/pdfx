@@ -631,15 +631,7 @@ class Library(
         return name.takeIf { it.isNotBlank() && it != base }
     }
 
-    private fun looksLikeCode(base: String): Boolean {
-        val b = base.trim()
-        if (Regex("""(?i)^(document|doc|file|download|untitled|scan|print|pdf|attachment|image|img|new|untitled document)[ _-]*\(?\d*\)?$""").matches(b)) return true
-        val digits = b.count { it.isDigit() }
-        val letters = b.count { it.isLetter() }
-        if (b.length >= 6 && digits >= b.length * 0.3) return true
-        if (!b.contains(' ') && b.length >= 12 && (b.count { it == '-' || it == '_' || it == '.' } >= 2 || digits >= 3)) return true
-        return letters < 3
-    }
+    private fun looksLikeCode(base: String): Boolean = !Names.isClear(base)
 
     private val prefs = context.getSharedPreferences("library_titles", Context.MODE_PRIVATE)
 

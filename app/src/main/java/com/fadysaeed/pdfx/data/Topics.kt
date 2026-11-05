@@ -262,7 +262,7 @@ object Topics {
         }
         val members = HashMap<Concept, MutableList<Long>>()
         for ((id, list) in strength) for ((c, _) in list.sortedByDescending { it.second }.take(MAX_PER_FILE)) members.getOrPut(c) { ArrayList() } += id
-        fun example(ids: List<Long>) = ids.sortedByDescending { byId[it]?.lastOpened ?: 0 }.take(3).mapNotNull { id -> byId[id]?.let { it.title ?: it.name.removeSuffix(".pdf") } }
+        fun example(ids: List<Long>) = ids.sortedByDescending { byId[it]?.lastOpened ?: 0 }.take(3).mapNotNull { id -> byId[id]?.let { Names.shown(it) } }
         val groups = ArrayList<TopicGroup>()
         for ((area, concepts) in Concepts.all.groupBy { it.area }) {
             val items = concepts.mapNotNull { c ->

@@ -47,7 +47,7 @@ class ScanReading(private val scope: CoroutineScope, private val library: Librar
                 if (stop) break
                 val d = library.dao.byId(id) ?: continue
                 val path = d.path ?: continue
-                val name = d.title ?: d.name.removeSuffix(".pdf")
+                val name = Names.shown(d)
                 _state.value = Progress(k + 1, ids.size, 0, d.pages, name, done)
                 var found = 0
                 val r = saver.replace(d, Uri.parse(d.uri)) { out ->

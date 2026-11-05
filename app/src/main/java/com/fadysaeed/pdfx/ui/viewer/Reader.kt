@@ -628,6 +628,8 @@ class Reader(
     var openPages: (() -> Unit)? = null
     /** Opens one of the file tools ("trim", "split", "merge"). Set by the viewer. */
     var openTool: ((String) -> Unit)? = null
+    /** Sends the file to another app, saved first when it has changes not yet saved. */
+    var share: (() -> Unit)? = null
     /** Whether the open file needed a password to open. Set by the viewer. */
     var hasPassword by mutableStateOf(false)
 

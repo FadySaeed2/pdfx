@@ -806,8 +806,8 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     companion object {
         fun display(d: Doc) = d.name.removeSuffix(".pdf").removeSuffix(".PDF")
 
-        /** What a file is called in lists: its real title when one was read from it, else its name. */
-        fun titleOf(d: Doc) = d.title?.takeIf { it.isNotBlank() } ?: display(d)
+        /** What a file is called in lists: its own name when that says what it is, else the title read from inside. */
+        fun titleOf(d: Doc) = com.fadysaeed.pdfx.data.Names.shown(d)
 
         /** How far through it the reader got, 0 to 1. */
         fun progressOf(d: Doc): Float = if (d.pages > 1) (d.lastPage + 1).toFloat() / d.pages else 0f

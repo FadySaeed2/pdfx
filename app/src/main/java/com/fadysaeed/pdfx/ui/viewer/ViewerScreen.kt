@@ -342,6 +342,25 @@ fun ViewerScreen(
                     old.close()
                 }
             }
+            /**
+             * Shares the file from inside it. With changes not yet saved it saves first (and carries on
+             * from the saved file), so what goes out is the file as it is on screen.
+             */
+            fun shareFile() {
+                fun send(d: com.fadysaeed.pdfx.data.Doc?) {
+                    if (d != null) com.fadysaeed.pdfx.ui.library.share(context, d)
+                    else runCatching {
+                        val send = Intent(Intent.ACTION_SEND).setType("application/pdf")
+                            .putExtra(Intent.EXTRA_STREAM, request.uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        context.startActivity(Intent.createChooser(send, name))
+                    }
+                }
+                if (!session.dirty) { send(doc); return }
+                save { saved ->
+                    reopen(saved, null, "", keepPlace = true)
+                    send(saved.doc)
+                }
+            }
             fun saveAndReopen(message: String?) {
                 save { saved -> reopen(saved, message, "This file belongs to another app, so the signed copy is in Documents/PDFx.", keepPlace = true) }
             }
@@ -721,6 +740,7 @@ fun ViewerScreen(
                 reader.saveNow = { msg -> saveAndReopen(msg) }
                 reader.openPages = ::openPages
                 reader.openTool = ::openTool
+                reader.share = ::shareFile
                 reader.hasPassword = password != null
                 onReader?.invoke(reader) { reader.firstPageOf(centreItem(listState)) }
             }
@@ -1344,6 +1364,7 @@ fun ViewerContent(
                             { then { reader.toggleBookmark(currentState.value); flash = if (marked) "Bookmark removed" else "Page ${currentState.value + 1} bookmarked" } },
                             color = if (marked) Ink.Amber else Ink.Bone,
                         )
+                        reader.share?.let { go -> SheetRow(Glyph.SHARE, "Share", { then { go() } }, note = "Send this file to an app or a person; saved first if it has changes") }
                         SheetRow(Glyph.LIST, "Contents and bookmarks", { reader.loadOutline(); sheet = ViewerSheet.CONTENTS })
                         SheetRow(Glyph.REFLOW, if (reader.reflow) "Show the pages" else "Read as flowing text", { then { toggleReflow() } }, note = if (reader.reflow) "Back to the pages as they are" else "Just the words, sized for the phone")
                         SheetRow(Glyph.MOON, "Page colours and text size", { sheet = ViewerSheet.DISPLAY }, note = "Paper, night or sepia; reflowed text settings")
