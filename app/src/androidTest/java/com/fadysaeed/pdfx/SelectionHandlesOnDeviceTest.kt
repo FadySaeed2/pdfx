@@ -78,6 +78,31 @@ class SelectionHandlesOnDeviceTest {
     }
 
     @Test
+    fun anArabicWordIsTakenWhole(): Unit = runBlocking {
+        val words = "هذا سطر عربي للتأكد من عرض الحروف العربية بشكل سليم".split(' ').toSet()
+        val s = PdfSession.open(ctx, Uri.fromFile(sample()))
+        try {
+            val seen = LinkedHashSet<String>()
+            var x = 60f
+            while (x < 420f) {
+                s.selectWord(0, x, 166f)?.let { sel ->
+                    val t = sel.text.trim()
+                    assertTrue("a whole word, not part of one: \"$t\" at $x", t in words)
+                    seen += t
+                    // Made again from its own ends, still that word.
+                    val (ax, ay) = sel.startInside
+                    val (bx, by) = sel.endInside
+                    assertEquals(t, s.selectWords(0, ax, ay, bx, by)!!.text.trim())
+                }
+                x += 9f
+            }
+            assertTrue("found several words: $seen", seen.size >= 5)
+        } finally {
+            s.close()
+        }
+    }
+
+    @Test
     fun theHeldEndKeepsItsWordWhereverTheFingerGoes(): Unit = runBlocking {
         val s = PdfSession.open(ctx, Uri.fromFile(sample()))
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)

@@ -542,7 +542,10 @@ class Library(
     suspend fun forget(d: Doc) = withContext(Dispatchers.IO) { forgetNow(d) }
 
     private suspend fun moved(d: Doc, src: File, dst: File): Doc {
-        val m = d.copy(key = dst.absolutePath, path = dst.absolutePath, uri = Uri.fromFile(dst).toString(), name = dst.name, folder = dst.parent, modified = dst.lastModified(), indexedAt = if (d.indexedAt == d.modified) dst.lastModified() else d.indexedAt)
+        val m = d.copy(key = dst.absolutePath, path = dst.absolutePath, uri = Uri.fromFile(dst).toString(), name = dst.name, folder = dst.parent, modified = dst.lastModified(),
+            // Moved or renamed, it is the same file inside: what was read from it stays read.
+            indexedAt = if (d.indexedAt == d.modified) dst.lastModified() else d.indexedAt,
+            infoAt = if (d.infoAt == d.modified) dst.lastModified() else d.infoAt)
         dao.update(m)
         scanMedia(src, dst)
         return m

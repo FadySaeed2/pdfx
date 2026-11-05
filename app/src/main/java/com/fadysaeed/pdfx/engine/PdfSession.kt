@@ -49,6 +49,10 @@ data class Selection(
     val rest: List<Selection> = emptyList(),
     /** Whether its first and its last words read right to left (Arabic): its ends then sit the other way round. */
     val startRtl: Boolean = false, val endRtl: Boolean = false,
+    /** The middle of its first letter and of its last (not counting a space after it), when known. */
+    val firstLetter: Pair<Float, Float>? = null, val lastLetter: Pair<Float, Float>? = null,
+    /** Where its first letter starts and its last letter stops, at their foot, when known. */
+    val startFoot: Pair<Float, Float>? = null, val endFoot: Pair<Float, Float>? = null,
 ) {
     /** Every page's part, first to last. */
     val parts: List<Selection> get() = if (rest.isEmpty()) listOf(this) else listOf(this) + rest
@@ -56,14 +60,18 @@ data class Selection(
     val lastPart: Selection get() = rest.lastOrNull() ?: this
 
     /** Where the start handle stands on [page]: the reading start of the first word (its right edge in Arabic), at its foot. */
-    val startHandle: Pair<Float, Float> get() = boxes.first().let { b -> (if (startRtl) b.x1 else b.x0) to b.y1 }
+    val startHandle: Pair<Float, Float> get() = startFoot ?: boxes.first().let { b -> (if (startRtl) b.x1 else b.x0) to b.y1 }
     /** Where the end handle stands on the last part's page: the reading end of the last word, at its foot. */
-    val endHandle: Pair<Float, Float> get() = lastPart.let { p -> p.boxes.last().let { b -> (if (p.endRtl) b.x0 else b.x1) to b.y1 } }
+    val endHandle: Pair<Float, Float> get() = lastPart.let { p -> p.endFoot ?: p.boxes.last().let { b -> (if (p.endRtl) b.x0 else b.x1) to b.y1 } }
 
-    /** A point just inside the first word, by its start: one end held still while the other is dragged. */
-    val startInside: Pair<Float, Float> get() = boxes.first().let { b -> val i = minOf(1.5f, b.width * 0.3f); (if (startRtl) b.x1 - i else b.x0 + i) to (b.y0 + b.y1) / 2 }
-    /** A point just inside the last word, by its end. */
-    val endInside: Pair<Float, Float> get() = lastPart.let { p -> p.boxes.last().let { b -> val i = minOf(1.5f, b.width * 0.3f); (if (p.endRtl) b.x0 + i else b.x1 - i) to (b.y0 + b.y1) / 2 } }
+    /**
+     * A point that stands for the first word, for holding that end still while the other is dragged:
+     * the middle of its first letter, which the engine reads as that letter whichever way the words
+     * run. (A point at a word's edge it reads as the gap between two letters, and so one word over.)
+     */
+    val startInside: Pair<Float, Float> get() = firstLetter ?: boxes.first().let { b -> val i = minOf(1.5f, b.width * 0.3f); (if (startRtl) b.x1 - i else b.x0 + i) to (b.y0 + b.y1) / 2 }
+    /** A point that stands for the last word: the middle of its last letter. */
+    val endInside: Pair<Float, Float> get() = lastPart.let { p -> p.lastLetter ?: p.boxes.last().let { b -> val i = minOf(1.5f, b.width * 0.3f); (if (p.endRtl) b.x0 + i else b.x1 - i) to (b.y0 + b.y1) / 2 } }
 }
 
 /** Whether the first (or, with [last], the last) letter of [s] that has a direction reads right to left. */
@@ -438,19 +446,141 @@ class PdfSession private constructor(
     }
 
     private fun selectionNow(index: Int, st: StructuredText, ax: Float, ay: Float, bx: Float, by: Float): Selection? {
-        val a = Point(ax, ay)
-        val b = Point(bx, by)
+        val lt = runCatching { Letters(st) }.getOrNull()
+        var a = Point(ax, ay)
+        var b = Point(bx, by)
+        // An Arabic word's first (or last) letter the engine would leave out: its edge read as the
+        // gap after it. The point moves just inside the letter, so the whole word is taken.
+        if (lt != null) { a = lt.whole(a, b) ?: a; b = lt.whole(b, a) ?: b }
         val quads = st.highlight(a, b) ?: return null
         if (quads.isEmpty()) return null
         val text = st.copy(a, b) ?: ""
         val boxes = quads.map { it.box() }
-        // Which way the words run where each end is: the engine puts an end on the side its word
-        // starts (or stops) in the file's own order, so the end nearer a box's right edge reads
-        // right to left. Too close to tell (a one-letter box): the letters' own direction says.
-        fun side(x: Float, b: Box): Boolean? = (x - b.x0 - (b.x1 - x)).let { d -> if (kotlin.math.abs(d) < 0.5f) null else d > 0 }
-        val startRtl = side(ax, boxes.first()) ?: readsRtl(text)
-        val endRtl = side(bx, boxes.last())?.not() ?: readsRtl(text, last = true)
-        return Selection(index, ax, ay, bx, by, boxes, text, startRtl = startRtl, endRtl = endRtl)
+        // Its first and last letters, found the way the engine finds them, give its two ends exactly.
+        val ends = lt?.let { runCatching { it.ends(a, b) }.getOrNull() }
+        fun side(x: Float, bx: Box): Boolean? = (x - bx.x0 - (bx.x1 - x)).let { d -> if (kotlin.math.abs(d) < 0.5f) null else d > 0 }
+        val startRtl = ends?.first?.rtl ?: side(a.x, boxes.first()) ?: readsRtl(text)
+        val endRtl = ends?.second?.rtl ?: side(b.x, boxes.last())?.not() ?: readsRtl(text, last = true)
+        return Selection(
+            index, a.x, a.y, b.x, b.y, boxes, text, startRtl = startRtl, endRtl = endRtl,
+            firstLetter = ends?.first?.middle, lastLetter = ends?.second?.middle,
+            startFoot = ends?.first?.let { l -> (if (l.rtl) l.right else l.left) to l.foot },
+            endFoot = ends?.second?.let { l -> (if (l.rtl) l.left else l.right) to l.foot },
+        )
+    }
+
+    /** A letter of the page: its middle, its sides, its foot, and whether it runs right to left. */
+    private class Letter(val c: Int, val left: Float, val right: Float, val foot: Float, val middle: Pair<Float, Float>, val rtl: Boolean, val line: Int) {
+        val blank get() = Character.isWhitespace(c) || right - left < 0.01f
+    }
+
+    /**
+     * A page's letters in the engine's own order, and how the engine reads a point among them: as
+     * the gap between two letters nearest it, on the line it falls in, a right-to-left letter's
+     * right side being its start (a port of MuPDF's find_closest_in_page, so the two agree).
+     */
+    private class Letters(st: StructuredText) {
+        private class Line(val first: Int, val n: Int, val dx: Float, val dy: Float, val hsize: Float, val p1x: Float, val p1y: Float, val p2x: Float, val p2y: Float)
+        val letters = ArrayList<Letter>()
+        private val quads = ArrayList<Quad>()
+        private val lines = ArrayList<Line>()
+
+        init {
+            for (blk in st.blocks.orEmpty()) for (ln in blk.lines.orEmpty()) {
+                val cs = ln.chars ?: continue
+                if (cs.isEmpty()) continue
+                val first = letters.size
+                for (ch in cs) {
+                    val q = ch.quad
+                    quads += q
+                    val l = minOf(q.ul_x, q.ll_x, q.ur_x, q.lr_x)
+                    val r = maxOf(q.ul_x, q.ll_x, q.ur_x, q.lr_x)
+                    letters += Letter(ch.c, l, r, maxOf(q.ll_y, q.lr_y), ((l + r) / 2) to ((q.ul_y + q.ll_y + q.ur_y + q.lr_y) / 4), (ch.bidi and 1) == 1, lines.size)
+                }
+                val f = cs.first().quad
+                val z = cs.last().quad
+                // The engine's half line height is half the largest type size; a letter's own height stands in.
+                val h = cs.maxOf { maxOf(it.quad.ll_y - it.quad.ul_y, it.quad.lr_y - it.quad.ur_y) } / 2
+                val d = ln.dir ?: Point(1f, 0f)
+                lines += Line(first, cs.size, d.x, d.y, h, (f.ll_x + f.ul_x) / 2, (f.ll_y + f.ul_y) / 2, (z.lr_x + z.ur_x) / 2, (z.lr_y + z.ur_y) / 2)
+            }
+        }
+
+        private fun dist(ox: Float, oy: Float, dx: Float, dy: Float, q: Point) = dx * (q.x - ox) + dy * (q.y - oy)
+
+        fun gap(q: Point): Int {
+            var best: Line? = null
+            var bestV = 1e30f
+            var bestH = 1e30f
+            for (ln in lines) {
+                val v = dist(ln.p1x, ln.p1y, -ln.dy, ln.dx, q)
+                val h1 = dist(ln.p1x, ln.p1y, ln.dx, ln.dy, q)
+                val h2 = dist(ln.p2x, ln.p2y, ln.dx, ln.dy, q)
+                if (v >= -ln.hsize && v <= ln.hsize && (h1 > 0) != (h2 > 0)) { bestV = 0f; bestH = 0f; best = ln }
+                else {
+                    val av = kotlin.math.abs(v)
+                    val ah = minOf(kotlin.math.abs(h1), kotlin.math.abs(h2))
+                    if (av < ln.hsize) { if (ah <= bestH) { bestV = 0f; bestH = ah; best = ln } }
+                    else if (av <= bestV) { bestV = av; best = ln }
+                }
+            }
+            val ln = best ?: return 0
+            val v = dist(ln.p1x, ln.p1y, -ln.dy, ln.dx, q)
+            if (v < -ln.hsize) return ln.first
+            if (v > ln.hsize) return ln.first + ln.n
+            var at = ln.first
+            var closest = 1e30f
+            for (k in 0 until ln.n) {
+                val i = ln.first + k
+                val qd = quads[i]
+                val rtl = letters[i].rtl
+                val d1 = kotlin.math.abs(if (rtl) dist(qd.lr_x, qd.lr_y, ln.dx, ln.dy, q) else dist(qd.ll_x, qd.ll_y, ln.dx, ln.dy, q))
+                val d2 = kotlin.math.abs(if (rtl) dist(qd.ll_x, qd.ll_y, ln.dx, ln.dy, q) else dist(qd.lr_x, qd.lr_y, ln.dx, ln.dy, q))
+                if (d1 < closest) { closest = d1; at = i }
+                if (d2 < closest) { closest = d2; at = i + 1 }
+            }
+            return at
+        }
+
+        private fun wordStart(i: Int) = i == 0 || letters[i - 1].line != letters[i].line || letters[i - 1].blank
+        private fun wordEnd(i: Int) = i == letters.lastIndex || letters[i + 1].line != letters[i].line || letters[i + 1].blank
+
+        /**
+         * [p] moved just inside the right-to-left letter it stands at the wrong edge of, when that
+         * leaves out a whole word's first letter ([p] the start, [other] the end) or last letter.
+         */
+        fun whole(p: Point, other: Point): Point? {
+            val g = gap(p)
+            val o = gap(other)
+            if (g == o) return null
+            val (ny, at) = if (g < o) {
+                // The start: the letter before the gap begins a word, and the point sits on its left side.
+                val i = g - 1
+                if (i < 0 || !letters[i].rtl || letters[i].blank || !wordStart(i) || letters[i].line != (letters.getOrNull(g)?.line ?: -1)) return null
+                if (kotlin.math.abs(p.x - letters[i].left) > 0.75f) return null
+                letters[i].middle.second to (letters[i].right - 0.05f)
+            } else {
+                // The end: the letter after the gap ends a word, and the point sits on its right side.
+                val i = g
+                if (i > letters.lastIndex || !letters[i].rtl || letters[i].blank || !wordEnd(i) || (g > 0 && letters[g - 1].line != letters[i].line)) return null
+                if (kotlin.math.abs(p.x - letters[i].right) > 0.75f) return null
+                letters[i].middle.second to (letters[i].left + 0.05f)
+            }
+            return Point(at, ny)
+        }
+
+        /** The first and last letters taken between [a] and [b], a space at the end left off. */
+        fun ends(a: Point, b: Point): Pair<Letter, Letter>? {
+            var s = gap(a)
+            var e = gap(b)
+            if (s > e) { val t = s; s = e; e = t }
+            if (s >= e) return null
+            while (s < e && letters[s].blank) s++
+            var last = e - 1
+            while (last > s && letters[last].blank) last--
+            if (s > last || last >= letters.size) return null
+            return letters[s] to letters[last]
+        }
     }
 
     private val rawCache = object : LinkedHashMap<Int, List<Para>>(8, 0.75f, true) {
