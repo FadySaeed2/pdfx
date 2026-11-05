@@ -60,9 +60,19 @@ class MediaIndex(private val context: Context, private val storage: File) {
         return dst.isFile && !src.exists()
     }
 
+    /**
+     * Where PDFx may take entries away: the phone's own storage, outside Android/ (other apps'
+     * private folders, which even full file access cannot see into, so a file there looks missing
+     * when it is not; taking its entry away could take the file with it).
+     */
+    private fun ours(path: String): Boolean {
+        val root = storage.absolutePath.trimEnd('/')
+        return path.startsWith("$root/") && !path.startsWith("$root/Android/")
+    }
+
     /** Takes the index's entry for [path] away, once no file is there. */
     fun forget(path: String) {
-        if (File(path).exists()) return
+        if (!ours(path) || File(path).exists()) return
         runCatching { context.contentResolver.delete(files, "$dataCol = ?", arrayOf(path)) }
     }
 
@@ -81,11 +91,20 @@ class MediaIndex(private val context: Context, private val storage: File) {
      * Entries for PDFs no longer on the phone, left by renames and moves done before PDFx kept the
      * index true (or by other apps), taken away. Returns how many went.
      */
+    /** Missing for certain: on the phone's own storage, its folder there and readable, and the name not in it. */
+    private fun surelyGone(path: String): Boolean {
+        if (!ours(path)) return false
+        val f = File(path)
+        if (f.exists()) return false
+        val names = f.parentFile?.list() ?: return false
+        return f.name !in names
+    }
+
     fun sweepPdfs(most: Int = 5000): Int {
         val gone = ArrayList<String>()
         runCatching {
             context.contentResolver.query(files, arrayOf(dataCol), "LOWER($dataCol) LIKE ?", arrayOf("%.pdf"), null)?.use { c ->
-                while (c.moveToNext() && gone.size < most) c.getString(0)?.let { if (!File(it).exists()) gone += it }
+                while (c.moveToNext() && gone.size < most) c.getString(0)?.let { if (surelyGone(it)) gone += it }
             }
         }
         var n = 0

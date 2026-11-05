@@ -27,6 +27,8 @@ import com.fadysaeed.pdfx.engine.Selection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -334,7 +336,8 @@ class Reader(
             var shownAt = 0L
             fun publish() {
                 shownAt = System.currentTimeMillis()
-                if (waiting.isEmpty()) return
+                // A search given up for a newer one (or closed) puts nothing on screen.
+                if (waiting.isEmpty() || !this@launch.isActive) return
                 for ((p, found) in waiting) { snippets[p] = found; hits[p] = found.map { it.boxes } }
                 val firstNew = waiting.keys.first()
                 waiting.clear()
@@ -345,7 +348,9 @@ class Reader(
             }
             for (k in 0 until pageCount) {
                 val p = (start + k) % pageCount
-                val found = runCatching { session.searchHits(p, q) }.getOrDefault(emptyList())
+                // Stops as soon as a newer search starts: its hits are never mixed in with these.
+                this@launch.ensureActive()
+                val found = try { session.searchHits(p, q) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Throwable) { emptyList() }
                 if (found.isNotEmpty()) waiting[p] = found
                 if ((current < 0 && waiting.isNotEmpty()) || System.currentTimeMillis() - shownAt > 200 || k == pageCount - 1) {
                     publish()
@@ -353,6 +358,7 @@ class Reader(
                 }
             }
             publish()
+            if (!this@launch.isActive) return@launch
             searchedPages = pageCount
             searching = false
         }
@@ -1204,8 +1210,9 @@ class Reader(
         draft = Draft.Words(sel.page, sel.boxes, color)
         undoAction = null
         undoNotice = when (kind) { MarkKind.UNDERLINE -> "Underlined"; MarkKind.STRIKE -> "Struck through"; else -> "Highlighted" }
-        // A selection across pages is marked page by page.
-        for (part in sel.parts) change(part.page) { session?.addTextMark(part.page, kind, part.boxes, color, opacity) ?: false }
+        // A selection across pages is marked on every page in one step, so one Undo takes it all back.
+        if (sel.parts.size > 1) change(null) { session?.addTextMarks(sel.parts.map { it.page to it.boxes }, kind, color, opacity) ?: false }
+        else change(sel.page) { session?.addTextMark(sel.page, kind, sel.boxes, color, opacity) ?: false }
     }
 
     /** New colour for the picked marks; they stay picked so the colour can be tried again. */

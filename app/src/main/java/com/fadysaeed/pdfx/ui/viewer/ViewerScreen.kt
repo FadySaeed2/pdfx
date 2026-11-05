@@ -198,6 +198,8 @@ fun ViewerScreen(
     val library = app.library
     var doc by remember(request) { mutableStateOf<Doc?>(null) }
     var load by remember(request) { mutableStateOf<Load>(Load.Opening) }
+    /** The file on screen now, to tell work started for an earlier one (a reopen after a save) to stand down. */
+    val shownRequest by rememberUpdatedState(request)
     var password by remember(request) { mutableStateOf<String?>(null) }
     var saving by remember(request) { mutableStateOf(false) }
     var saveError by remember(request) { mutableStateOf<String?>(null) }
@@ -280,9 +282,6 @@ fun ViewerScreen(
             val prefs = remember { context.getSharedPreferences("reader", Context.MODE_PRIVATE) }
             val reader = remember(session) { Reader(session, session.pageCount, scope, library.bookmarks, doc?.id, prefs, seed = carry[0]).also { carry[0] = null } }
             val pages = reader.pages!!
-            // When a newer copy of the file takes over (after a save) or the file closes, this one's
-            // drawing stops and its spare pictures go; it no longer waits on for the whole visit.
-            androidx.compose.runtime.DisposableEffect(reader) { onDispose { reader.pages?.close() } }
             LaunchedEffect(reader) {
                 val saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.signatures.list() }.getOrDefault(emptyList()) }
                 reader.signs.clear(); reader.signs.addAll(saved)
@@ -295,7 +294,24 @@ fun ViewerScreen(
                 if (!q.isNullOrEmpty()) { reader.searchOpen = true; reader.search(q, start) }
             }
             val listState = rememberLazyListState(initialFirstVisibleItemIndex = start)
-            LaunchedEffect(listState, doc?.id) {
+            // When a newer copy of the file takes over (after a save) or the file closes, this one's
+            // drawing stops and its spare pictures go; it no longer waits on for the whole visit.
+            androidx.compose.runtime.DisposableEffect(reader) {
+                onDispose {
+                    reader.pages?.close()
+                    // The page the reader is on as the file closes (the last moments are not saved
+                    // otherwise), and the home-screen widget shown it.
+                    val id = doc?.id
+                    val at = runCatching { reader.firstPageOf(centreItem(listState)) }.getOrNull()
+                    if (id != null && at != null) app.scope.launch {
+                        runCatching { library.updatePage(id, at) }
+                        runCatching { com.fadysaeed.pdfx.widget.RecentWidget.refresh(context) }
+                    }
+                }
+            }
+            // Keyed on the reader too: after a save the newer one says which page a row is (two
+            // pages side by side, flowing text); the one from before would save the wrong page.
+            LaunchedEffect(listState, doc?.id, reader) {
                 val id = doc?.id ?: return@LaunchedEffect
                 snapshotFlow { reader.firstPageOf(centreItem(listState)) }
                     .distinctUntilChanged()
@@ -327,6 +343,8 @@ fun ViewerScreen(
                     val fresh = runCatching { PdfSession.open(context, uri) }.getOrNull() ?: return@launch
                     if (fresh.needsPassword) password?.let { fresh.unlock(it) }
                     if (fresh.needsPassword) { fresh.close(); return@launch }
+                    // Another file opened meanwhile (from the widget, say): this one is not shown.
+                    if (shownRequest !== request) { fresh.close(); return@launch }
                     notice = when {
                         // Saved beside the file because something else changed it: always said.
                         saved is Saver.Saved.AsCopy && saved.why != null -> saved.why

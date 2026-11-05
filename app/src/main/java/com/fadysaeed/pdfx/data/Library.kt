@@ -105,7 +105,12 @@ class Library(
         return m.withLock { block() }
     }
 
-    suspend fun scan(roots: List<File> = listOf(root)): ScanResult = withContext(Dispatchers.IO) { fileOps.withLock { scanNow(roots) } }
+    suspend fun scan(roots: List<File> = listOf(root)): ScanResult = withContext(Dispatchers.IO) {
+        val r = fileOps.withLock { scanNow(roots) }
+        // Reading fingerprints takes a while on a first run; a rename or a move need not wait for it.
+        fillFingerprints()
+        r
+    }
 
     private suspend fun scanNow(roots: List<File>): ScanResult {
         if (!hasAllFilesAccess()) return ScanResult(0, 0, 0)
@@ -175,7 +180,6 @@ class Library(
             if (dao.byId(d.id)?.path != p) continue
             forgetNow(d)
         }
-        fillFingerprints()
         return ScanResult(files.size, added, removed, moved)
     }
 
@@ -440,7 +444,9 @@ class Library(
     }
 
     /** Moves a file into PDFx's trash. It comes back with [restore] for 30 days. */
-    suspend fun trash(d: Doc): Result<Doc> = locked {
+    suspend fun trash(d0: Doc): Result<Doc> = locked {
+        // As the library has it now (a star, a page, a place set since the screen read it).
+        val d = dao.byId(d0.id) ?: d0
         val src = fileOf(d)
         holding(src) { trashNow(d, src) }
     }
@@ -464,7 +470,8 @@ class Library(
         return t
     }
 
-    suspend fun restore(d: Doc): Result<Doc> = locked {
+    suspend fun restore(d0: Doc): Result<Doc> = locked {
+        val d = dao.byId(d0.id) ?: d0
         val src = fileOf(d)
         val origin = File(d.trashOrigin ?: File(homeDir, d.name).absolutePath)
         val dir = origin.parentFile ?: homeDir
@@ -629,11 +636,16 @@ class Library(
         val from = src.absolutePath
         media.forgetUnder(from)
         db.withTransaction {
+            fun under(p: String?) = if (p != null && (p == from || p.startsWith("$from/"))) dst.absolutePath + p.removePrefix(from) else null
             for (d in dao.all()) {
-                val path = d.path ?: continue
-                if (path != from && !path.startsWith("$from/")) continue
-                val np = dst.absolutePath + path.removePrefix(from)
-                dao.update(d.copy(key = np, path = np, uri = Uri.fromFile(File(np)).toString(), folder = File(np).parent))
+                // Files in it, and files in the trash that came from it (put back where it is now).
+                val np = under(d.path)
+                val origin = under(d.trashOrigin)
+                if (np == null && origin == null) continue
+                var u = d
+                if (np != null) u = u.copy(key = np, path = np, uri = Uri.fromFile(File(np)).toString(), folder = File(np).parent)
+                if (origin != null) u = u.copy(trashOrigin = origin)
+                dao.update(u)
             }
         }
         dst.walkTopDown().filter { it.isFile }.take(500).toList().let { if (it.isNotEmpty()) scanMedia(*it.toTypedArray()) }

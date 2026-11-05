@@ -392,9 +392,10 @@ class PdfSession private constructor(
             val top = lines.minWith(compareBy({ it.bbox.y0 }, { it.bbox.x0 }))
             val end = lines.maxWith(compareBy({ it.bbox.y1 }, { it.bbox.x1 }))
             val a = if (p == pa) Point(ax, ay) else Point(top.bbox.x0 + 0.5f, (top.bbox.y0 + top.bbox.y1) / 2)
-            val b = if (p == last) Point(bx, by) else Point(end.bbox.x1 - 0.5f, (end.bbox.y0 + end.bbox.y1) / 2)
+            // The user's end point is on page [pb]; a part cut short at 30 pages runs to its page's end.
+            val b = if (p == pb) Point(bx, by) else Point(end.bbox.x1 - 0.5f, (end.bbox.y0 + end.bbox.y1) / 2)
             // Whole words at the ends the user placed.
-            if (p == pa || p == last) runCatching { st.snapSelection(a, b, StructuredText.SELECT_WORDS) }
+            if (p == pa || p == pb) runCatching { st.snapSelection(a, b, StructuredText.SELECT_WORDS) }
             selectionNow(p, st, a.x, a.y, b.x, b.y)?.let { parts += it }
         }
         if (parts.isEmpty()) return@onDoc null
@@ -864,6 +865,37 @@ class PdfSession private constructor(
 
     /** Highlight, underline, strike or squiggle over text, given the boxes of the selected words. */
     suspend fun addTextMark(index: Int, kind: MarkKind, boxes: List<Box>, color: Int, opacity: Float = 1f) = edit("Mark text", index) {
+        makeTextMark(index, kind, boxes, color, opacity)
+    }
+
+    /** Marks words on several pages (a selection across pages) as one step to undo. */
+    suspend fun addTextMarks(parts: List<Pair<Int, List<Box>>>, kind: MarkKind, color: Int, opacity: Float = 1f): Boolean = onDoc {
+        val d = pdf ?: return@onDoc false
+        if (parts.isEmpty()) return@onDoc false
+        d.beginOperation("Mark text")
+        try {
+            for ((index, boxes) in parts) {
+                makeTextMark(index, kind, boxes, color, opacity)
+                runCatching { pdfPage(index).update() }
+            }
+            d.endOperation()
+        } catch (t: Throwable) {
+            runCatching { d.abandonOperation() }
+            throw t
+        }
+        for ((index, _) in parts) {
+            textCache.remove(index)?.let { runCatching { it.destroy() } }
+            charsCache.remove(index)
+            bandCache.remove(index)
+        }
+        rawCache.clear()
+        tableCache.clear()
+        refreshFlags()
+        dirty = true
+        true
+    }
+
+    private fun makeTextMark(index: Int, kind: MarkKind, boxes: List<Box>, color: Int, opacity: Float) {
         val t = when (kind) {
             MarkKind.UNDERLINE -> PDFAnnotation.TYPE_UNDERLINE
             MarkKind.STRIKE -> PDFAnnotation.TYPE_STRIKE_OUT
