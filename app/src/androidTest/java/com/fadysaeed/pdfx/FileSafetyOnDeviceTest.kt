@@ -199,21 +199,29 @@ class FileSafetyOnDeviceTest {
         assertTrue(runBlocking { db.dao().all() }.isEmpty())
     }
 
+    /**
+     * A copy of the pages, then a second one taking over from it as after a save; only a weak hold
+     * on the first comes back. Made in a function of its own, so nothing in the test's own frame
+     * keeps the first alive by accident.
+     */
+    private fun replaced(session: PdfSession, parent: CoroutineScope): Pair<WeakReference<PageImages>, PageImages> {
+        val first = PageImages(session, parent)
+        Thread.sleep(500)
+        val second = PageImages(session, parent, seed = first)
+        assertEquals(first.aspects.size, second.aspects.size)
+        first.close()
+        return WeakReference(first) to second
+    }
+
     @Test
-    fun oldPagePicturesAreLetGoAfterASave(): Unit = runBlocking {
+    fun oldPagePicturesAreLetGoAfterASave() {
         val f = asset("coch.pdf", File(root, "Papers/a.pdf"))
-        val session = PdfSession.openFile(f.absolutePath)
+        val session = runBlocking { PdfSession.openFile(f.absolutePath) }
         val parent = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
-            var first: PageImages? = PageImages(session, parent)
-            delay(500)
-            val ref = WeakReference(first)
-            val second = PageImages(session, parent, seed = first)
-            assertEquals(first!!.aspects.size, second.aspects.size)
-            first.close()
-            first = null
-            repeat(20) {
-                if (ref.get() == null) return@repeat
+            val (ref, second) = replaced(session, parent)
+            for (k in 0 until 30) {
+                if (ref.get() == null) break
                 Runtime.getRuntime().gc()
                 System.runFinalization()
                 Thread.sleep(100)
