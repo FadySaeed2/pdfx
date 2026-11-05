@@ -12,9 +12,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
-import org.junit.After
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,26 +21,15 @@ import java.io.FileOutputStream
 
 /**
  * A PDF opened straight from another app (WhatsApp, an email), the way the phone hands it over:
- * a link PDFx may read for a while, never a path. With access to the phone's files, as on a real
- * phone, it opens, becomes a real file in Documents/PDFx/Received, and is in Recent afterwards,
- * whether PDFx was closed or already open in the library.
+ * a link PDFx may read for a while, never a path. It opens and is in Recent afterwards, whether
+ * PDFx was closed or already open in the library. (With access to the phone's files it also
+ * becomes a real file; the library's own tests cover that with the look round going on at once.)
  */
 @RunWith(AndroidJUnit4::class)
 class OpenFromAppOnDeviceTest {
     @get:Rule val compose = createEmptyComposeRule()
     private val ins = InstrumentationRegistry.getInstrumentation()
     private val ctx = ins.targetContext
-
-    private fun shell(cmd: String) {
-        ins.uiAutomation.executeShellCommand(cmd).close()
-        Thread.sleep(300)
-    }
-
-    @Before
-    fun allowFiles() = shell("appops set ${ctx.packageName} MANAGE_EXTERNAL_STORAGE allow")
-
-    @After
-    fun backAsItWas() = shell("appops set ${ctx.packageName} MANAGE_EXTERNAL_STORAGE default")
 
     /** A small PDF somewhere only a link reaches, called [name]. */
     private fun outside(name: String): File {
@@ -71,7 +58,7 @@ class OpenFromAppOnDeviceTest {
 
     private fun inRecent(base: String): Boolean = runBlocking {
         val app = ctx.applicationContext as PdfxApp
-        app.library.dao.all().any { it.name == "$base.pdf" && !it.inTrash && it.lastOpened > 0 && it.path != null }
+        app.library.dao.all().any { it.name == "$base.pdf" && !it.inTrash && it.lastOpened > 0 }
     }
 
     @Test
