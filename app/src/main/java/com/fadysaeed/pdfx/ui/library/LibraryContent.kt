@@ -225,7 +225,9 @@ private fun Browse(ui: LibraryUi, actions: LibraryActions, thumb: @Composable (D
                     }
                 }
                 Spacer(Modifier.height(6.dp))
-                SubLine(ui, actions)
+                // One height whatever the section shows here (a count alone, or a count with sort and
+                // view buttons), so the tabs below stay in one place from tab to tab.
+                Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.CenterStart) { SubLine(ui, actions) }
             }
         }
         item(key = "chips") {
@@ -453,7 +455,8 @@ private fun SubLine(ui: LibraryUi, actions: LibraryActions) {
             p.section == Section.HIGHLIGHTS -> ui.marks.sumOf { it.marks.size }.let { n -> if (n == 1) "1 highlight or note" else "$n highlights and notes" } + ui.marks.size.let { if (it == 0) "" else if (it == 1) " in 1 file" else " in $it files" }
             else -> ui.items.size.let { if (it == 1) "1 document" else "$it documents" }
         }
-        Text(count, style = Type.note)
+        // One line always: the row keeps one height on every tab.
+        Text(count, style = Type.note, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
         if (p.section == Section.TRASH) {
             Text("  ·  kept for 30 days", style = Type.note)
             Spacer(Modifier.weight(1f))

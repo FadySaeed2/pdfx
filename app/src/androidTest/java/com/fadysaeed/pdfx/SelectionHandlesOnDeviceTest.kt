@@ -141,4 +141,57 @@ class SelectionHandlesOnDeviceTest {
             s.close()
         }
     }
+
+    /**
+     * A scanned page read into words: each word stretched over its box, so its letters stand much
+     * taller than their type size. A finger at the top or foot of a line's last word still means
+     * that word, not the line's first word nor the next line's.
+     */
+    @Test
+    fun onAScannedPageTheEndOfALineStaysTheEnd(): Unit = runBlocking {
+        val blank = File(ctx.cacheDir, "scan-blank.pdf")
+        PdfDocument().let { d -> d.finishPage(d.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())); FileOutputStream(blank).use { d.writeTo(it) }; d.close() }
+        val lines = listOf(
+            "The quick brown fox jumps over the lazy dog again",
+            "Lithium levels should be checked every three months",
+            "Renal function and thyroid tests are also needed here",
+        )
+        val rnd = java.util.Random(3)
+        val words = ArrayList<com.fadysaeed.pdfx.engine.ReadWord>()
+        lines.forEachIndexed { k, line ->
+            var x = 56f
+            val y = 100f + k * 18f
+            for (w in line.split(' ')) {
+                val tall = w.any { it.isUpperCase() || it in "bdfhklt" }
+                val deep = w.any { it in "gjpqy" }
+                val top = y - (if (tall) 9f else 6f) + (rnd.nextFloat() - 0.5f) * 1.2f
+                val bottom = y + (if (deep) 3f else 0f) + (rnd.nextFloat() - 0.5f) * 1.2f
+                val width = w.length * 5.6f
+                words += com.fadysaeed.pdfx.engine.ReadWord(w, x, top, x + width, bottom)
+                x += width + 4f
+            }
+        }
+        val scanned = File(ctx.cacheDir, "scan-read.pdf")
+        val doc = com.artifex.mupdf.fitz.Document.openDocument(blank.absolutePath).asPDF()
+        val page = doc.loadPage(0) as com.artifex.mupdf.fitz.PDFPage
+        com.fadysaeed.pdfx.engine.TextLayer.add(doc, page, words)
+        page.destroy()
+        doc.save(scanned.absolutePath, "")
+        doc.destroy()
+
+        val s = PdfSession.open(ctx, Uri.fromFile(scanned))
+        try {
+            val first = words.first { it.text == "The" }
+            val again = words.first { it.text == "again" }
+            val cx = (again.left + again.right) / 2
+            for (y in listOf(again.top + 0.5f, (again.top + again.bottom) / 2, again.bottom - 0.5f)) {
+                val sel = s.selectWords(0, (first.left + first.right) / 2, (first.top + first.bottom) / 2, cx, y)!!
+                assertEquals("finger at y=$y on the line's last word", lines[0], sel.text.trim())
+                val one = s.selectWord(0, cx, y)!!
+                assertEquals("a tap at y=$y takes that word", "again", one.text.trim())
+            }
+        } finally {
+            s.close()
+        }
+    }
 }

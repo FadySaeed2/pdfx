@@ -401,7 +401,8 @@ class PdfSession private constructor(
     /** Selects the word at a point (long press). Null when there is no text there. */
     suspend fun selectWord(index: Int, x: Float, y: Float): Selection? = onDoc {
         val st = stext(index)
-        val q = st.snapSelection(Point(x, y), Point(x, y), StructuredText.SELECT_WORDS) ?: return@onDoc null
+        val at = runCatching { Letters(st).place(Point(x, y)) }.getOrDefault(Point(x, y))
+        val q = st.snapSelection(at, Point(at.x, at.y), StructuredText.SELECT_WORDS) ?: return@onDoc null
         val r = q.toRect()
         if (r.x1 - r.x0 <= 0f) return@onDoc null
         selectionNow(index, st, r.x0 + 0.5f, (r.y0 + r.y1) / 2, r.x1 - 0.5f, (r.y0 + r.y1) / 2)
@@ -415,8 +416,10 @@ class PdfSession private constructor(
     /** Like [select], with both ends moved out to whole words, so a selection never stops mid-word. */
     suspend fun selectWords(index: Int, ax: Float, ay: Float, bx: Float, by: Float): Selection? = onDoc {
         val st = stext(index)
-        val a = Point(ax, ay)
-        val b = Point(bx, by)
+        // Each point onto the middle of its line first, as the engine reads a point best there.
+        val lt = runCatching { Letters(st) }.getOrNull()
+        val a = lt?.place(Point(ax, ay)) ?: Point(ax, ay)
+        val b = lt?.place(Point(bx, by)) ?: Point(bx, by)
         runCatching { st.snapSelection(a, b, StructuredText.SELECT_WORDS) }
         selectionNow(index, st, a.x, a.y, b.x, b.y) ?: selectionNow(index, st, ax, ay, bx, by)
     }
@@ -441,9 +444,10 @@ class PdfSession private constructor(
             fun rtl(l: StructuredText.TextLine) = readsRtl(buildString { l.chars?.forEach { appendCodePoint(it.c) } })
             val topX = if (rtl(top)) top.bbox.x1 - 0.5f else top.bbox.x0 + 0.5f
             val endX = if (rtl(end)) end.bbox.x0 + 0.5f else end.bbox.x1 - 0.5f
-            val a = if (p == pa) Point(ax, ay) else Point(topX, (top.bbox.y0 + top.bbox.y1) / 2)
+            val lt = if (p == pa || p == pb) runCatching { Letters(st) }.getOrNull() else null
+            val a = if (p == pa) (lt?.place(Point(ax, ay)) ?: Point(ax, ay)) else Point(topX, (top.bbox.y0 + top.bbox.y1) / 2)
             // The user's end point is on page [pb]; a part cut short at 30 pages runs to its page's end.
-            val b = if (p == pb) Point(bx, by) else Point(endX, (end.bbox.y0 + end.bbox.y1) / 2)
+            val b = if (p == pb) (lt?.place(Point(bx, by)) ?: Point(bx, by)) else Point(endX, (end.bbox.y0 + end.bbox.y1) / 2)
             // Whole words at the ends the user placed.
             if (p == pa || p == pb) runCatching { st.snapSelection(a, b, StructuredText.SELECT_WORDS) }
             selectionNow(p, st, a.x, a.y, b.x, b.y)?.let { parts += it }
@@ -492,7 +496,10 @@ class PdfSession private constructor(
      * right side being its start (a port of MuPDF's find_closest_in_page, so the two agree).
      */
     private class Letters(st: StructuredText) {
-        private class Line(val first: Int, val n: Int, val dx: Float, val dy: Float, val hsize: Float, val p1x: Float, val p1y: Float, val p2x: Float, val p2y: Float)
+        private class Line(
+            val first: Int, val n: Int, val dx: Float, val dy: Float, val hsize: Float, val p1x: Float, val p1y: Float, val p2x: Float, val p2y: Float,
+            val x0: Float, val y0: Float, val x1: Float, val y1: Float,
+        )
         val letters = ArrayList<Letter>()
         private val quads = ArrayList<Quad>()
         private val lines = ArrayList<Line>()
@@ -514,7 +521,13 @@ class PdfSession private constructor(
                 // The engine's half line height is half the largest type size; a letter's own height stands in.
                 val h = cs.maxOf { maxOf(it.quad.ll_y - it.quad.ul_y, it.quad.lr_y - it.quad.ur_y) } / 2
                 val d = ln.dir ?: Point(1f, 0f)
-                lines += Line(first, cs.size, d.x, d.y, h, (f.ll_x + f.ul_x) / 2, (f.ll_y + f.ul_y) / 2, (z.lr_x + z.ur_x) / 2, (z.lr_y + z.ur_y) / 2)
+                var x0 = Float.MAX_VALUE; var y0 = Float.MAX_VALUE; var x1 = -Float.MAX_VALUE; var y1 = -Float.MAX_VALUE
+                for (ch in cs) {
+                    val q = ch.quad
+                    x0 = minOf(x0, q.ul_x, q.ll_x, q.ur_x, q.lr_x); x1 = maxOf(x1, q.ul_x, q.ll_x, q.ur_x, q.lr_x)
+                    y0 = minOf(y0, q.ul_y, q.ll_y, q.ur_y, q.lr_y); y1 = maxOf(y1, q.ul_y, q.ll_y, q.ur_y, q.lr_y)
+                }
+                lines += Line(first, cs.size, d.x, d.y, h, (f.ll_x + f.ul_x) / 2, (f.ll_y + f.ul_y) / 2, (z.lr_x + z.ur_x) / 2, (z.lr_y + z.ur_y) / 2, x0, y0, x1, y1)
             }
         }
 
@@ -552,6 +565,32 @@ class PdfSession private constructor(
                 if (d2 < closest) { closest = d2; at = i + 1 }
             }
             return at
+        }
+
+        /**
+         * [q] moved onto the middle of the line it is over (or nearest), within the line's ends.
+         * The engine takes a point as on a line only within half its type size of the line's middle;
+         * above that it reads the line's start, below it the line's end, whatever the point's place
+         * along it. Where the letters stand taller than their type size (a scanned page read into
+         * words, whose words are stretched over their boxes) a finger on the line's top or foot
+         * was read as its start or end: the selection jumped from the end of a line to its start.
+         */
+        fun place(q: Point): Point {
+            if (lines.isEmpty()) return q
+            fun out(ln: Line): Float {
+                val dx = maxOf(ln.x0 - q.x, 0f, q.x - ln.x1)
+                val dy = maxOf(ln.y0 - q.y, 0f, q.y - ln.y1)
+                return dx * dx + dy * dy
+            }
+            val ln = lines.minWith(compareBy<Line>({ out(it) }, { kotlin.math.abs((it.y0 + it.y1) / 2 - q.y) }))
+            val vx = ln.p2x - ln.p1x
+            val vy = ln.p2y - ln.p1y
+            val len2 = vx * vx + vy * vy
+            if (len2 < 1e-4f) return Point((ln.x0 + ln.x1) / 2, (ln.y0 + ln.y1) / 2)
+            fun t(x: Float, y: Float) = ((x - ln.p1x) * vx + (y - ln.p1y) * vy) / len2
+            val ends = listOf(t(ln.x0, ln.y0), t(ln.x1, ln.y0), t(ln.x0, ln.y1), t(ln.x1, ln.y1))
+            val k = t(q.x, q.y).coerceIn(ends.min() + 1e-3f, ends.max() - 1e-3f)
+            return Point(ln.p1x + k * vx, ln.p1y + k * vy)
         }
 
         private fun wordStart(i: Int) = i == 0 || letters[i - 1].line != letters[i].line || letters[i - 1].blank
