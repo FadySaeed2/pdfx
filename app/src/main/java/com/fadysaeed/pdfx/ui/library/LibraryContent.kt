@@ -456,13 +456,10 @@ private fun SubLine(ui: LibraryUi, actions: LibraryActions) {
             else -> ui.items.size.let { if (it == 1) "1 document" else "$it documents" }
         }
         // One line always: the row keeps one height on every tab.
-        Text(count, style = Type.note, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Text(if (p.section == Section.TRASH) "$count  ·  kept for 30 days" else count, style = Type.note, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (p.section == Section.TRASH) {
-            Text("  ·  kept for 30 days", style = Type.note)
-            Spacer(Modifier.weight(1f))
             if (ui.items.isNotEmpty()) Text("Empty trash", style = Type.bodyStrong.copy(color = Ink.Amber, fontSize = 14.sp), modifier = Modifier.clickable(onClick = actions.emptyTrash).padding(vertical = 8.dp))
         } else if (listing && ui.items.size > 1 && p.section != Section.HIGHLIGHTS) {
-            Spacer(Modifier.weight(1f))
             Row(Modifier.clickable(onClick = actions.sort).padding(vertical = 8.dp, horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlyphIcon(Glyph.SORT, Ink.Dust, size = 18.dp)
                 Spacer(Modifier.width(6.dp))
