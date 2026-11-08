@@ -577,12 +577,12 @@ class PdfSession private constructor(
          */
         fun place(q: Point): Point {
             if (lines.isEmpty()) return q
-            fun out(ln: Line): Float {
-                val dx = maxOf(ln.x0 - q.x, 0f, q.x - ln.x1)
-                val dy = maxOf(ln.y0 - q.y, 0f, q.y - ln.y1)
-                return dx * dx + dy * dy
-            }
-            val ln = lines.minWith(compareBy<Line>({ out(it) }, { kotlin.math.abs((it.y0 + it.y1) / 2 - q.y) }))
+            // The line at the point's height first (beside its end counts: a finger past a line's
+            // last word means that line, not the one below that happens to lie nearer); between
+            // lines, the nearest above or below; then the nearest along.
+            fun dx(ln: Line) = maxOf(ln.x0 - q.x, 0f, q.x - ln.x1)
+            fun dy(ln: Line) = maxOf(ln.y0 - q.y, 0f, q.y - ln.y1)
+            val ln = lines.minWith(compareBy<Line>({ dy(it) }, { dx(it) }, { kotlin.math.abs((it.y0 + it.y1) / 2 - q.y) }))
             val vx = ln.p2x - ln.p1x
             val vy = ln.p2y - ln.p1y
             val len2 = vx * vx + vy * vy
