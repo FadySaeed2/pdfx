@@ -683,6 +683,13 @@ class PdfSession private constructor(
             val top = rows[minOf(ra, rb)].minOf { lines[it].y0 } - 2f
             val bottom = rows[maxOf(ra, rb)].maxOf { lines[it].y1 } + 2f
             if (fileBoxes.all { (it.y0 + it.y1) / 2 in top..bottom }) return null
+            // Over several rows, only where they are a table's (three cells or more side by side, in
+            // most of them): a page of two columns read across from one into the other keeps the
+            // file's order, down the first column and on at the top of the next.
+            if (ra != rb) {
+                val span = minOf(ra, rb)..maxOf(ra, rb)
+                if (span.count { rows[it].size >= 3 } * 2 < span.count()) return null
+            }
             // Each row's letters in the order it reads: its lines across (right to left where most of
             // its letters run that way), each line's letters in the file's order.
             val seq = HashMap<Int, List<List<Int>>>()
