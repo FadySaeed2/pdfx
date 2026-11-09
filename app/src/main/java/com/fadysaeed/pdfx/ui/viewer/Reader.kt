@@ -510,10 +510,6 @@ class Reader(
     /** The field order Next and Previous follow, read once. */
     private var formOrder: List<com.fadysaeed.pdfx.engine.Field>? = null
 
-    init {
-        if (session != null) checkForm()
-    }
-
     fun checkForm() {
         val s = session ?: return
         scope.launch {
@@ -816,6 +812,12 @@ class Reader(
     /** Once a stylus has touched the page, fingers scroll and zoom while the pen draws. */
     var stylusSeen by mutableStateOf(false)
     val marks = mutableStateMapOf<Int, List<Mark>>()
+
+    // After every map it reads is made: the check runs on another thread, and could start before
+    // the rest of the reader was built.
+    init {
+        if (session != null) checkForm()
+    }
     var allMarks by mutableStateOf<List<Mark>?>(null)
         private set
     var draft by mutableStateOf<Draft?>(null)
