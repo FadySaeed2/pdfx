@@ -194,4 +194,97 @@ class SelectionHandlesOnDeviceTest {
             s.close()
         }
     }
+    /** A scanned page read into words, [words] written in the order given (as a reader of the scan gives them). */
+    private fun scanned(name: String, words: List<com.fadysaeed.pdfx.engine.ReadWord>): File {
+        val blank = File(ctx.cacheDir, "$name-blank.pdf")
+        PdfDocument().let { d -> d.finishPage(d.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())); FileOutputStream(blank).use { d.writeTo(it) }; d.close() }
+        val out = File(ctx.cacheDir, "$name.pdf")
+        val doc = com.artifex.mupdf.fitz.Document.openDocument(blank.absolutePath).asPDF()
+        val page = doc.loadPage(0) as com.artifex.mupdf.fitz.PDFPage
+        com.fadysaeed.pdfx.engine.TextLayer.add(doc, page, words)
+        page.destroy()
+        doc.save(out.absolutePath, "")
+        doc.destroy()
+        return out
+    }
+
+    /**
+     * A table on a scanned page, its words given column by column (as readers of scans often give
+     * them): one row selected from its first cell to its last is that row and nothing else, its
+     * cells copied with tabs between them; two rows, each on a line of its own.
+     */
+    @Test
+    fun aTableRowOnAScannedPageIsTakenAsSeen(): Unit = runBlocking {
+        val table = listOf(
+            listOf("Drug", "Daily dose", "Target level"),
+            listOf("Lithium carbonate", "800 mg", "0.6 to 0.8"),
+            listOf("Valproate", "1000 mg", "50 to 100"),
+            listOf("Carbamazepine", "600 mg", "4 to 12"),
+            listOf("Lamotrigine", "200 mg", "none"),
+        )
+        val colX = listOf(60f, 230f, 380f)
+        val words = ArrayList<com.fadysaeed.pdfx.engine.ReadWord>()
+        for (c in colX.indices) for ((r, row) in table.withIndex()) {
+            var x = colX[c]
+            val y = 120f + r * 22f
+            for (w in row[c].split(' ')) {
+                val width = w.length * 6f
+                words += com.fadysaeed.pdfx.engine.ReadWord(w, x, y - 9f, x + width, y + 2f)
+                x += width + 4f
+            }
+        }
+        val s = PdfSession.open(ctx, Uri.fromFile(scanned("scan-table", words)))
+        try {
+            fun mid(w: com.fadysaeed.pdfx.engine.ReadWord) = ((w.left + w.right) / 2) to ((w.top + w.bottom) / 2)
+            val lithium = mid(words.first { it.text == "Lithium" })
+            val eight = mid(words.first { it.text == "0.8" })
+            val one = s.selectWords(0, lithium.first, lithium.second, eight.first, eight.second)!!
+            assertEquals("one row, as seen", "Lithium carbonate\t800 mg\t0.6 to 0.8", one.text.trim())
+            assertTrue("its marks keep to that row: ${one.boxes}", one.boxes.all { (it.y0 + it.y1) / 2 in 130f..152f })
+            // Made again from its own ends, still that row.
+            val (ax, ay) = one.startInside
+            val (bx, by) = one.endInside
+            assertEquals(one.text.trim(), s.selectWords(0, ax, ay, bx, by)!!.text.trim())
+            // Backwards, from its last cell to its first: the same row.
+            assertEquals(one.text.trim(), s.selectWords(0, eight.first, eight.second, lithium.first, lithium.second)!!.text.trim())
+            // Two rows.
+            val hundred = mid(words.first { it.text == "100" })
+            val two = s.selectWords(0, lithium.first, lithium.second, hundred.first, hundred.second)!!
+            assertEquals("Lithium carbonate\t800 mg\t0.6 to 0.8\nValproate\t1000 mg\t50 to 100", two.text.trim())
+        } finally {
+            s.close()
+        }
+    }
+
+    /** A page in two columns: a paragraph selected in one column is that paragraph, read down the column. */
+    @Test
+    fun onAPageOfTwoColumnsAParagraphStaysInItsColumn(): Unit = runBlocking {
+        val out = File(ctx.cacheDir, "columns.pdf")
+        val doc = PdfDocument()
+        val body = Paint().apply { isAntiAlias = true; textSize = 11f; color = Color.BLACK }
+        val page = doc.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())
+        val left = (1..8).map { "Left line $it about lithium and the kidney." }
+        val right = (1..8).map { "Right line $it on thyroid tests each year." }
+        left.forEachIndexed { k, t -> page.canvas.drawText(t, 50f, 100f + k * 15f, body) }
+        right.forEachIndexed { k, t -> page.canvas.drawText(t, 310f, 100f + k * 15f, body) }
+        doc.finishPage(page)
+        FileOutputStream(out).use { doc.writeTo(it) }
+        doc.close()
+        val s = PdfSession.open(ctx, Uri.fromFile(out))
+        try {
+            val l2 = s.searchHits(0, "Left line 2")[0].boxes.first()
+            val l5 = s.searchHits(0, "kidney")[4].boxes.first()
+            val sel = s.selectWords(0, l2.x0 + 2f, (l2.y0 + l2.y1) / 2, (l5.x0 + l5.x1) / 2, (l5.y0 + l5.y1) / 2)!!
+            val t = sel.text.trim()
+            assertTrue("down the left column: $t", t.startsWith("Left line 2") && t.contains("Left line 4") && t.endsWith("kidney"))
+            assertTrue("nothing from the right column, no tabs: $t", !t.contains("Right") && !t.contains('\t'))
+            // From the left column on into the right one: still read down the columns.
+            val r3 = s.searchHits(0, "year")[2].boxes.first()
+            val across = s.selectWords(0, l2.x0 + 2f, (l2.y0 + l2.y1) / 2, (r3.x0 + r3.x1) / 2, (r3.y0 + r3.y1) / 2)!!.text.trim()
+            assertTrue("left to its foot, then the right column's top: $across", across.contains("Left line 8") && across.contains("Right line 1") && across.endsWith("year") && !across.contains('\t'))
+        } finally {
+            s.close()
+        }
+    }
 }
+

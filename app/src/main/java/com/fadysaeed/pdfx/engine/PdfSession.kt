@@ -470,8 +470,19 @@ class PdfSession private constructor(
         if (lt != null) { a = lt.whole(a, b) ?: a; b = lt.whole(b, a) ?: b }
         val quads = st.highlight(a, b) ?: return null
         if (quads.isEmpty()) return null
-        val text = st.copy(a, b) ?: ""
-        val boxes = quads.map { it.box() }
+        var text = st.copy(a, b) ?: ""
+        var boxes = quads.map { it.box() }
+        // The file's own order running off beyond the rows between the two ends (a table on a scanned
+        // page, kept column by column): what is selected is what is seen, row by row, instead.
+        val seen = lt?.let { runCatching { it.visual(a, b, boxes) }.getOrNull() }
+        if (seen != null) {
+            return Selection(
+                index, a.x, a.y, b.x, b.y, seen.boxes, seen.text, startRtl = seen.first.rtl, endRtl = seen.last.rtl,
+                firstLetter = seen.first.middle, lastLetter = seen.last.middle,
+                startFoot = (if (seen.first.rtl) seen.first.right else seen.first.left) to seen.first.foot,
+                endFoot = (if (seen.last.rtl) seen.last.left else seen.last.right) to seen.last.foot,
+            )
+        }
         // Its first and last letters, found the way the engine finds them, give its two ends exactly.
         val ends = lt?.let { runCatching { it.ends(a, b) }.getOrNull() }
         fun side(x: Float, bx: Box): Boolean? = (x - bx.x0 - (bx.x1 - x)).let { d -> if (kotlin.math.abs(d) < 0.5f) null else d > 0 }
@@ -591,6 +602,106 @@ class PdfSession private constructor(
             val ends = listOf(t(ln.x0, ln.y0), t(ln.x1, ln.y0), t(ln.x0, ln.y1), t(ln.x1, ln.y1))
             val k = t(q.x, q.y).coerceIn(ends.min() + 1e-3f, ends.max() - 1e-3f)
             return Point(ln.p1x + k * vx, ln.p1y + k * vy)
+        }
+
+        private fun lineOf(q: Point): Int {
+            fun dx(ln: Line) = maxOf(ln.x0 - q.x, 0f, q.x - ln.x1)
+            fun dy(ln: Line) = maxOf(ln.y0 - q.y, 0f, q.y - ln.y1)
+            return lines.indices.minWith(compareBy<Int>({ dy(lines[it]) }, { dx(lines[it]) }, { kotlin.math.abs((lines[it].y0 + lines[it].y1) / 2 - q.y) }))
+        }
+
+        /** The page's lines gathered into rows as seen: lines side by side (a table's cells) share one. */
+        private val rows: List<List<Int>> by lazy {
+            val out = ArrayList<MutableList<Int>>()
+            val tops = ArrayList<FloatArray>()
+            for (i in lines.indices.sortedBy { (lines[it].y0 + lines[it].y1) / 2 }) {
+                val ln = lines[i]
+                val h = ln.y1 - ln.y0
+                // Into the row it overlaps by half the smaller height.
+                val r = tops.indexOfFirst { band -> minOf(band[1], ln.y1) - maxOf(band[0], ln.y0) >= 0.5f * minOf(h, band[1] - band[0]) }
+                if (r >= 0) { out[r] += i; tops[r][0] = minOf(tops[r][0], ln.y0); tops[r][1] = maxOf(tops[r][1], ln.y1) }
+                else { out += mutableListOf(i); tops += floatArrayOf(ln.y0, ln.y1) }
+            }
+            out.sortedBy { r -> r.minOf { lines[it].y0 } }
+        }
+
+        class Seen(val text: String, val boxes: List<Box>, val first: Letter, val last: Letter)
+
+        /**
+         * The selection from [a] to [b] as seen on the page, when the file's own order would run off
+         * past the rows between them: those rows only, each read across (right to left where its
+         * letters run that way), the first from [a] on and the last up to [b]. Cells of one row are
+         * copied with a tab between them, rows on lines of their own. Null when the file's order
+         * keeps within those rows ([fileBoxes] all between them), as in a book or a page of columns.
+         */
+        fun visual(a: Point, b: Point, fileBoxes: List<Box>): Seen? {
+            if (lines.isEmpty()) return null
+            val la = lineOf(a)
+            val lb = lineOf(b)
+            val ra = rows.indexOfFirst { la in it }
+            val rb = rows.indexOfFirst { lb in it }
+            if (ra < 0 || rb < 0) return null
+            val top = rows[minOf(ra, rb)].minOf { lines[it].y0 } - 2f
+            val bottom = rows[maxOf(ra, rb)].maxOf { lines[it].y1 } + 2f
+            if (fileBoxes.all { (it.y0 + it.y1) / 2 in top..bottom }) return null
+            // Each row's letters in the order it reads: its lines across (right to left where most of
+            // its letters run that way), each line's letters in the file's order.
+            val seq = HashMap<Int, List<List<Int>>>()
+            fun cellsOf(r: Int) = seq.getOrPut(r) {
+                val row = rows[r]
+                fun count(li: Int, rtl: Boolean) = (lines[li].first until lines[li].first + lines[li].n).count { letters[it].rtl == rtl && !letters[it].blank }
+                val rtl = row.sumOf { count(it, true) } > row.sumOf { count(it, false) }
+                (if (rtl) row.sortedByDescending { lines[it].x1 } else row.sortedBy { lines[it].x0 }).map { li -> (lines[li].first until lines[li].first + lines[li].n).toList() }
+            }
+            // The word each point is at, as a place in its row: (cell, letter in it), the word's first
+            // and last letter. Which point came first is read from the page, not from the file.
+            fun at(p: Point, line: Int): Int {
+                val ln = lines[line]
+                return (ln.first until ln.first + ln.n).filter { !letters[it].blank }
+                    .minByOrNull { maxOf(letters[it].left - p.x, 0f, p.x - letters[it].right) } ?: ln.first
+            }
+            fun wordFrom(i: Int): IntRange {
+                var s0 = i; var e0 = i
+                while (!wordStart(s0)) s0--
+                while (!wordEnd(e0)) e0++
+                return s0..e0
+            }
+            fun placeIn(r: Int, i: Int): Pair<Int, Int> {
+                val cells = cellsOf(r)
+                val c = cells.indexOfFirst { i in it }
+                return c to cells[c].indexOf(i)
+            }
+            val wa = wordFrom(at(a, la))
+            val wb = wordFrom(at(b, lb))
+            val ka = Triple(ra, placeIn(ra, wa.first).first, placeIn(ra, wa.first).second)
+            val kb = Triple(rb, placeIn(rb, wb.first).first, placeIn(rb, wb.first).second)
+            val aFirst = compareValuesBy(ka, kb, { it.first }, { it.second }, { it.third }) <= 0
+            val (r0, w0) = if (aFirst) ra to wa else rb to wb
+            val (r1, w1) = if (aFirst) rb to wb else ra to wa
+            val from = placeIn(r0, w0.first)
+            val to = placeIn(r1, w1.last)
+            val text = StringBuilder()
+            val boxes = ArrayList<Box>()
+            var first: Letter? = null
+            var last: Letter? = null
+            for (r in r0..r1) {
+                var cells = 0
+                for ((c, cell) in cellsOf(r).withIndex()) {
+                    val picked = cell.filterIndexed { k, _ ->
+                        (r != r0 || c > from.first || (c == from.first && k >= from.second)) &&
+                            (r != r1 || c < to.first || (c == to.first && k <= to.second))
+                    }
+                    val shown = picked.filter { !letters[it].blank }
+                    if (shown.isEmpty()) continue
+                    if (cells++ > 0) text.append('\t')
+                    text.append(buildString { picked.forEach { appendCodePoint(letters[it].c) } }.trim())
+                    boxes += Box(shown.minOf { letters[it].left }, shown.minOf { minOf(quads[it].ul_y, quads[it].ur_y) }, shown.maxOf { letters[it].right }, shown.maxOf { letters[it].foot })
+                    if (first == null) first = letters[shown.first()]
+                    last = letters[shown.last()]
+                }
+                if (r < r1 && cells > 0) text.append('\n')
+            }
+            return Seen(text.toString().trim(), boxes.ifEmpty { return null }, first ?: return null, last ?: return null)
         }
 
         private fun wordStart(i: Int) = i == 0 || letters[i - 1].line != letters[i].line || letters[i - 1].blank
