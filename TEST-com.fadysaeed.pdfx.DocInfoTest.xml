@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fadysaeed.pdfx.DocInfoTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-11-09T08:38:07" hostname="runnervmwuk1x" time="0.03">
+  <properties/>
+  <testcase name="aTitleToAvoidIsPassedOver" classname="com.fadysaeed.pdfx.DocInfoTest" time="0.012"/>
+  <testcase name="wordProcessorLeftoversAreIgnored" classname="com.fadysaeed.pdfx.DocInfoTest" time="0.004"/>
+  <testcase name="authorsWrittenTheJournalWay" classname="com.fadysaeed.pdfx.DocInfoTest" time="0.001"/>
+  <testcase name="theFilesOwnDetailsWhenTheyAreReal" classname="com.fadysaeed.pdfx.DocInfoTest" time="0.001"/>
+  <testcase name="aJournalsNameIsNeverTheTitle" classname="com.fadysaeed.pdfx.DocInfoTest" time="0.005"/>
+  <testcase name="yearsFromTheDoiOrCopyright" classname="com.fadysaeed.pdfx.DocInfoTest" time="0.001"/>
+  <testcase name="aJournalPaper" classname="com.fadysaeed.pdfx.DocInfoTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

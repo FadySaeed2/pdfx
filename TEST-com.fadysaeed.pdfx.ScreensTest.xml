@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fadysaeed.pdfx.ScreensTest" tests="69" skipped="0" failures="0" errors="0" timestamp="2026-11-09T08:38:08" hostname="runnervmwuk1x" time="28.067">
+  <properties/>
+  <testcase name="pagesRules" classname="com.fadysaeed.pdfx.ScreensTest" time="8.01"/>
+  <testcase name="tableGrid" classname="com.fadysaeed.pdfx.ScreensTest" time="3.15"/>
+  <testcase name="tableList" classname="com.fadysaeed.pdfx.ScreensTest" time="0.618"/>
+  <testcase name="realTitles" classname="com.fadysaeed.pdfx.ScreensTest" time="0.552"/>
+  <testcase name="searchResults" classname="com.fadysaeed.pdfx.ScreensTest" time="0.563"/>
+  <testcase name="backToPage" classname="com.fadysaeed.pdfx.ScreensTest" time="0.311"/>
+  <testcase name="signingRules" classname="com.fadysaeed.pdfx.ScreensTest" time="0.074"/>
+  <testcase name="stampTools" classname="com.fadysaeed.pdfx.ScreensTest" time="0.376"/>
+  <testcase name="selecting" classname="com.fadysaeed.pdfx.ScreensTest" time="0.403"/>
+  <testcase name="signDigitalTools" classname="com.fadysaeed.pdfx.ScreensTest" time="0.303"/>
+  <testcase name="tableCards" classname="com.fadysaeed.pdfx.ScreensTest" time="0.377"/>
+  <testcase name="digitalSignDialog" classname="com.fadysaeed.pdfx.ScreensTest" time="0.256"/>
+  <testcase name="folderInside" classname="com.fadysaeed.pdfx.ScreensTest" time="0.326"/>
+  <testcase name="pagesPicked" classname="com.fadysaeed.pdfx.ScreensTest" time="0.358"/>
+  <testcase name="certSheet" classname="com.fadysaeed.pdfx.ScreensTest" time="0.27"/>
+  <testcase name="formFilling" classname="com.fadysaeed.pdfx.ScreensTest" time="0.354"/>
+  <testcase name="glyphs" classname="com.fadysaeed.pdfx.ScreensTest" time="0.276"/>
+  <testcase name="actions" classname="com.fadysaeed.pdfx.ScreensTest" time="0.257"/>
+  <testcase name="markSelected" classname="com.fadysaeed.pdfx.ScreensTest" time="0.259"/>
+  <testcase name="locked" classname="com.fadysaeed.pdfx.ScreensTest" time="0.219"/>
+  <testcase name="markup" classname="com.fadysaeed.pdfx.ScreensTest" time="0.266"/>
+  <testcase name="reflowSettings" classname="com.fadysaeed.pdfx.ScreensTest" time="0.285"/>
+  <testcase name="inkWordSelected" classname="com.fadysaeed.pdfx.ScreensTest" time="0.248"/>
+  <testcase name="textEdit" classname="com.fadysaeed.pdfx.ScreensTest" time="0.29"/>
+  <testcase name="recent" classname="com.fadysaeed.pdfx.ScreensTest" time="0.28"/>
+  <testcase name="marksList" classname="com.fadysaeed.pdfx.ScreensTest" time="0.268"/>
+  <testcase name="search" classname="com.fadysaeed.pdfx.ScreensTest" time="0.264"/>
+  <testcase name="watermarkDialog" classname="com.fadysaeed.pdfx.ScreensTest" time="0.247"/>
+  <testcase name="viewer" classname="com.fadysaeed.pdfx.ScreensTest" time="0.239"/>
+  <testcase name="signaturesBanner" classname="com.fadysaeed.pdfx.ScreensTest" time="0.238"/>
+  <testcase name="appIcon" classname="com.fadysaeed.pdfx.ScreensTest" time="0.171"/>
+  <testcase name="inFolder" classname="com.fadysaeed.pdfx.ScreensTest" time="0.255"/>
+  <testcase name="tableRuledGrid" classname="com.fadysaeed.pdfx.ScreensTest" time="0.239"/>
+  <testcase name="signaturesList" classname="com.fadysaeed.pdfx.ScreensTest" time="0.235"/>
+  <testcase name="folders" classname="com.fadysaeed.pdfx.ScreensTest" time="0.296"/>
+  <testcase name="folding" classname="com.fadysaeed.pdfx.ScreensTest" time="0.046"/>
+  <testcase name="shrinkResult" classname="com.fadysaeed.pdfx.ScreensTest" time="0.129"/>
+  <testcase name="picking" classname="com.fadysaeed.pdfx.ScreensTest" time="0.282"/>
+  <testcase name="figureWithCaption" classname="com.fadysaeed.pdfx.ScreensTest" time="0.245"/>
+  <testcase name="grid" classname="com.fadysaeed.pdfx.ScreensTest" time="0.251"/>
+  <testcase name="peek" classname="com.fadysaeed.pdfx.ScreensTest" time="0.165"/>
+  <testcase name="tags" classname="com.fadysaeed.pdfx.ScreensTest" time="0.237"/>
+  <testcase name="tidy" classname="com.fadysaeed.pdfx.ScreensTest" time="0.223"/>
+  <testcase name="searchRanked" classname="com.fadysaeed.pdfx.ScreensTest" time="0.225"/>
+  <testcase name="viewerReflow" classname="com.fadysaeed.pdfx.ScreensTest" time="0.267"/>
+  <testcase name="sizes" classname="com.fadysaeed.pdfx.ScreensTest" time="0.033"/>
+  <testcase name="trash" classname="com.fadysaeed.pdfx.ScreensTest" time="0.263"/>
+  <testcase name="viewerSearch" classname="com.fadysaeed.pdfx.ScreensTest" time="0.219"/>
+  <testcase name="viewerSheets" classname="com.fadysaeed.pdfx.ScreensTest" time="0.216"/>
+  <testcase name="viewerSpread" classname="com.fadysaeed.pdfx.ScreensTest" time="0.249"/>
+  <testcase name="inkGroups" classname="com.fadysaeed.pdfx.ScreensTest" time="0.04"/>
+  <testcase name="allNoAccess" classname="com.fadysaeed.pdfx.ScreensTest" time="0.248"/>
+  <testcase name="highlights" classname="com.fadysaeed.pdfx.ScreensTest" time="0.241"/>
+  <testcase name="pageNumbersDialog" classname="com.fadysaeed.pdfx.ScreensTest" time="0.201"/>
+  <testcase name="pagesGrid" classname="com.fadysaeed.pdfx.ScreensTest" time="0.234"/>
+  <testcase name="textBoxSelected" classname="com.fadysaeed.pdfx.ScreensTest" time="0.225"/>
+  <testcase name="tableWideGrid" classname="com.fadysaeed.pdfx.ScreensTest" time="0.322"/>
+  <testcase name="signTools" classname="com.fadysaeed.pdfx.ScreensTest" time="0.231"/>
+  <testcase name="viewerNight" classname="com.fadysaeed.pdfx.ScreensTest" time="0.492"/>
+  <testcase name="viewerSelection" classname="com.fadysaeed.pdfx.ScreensTest" time="0.23"/>
+  <testcase name="reflowRules" classname="com.fadysaeed.pdfx.ScreensTest" time="0.039"/>
+  <testcase name="selectionColours" classname="com.fadysaeed.pdfx.ScreensTest" time="0.25"/>
+  <testcase name="boxesAndText" classname="com.fadysaeed.pdfx.ScreensTest" time="0.036"/>
+  <testcase name="markupSlim" classname="com.fadysaeed.pdfx.ScreensTest" time="0.218"/>
+  <testcase name="redactDialog" classname="com.fadysaeed.pdfx.ScreensTest" time="0.16"/>
+  <testcase name="allFiles" classname="com.fadysaeed.pdfx.ScreensTest" time="0.263"/>
+  <testcase name="formRules" classname="com.fadysaeed.pdfx.ScreensTest" time="0.057"/>
+  <testcase name="shelves" classname="com.fadysaeed.pdfx.ScreensTest" time="0.265"/>
+  <testcase name="signPad" classname="com.fadysaeed.pdfx.ScreensTest" time="0.126"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[System.logW: A resource was acquired at attached stack trace but never released. See java.io.Closeable for information on avoiding resource leaks.
+java.lang.Throwable: Explicit termination method 'close' not called
+	at dalvik.system.CloseGuard.$$robo$$dalvik_system_CloseGuard$openWithCallSite(CloseGuard.java:288)
+	at dalvik.system.CloseGuard.openWithCallSite(CloseGuard.java)
+	at dalvik.system.CloseGuard.$$robo$$dalvik_system_CloseGuard$open(CloseGuard.java:257)
+	at jdk.internal.reflect.GeneratedMethodAccessor44.invoke(Unknown Source)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:569)
+	at org.robolectric.shadows.ShadowCloseGuard$CloseGuardReflector$$Reflector31.open(Unknown Source)
+	at org.robolectric.shadows.ShadowCloseGuard.open(ShadowCloseGuard.java:38)
+	at dalvik.system.CloseGuard.open(CloseGuard.java)
+	at android.os.ParcelFileDescriptor.$$robo$$android_os_ParcelFileDescriptor$__constructor__(ParcelFileDescriptor.java:207)
+	at android.os.ParcelFileDescriptor.<init>(ParcelFileDescriptor.java:194)
+	at android.os.ParcelFileDescriptor.<init>(ParcelFileDescriptor.java:190)
+	at org.robolectric.shadows.ShadowParcelFileDescriptor.newParcelFileDescriptor(ShadowParcelFileDescriptor.java:116)
+	at org.robolectric.shadows.ShadowParcelFileDescriptor.open(ShadowParcelFileDescriptor.java:121)
+	at android.os.ParcelFileDescriptor.open(ParcelFileDescriptor.java)
+	at android.content.ContentResolver.$$robo$$android_content_ContentResolver$openAssetFileDescriptor(ContentResolver.java:1853)
+	at android.content.ContentResolver.openAssetFileDescriptor(ContentResolver.java)
+	at android.content.ContentResolver.$$robo$$android_content_ContentResolver$openFileDescriptor(ContentResolver.java:1689)
+	at android.content.ContentResolver.openFileDescriptor(ContentResolver.java)
+	at android.content.ContentResolver.$$robo$$android_content_ContentResolver$openFileDescriptor(ContentResolver.java:1635)
+	at android.content.ContentResolver.openFileDescriptor(ContentResolver.java)
+	at com.fadysaeed.pdfx.engine.PdfSession$Companion$open$2.invokeSuspend(PdfSession.kt:1902)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:101)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)
+	at java.base/java.lang.Thread.run(Thread.java:840)
+
+]]></system-err>
+</testsuite>

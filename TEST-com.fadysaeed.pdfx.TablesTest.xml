@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fadysaeed.pdfx.TablesTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-11-09T08:38:36" hostname="runnervmwuk1x" time="4.735">
+  <properties/>
+  <testcase name="cochraneFigures" classname="com.fadysaeed.pdfx.TablesTest" time="3.177"/>
+  <testcase name="ruledGrids" classname="com.fadysaeed.pdfx.TablesTest" time="0.039"/>
+  <testcase name="handbookTables" classname="com.fadysaeed.pdfx.TablesTest" time="0.631"/>
+  <testcase name="cochraneTables" classname="com.fadysaeed.pdfx.TablesTest" time="0.388"/>
+  <testcase name="handbookFigures" classname="com.fadysaeed.pdfx.TablesTest" time="0.499"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

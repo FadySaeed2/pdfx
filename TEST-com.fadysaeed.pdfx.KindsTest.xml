@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fadysaeed.pdfx.KindsTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-11-09T08:38:08" hostname="runnervmwuk1x" time="0.017">
+  <properties/>
+  <testcase name="papers" classname="com.fadysaeed.pdfx.KindsTest" time="0.005"/>
+  <testcase name="letters" classname="com.fadysaeed.pdfx.KindsTest" time="0.003"/>
+  <testcase name="guidelines" classname="com.fadysaeed.pdfx.KindsTest" time="0.001"/>
+  <testcase name="books" classname="com.fadysaeed.pdfx.KindsTest" time="0.006"/>
+  <testcase name="formsReceiptsSlidesScans" classname="com.fadysaeed.pdfx.KindsTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

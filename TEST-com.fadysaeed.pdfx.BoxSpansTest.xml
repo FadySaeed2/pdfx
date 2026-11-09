@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fadysaeed.pdfx.BoxSpansTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-11-09T08:38:07" hostname="runnervmwuk1x" time="0.027">
+  <properties/>
+  <testcase name="anEmptyLineAndAPlainBoxReadBackAsNothingSpecial" classname="com.fadysaeed.pdfx.BoxSpansTest" time="0.02"/>
+  <testcase name="styledWordsGoIntoTheRichTextAndComeBack" classname="com.fadysaeed.pdfx.BoxSpansTest" time="0.002"/>
+  <testcase name="spansFollowEdits" classname="com.fadysaeed.pdfx.BoxSpansTest" time="0.0"/>
+  <testcase name="theFewestSpansDescribeTheLetters" classname="com.fadysaeed.pdfx.BoxSpansTest" time="0.0"/>
+  <testcase name="aWholeUnderlinedBoxIsNotReadAsUnderlinedWords" classname="com.fadysaeed.pdfx.BoxSpansTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

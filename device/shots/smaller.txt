@@ -1,0 +1,4 @@
+scan 6771843 bytes
+Tidy only: 6771456 bytes, 0 pictures, biggest side 4000
+Balanced: 671840 bytes, 1 pictures, biggest side 2200
+Smallest: 190949 bytes, 1 pictures, biggest side 1500
