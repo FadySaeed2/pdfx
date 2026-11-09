@@ -276,12 +276,12 @@ class SelectionHandlesOnDeviceTest {
             val l5 = s.searchHits(0, "kidney")[4].boxes.first()
             val sel = s.selectWords(0, l2.x0 + 2f, (l2.y0 + l2.y1) / 2, (l5.x0 + l5.x1) / 2, (l5.y0 + l5.y1) / 2)!!
             val t = sel.text.trim()
-            assertTrue("down the left column: $t", t.startsWith("Left line 2") && t.contains("Left line 4") && t.endsWith("kidney"))
+            assertTrue("down the left column: $t", t.startsWith("Left line 2") && t.contains("Left line 4") && t.endsWith("kidney."))
             assertTrue("nothing from the right column, no tabs: $t", !t.contains("Right") && !t.contains('\t'))
             // From the left column on into the right one: still read down the columns.
             val r3 = s.searchHits(0, "year")[2].boxes.first()
             val across = s.selectWords(0, l2.x0 + 2f, (l2.y0 + l2.y1) / 2, (r3.x0 + r3.x1) / 2, (r3.y0 + r3.y1) / 2)!!.text.trim()
-            assertTrue("left to its foot, then the right column's top: $across", across.contains("Left line 8") && across.contains("Right line 1") && across.endsWith("year") && !across.contains('\t'))
+            assertTrue("left to its foot, then the right column's top: $across", across.contains("Left line 8") && across.contains("Right line 1") && across.endsWith("year.") && !across.contains('\t'))
         } finally {
             s.close()
         }

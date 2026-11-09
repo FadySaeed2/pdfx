@@ -421,7 +421,11 @@ class PdfSession private constructor(
         val a = lt?.place(Point(ax, ay)) ?: Point(ax, ay)
         val b = lt?.place(Point(bx, by)) ?: Point(bx, by)
         runCatching { st.snapSelection(a, b, StructuredText.SELECT_WORDS) }
-        selectionNow(index, st, a.x, a.y, b.x, b.y) ?: selectionNow(index, st, ax, ay, bx, by)
+        // At a line's end the engine puts the end at the last letter's lower corner, on the line's
+        // foot, which where lines touch (a scanned table's rows) is also the top of the next: just
+        // inside that letter's end at its middle instead, it is that line's end and nothing else.
+        val bb = lt?.offCorner(b) ?: b
+        selectionNow(index, st, a.x, a.y, bb.x, bb.y) ?: selectionNow(index, st, ax, ay, bx, by)
     }
 
     /**
@@ -601,7 +605,33 @@ class PdfSession private constructor(
             fun t(x: Float, y: Float) = ((x - ln.p1x) * vx + (y - ln.p1y) * vy) / len2
             val ends = listOf(t(ln.x0, ln.y0), t(ln.x1, ln.y0), t(ln.x0, ln.y1), t(ln.x1, ln.y1))
             val k = t(q.x, q.y).coerceIn(ends.min() + 1e-3f, ends.max() - 1e-3f)
-            return Point(ln.p1x + k * vx, ln.p1y + k * vy)
+            val on = Point(ln.p1x + k * vx, ln.p1y + k * vy)
+            // Read as the gap after the line's last letter, the point is also the gap before the next
+            // line's first, and the engine, moving it out to whole words, takes that next line's first
+            // word: a selection to a line's last word ran on into the next line (in a table, the next
+            // row). Just inside the last letter instead, it stays on its line.
+            val endGap = ln.first + ln.n
+            if (gap(on) == endGap && endGap < letters.size) {
+                val l = letters[endGap - 1]
+                val w = l.right - l.left
+                for (x in listOf(l.middle.first - 0.25f * w, l.middle.first + 0.25f * w)) {
+                    val inside = Point(x, l.middle.second)
+                    if (gap(inside) == endGap - 1) return inside
+                }
+            }
+            return on
+        }
+
+        fun offCorner(b: Point): Point {
+            for (ln in lines) {
+                val i = ln.first + ln.n - 1
+                val q = quads[i]
+                if (kotlin.math.abs(q.lr_x - b.x) < 0.01f && kotlin.math.abs(q.lr_y - b.y) < 0.01f) {
+                    val l = letters[i]
+                    return Point(if (l.rtl) l.left + 0.01f else l.right - 0.01f, l.middle.second)
+                }
+            }
+            return b
         }
 
         private fun lineOf(q: Point): Int {
@@ -636,8 +666,17 @@ class PdfSession private constructor(
          */
         fun visual(a: Point, b: Point, fileBoxes: List<Box>): Seen? {
             if (lines.isEmpty()) return null
-            val la = lineOf(a)
-            val lb = lineOf(b)
+            // The first and last letters the engine takes between the two points: their words are the
+            // two ends, wherever they stand.
+            var ga = gap(a)
+            var gb = gap(b)
+            if (ga > gb) { val t = ga; ga = gb; gb = t }
+            while (ga < gb && letters[ga].blank) ga++
+            var gl = gb - 1
+            while (gl > ga && letters[gl].blank) gl--
+            if (ga > gl || gl !in letters.indices) return null
+            val la = letters[ga].line
+            val lb = letters[gl].line
             val ra = rows.indexOfFirst { la in it }
             val rb = rows.indexOfFirst { lb in it }
             if (ra < 0 || rb < 0) return null
@@ -655,11 +694,6 @@ class PdfSession private constructor(
             }
             // The word each point is at, as a place in its row: (cell, letter in it), the word's first
             // and last letter. Which point came first is read from the page, not from the file.
-            fun at(p: Point, line: Int): Int {
-                val ln = lines[line]
-                return (ln.first until ln.first + ln.n).filter { !letters[it].blank }
-                    .minByOrNull { maxOf(letters[it].left - p.x, 0f, p.x - letters[it].right) } ?: ln.first
-            }
             fun wordFrom(i: Int): IntRange {
                 var s0 = i; var e0 = i
                 while (!wordStart(s0)) s0--
@@ -671,8 +705,8 @@ class PdfSession private constructor(
                 val c = cells.indexOfFirst { i in it }
                 return c to cells[c].indexOf(i)
             }
-            val wa = wordFrom(at(a, la))
-            val wb = wordFrom(at(b, lb))
+            val wa = wordFrom(ga)
+            val wb = wordFrom(gl)
             val ka = Triple(ra, placeIn(ra, wa.first).first, placeIn(ra, wa.first).second)
             val kb = Triple(rb, placeIn(rb, wb.first).first, placeIn(rb, wb.first).second)
             val aFirst = compareValuesBy(ka, kb, { it.first }, { it.second }, { it.third }) <= 0
